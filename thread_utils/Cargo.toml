@@ -1,7 +1,6 @@
 [package]
-name = "rust_simple_server"
+name = "thread_utils"
 version = "0.1.0"
 authors = ["Jacob Zuo <chopinsky@live.com>"]
 
 [dependencies]
-thread_utils = { path = "./thread_utils" }

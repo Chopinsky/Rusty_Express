@@ -1,0 +1,11 @@
+[[package]]
+name = "rust_simple_server"
+version = "0.1.0"
+dependencies = [
+ "thread_utils 0.1.0",
+]
+
+[[package]]
+name = "thread_utils"
+version = "0.1.0"
+
