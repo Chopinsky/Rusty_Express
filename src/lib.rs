@@ -1,13 +1,16 @@
 extern crate thread_utils;
 
 pub mod router;
+pub mod connection;
 
 use std::net::TcpListener;
+use connection::*;
 use router::*;
 use thread_utils::ThreadPool;
 
 pub struct HttpServerDefinition {
-    pub threads: usize,
+    pub port: String,
+    pub pool_size: usize,
     pub route: Route,
 }
 
@@ -17,11 +20,30 @@ pub trait BaseServer {
 
 impl BaseServer for HttpServerDefinition {
     fn start_with(&self) {
-        let listener = TcpListener::bind("127.0.0.1:8080").unwrap();
+        let port =
+            if self.port.is_empty() {
+                String::from("8080")
+            } else {
+                String::from(&self.port[..])
+            };
+
+        let listener =
+            TcpListener::bind(format!("127.0.0.1:{}", port)).unwrap();
 
         for stream in listener.incoming() {
-            let stream = stream.unwrap();
-            println!("Connected...");
+            match stream {
+                Ok(stream) => {
+                    println!("Connected...\nListening for connections on port {}", self.port);
+
+                    let pool = ThreadPool::new(self.pool_size);
+                    pool.execute(|| {
+                        handle_connection(stream);
+                    });
+                },
+                Err(e) => {
+                    println!("Unable to start the server: {}", e);
+                }
+            }
         }
     }
 }

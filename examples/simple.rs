@@ -5,7 +5,8 @@ use rust_simple_server::*;
 
 fn main() {
     let default_server_definition: HttpServerDefinition = HttpServerDefinition {
-        threads: 1,
+        port: "8000",
+        pool_size: 1,
         route: router::Route {
             get: HashMap::new(),
             put: HashMap::new(),
