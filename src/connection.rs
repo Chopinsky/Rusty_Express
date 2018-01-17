@@ -2,6 +2,7 @@
 
 use std::collections::HashMap;
 use std::fs::File;
+use std::io::BufReader;
 use std::io::prelude::*;
 use std::net::TcpStream;
 use router::REST;
@@ -18,25 +19,23 @@ pub struct Response {
 }
 
 pub fn handle_connection(mut stream: TcpStream) {
-    let request_info: Request;
+    let response: String;
+
     match get_request_from_stream(&stream) {
-        Ok(result) => {
-            request_info = result;
+        Ok(request) => {
+            match generate_response(&request) {
+                Ok(result) => {
+                    response = result;
+                },
+                Err(e) => {
+                    println!("Error on generating response -- {}", e);
+                    response = get_status(400);
+                },
+            };
         },
         Err(e) => {
             println!("Error on parsing request -- {}", e);
-            return;
-        },
-    };
-
-    let response: String;
-    match generate_response(&request_info) {
-        Ok(result) => {
-            response = result;
-        },
-        Err(e) => {
-            println!("Error on generating response -- {}", e);
-            return;
+            response = get_status(400);
         },
     };
 
@@ -126,55 +125,67 @@ fn generate_response(request_info: &Request) -> Result<String, String> {
     }
 }
 
-fn get_response_content(path: &str) -> String {
+fn get_response_content(request_path: &str) -> String {
 
-    let (status_line, path, content_type) =
-        match &path[..] {
+    let (status_line, path) =
+        match &request_path[..] {
             "/" => (
                 get_status(200),
                 get_source_path("index.html"),
-                String::from("Content-Type: text/html; charset=UTF-8\r\n"),
             ),
             "/styles.css" => (
                 get_status(200),
                 get_source_path("styles.css"),
-                String::from("Content-Type: text/css;\r\n"),
             ),
             "/bundle.js" => (
                 get_status(200),
                 get_source_path("bundle.js"),
-                String::from("Content-Type: application/javascript;\r\n"),
             ),
             "/favicon.ico" => (
                 get_status(200),
                 get_source_path(""),
-                String::from("Content-Type: image/x-icon;\r\n"),
             ),
             _ => (
                 get_status(404),
                 get_source_path("404.html"),
-                String::from("Content-Type: text/html; charset=UTF-8\r\n"),
             ),
         };
 
     let mut response = String::new();
-    response.push_str(&status_line);
 
     if !path.is_empty() {
-        let mut file = File::open(&path).unwrap();
-        let mut contents = String::new();
+        match File::open(&path) {
+            Ok(file) => {
+                let mut buf_reader = BufReader::new(file);
+                let mut contents: String = String::new();
 
-        file.read_to_string(&mut contents).unwrap();
-
-        if contents.len() > 0 {
-            response.push_str(&content_type);
-            response.push_str(&contents);
-        } else {
-            println!("Can't load contents!");
-        }
+                match buf_reader.read_to_string(&mut contents) {
+                    Err(e) => {
+                        println!("Unable to read file: {} (requested path: {})", e, path);
+                        response = get_status(500);
+                    },
+                    Ok(_) if contents.len() > 0 => {
+                        //things are truly ok now
+                        response.push_str(&status_line);
+                        response.push_str(&contents);
+                    },
+                    _ => {
+                        println!("File stream finds nothing...");
+                        response = get_status(404);
+                    }
+                };
+            },
+            Err(e) => {
+                println!("Unable to open requested file: {} (requested path: {})", e, path);
+                response = get_status(404);
+            },
+        };
+    } else {
+        println!("Can't locate requested file");
+        response = get_status(404);
     }
 
-    return response;
+    response
 }
 
 fn get_source_path(source: &str) -> String {
@@ -193,7 +204,9 @@ fn get_status(status: u16) -> String {
     let status_base =
         match status {
             200 => "200 OK",
-            _ => "404 NOT FOUND"
+            500 => "500 INTERNAL SERVER ERROR",
+            400 => "400 BAD REQUEST",
+            404 | _ => "404 NOT FOUND",
         };
 
     return format!("HTTP/1.1 {}\r\n\r\n", status_base);

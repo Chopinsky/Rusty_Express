@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 
 use std::collections::HashMap;
 
@@ -10,12 +11,21 @@ pub enum REST {
 }
 
 pub struct Route {
-    pub get: HashMap<String, fn(String) -> String>,
-    pub post: HashMap<String, fn(String) -> String>,
-    pub put: HashMap<String, fn(String) -> String>,
-    pub delete: HashMap<String, fn(String) -> String>,
+    get: HashMap<String, fn(String) -> String>,
+    post: HashMap<String, fn(String) -> String>,
+    put: HashMap<String, fn(String) -> String>,
+    delete: HashMap<String, fn(String) -> String>,
 }
 
 impl Route {
+    pub fn new() -> Route {
+        Route {
+            get: HashMap::new(),
+            post: HashMap::new(),
+            put: HashMap::new(),
+            delete: HashMap::new(),
+        }
+    }
+
 
 }

@@ -1,19 +1,8 @@
 extern crate rust_simple_server;
 
-use std::collections::HashMap;
-use rust_simple_server::*;
+use rust_simple_server::HttpServer;
 
 fn main() {
-    let default_server_definition: HttpServerDefinition = HttpServerDefinition {
-        port: "8000",
-        pool_size: 1,
-        route: router::Route {
-            get: HashMap::new(),
-            put: HashMap::new(),
-            post: HashMap::new(),
-            delete: HashMap::new(),
-        },
-    };
-
-    BaseServer::start_with(&default_server_definition);
+    let server = HttpServer::new(4);
+    server.listen(String::from("8080"));
 }

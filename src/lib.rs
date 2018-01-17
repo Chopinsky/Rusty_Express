@@ -8,41 +8,54 @@ use connection::*;
 use router::*;
 use thread_utils::ThreadPool;
 
-pub struct HttpServerDefinition {
-    pub port: String,
+pub struct HttpServer {
     pub pool_size: usize,
     pub route: Route,
 }
 
-pub trait BaseServer {
-    fn start_with(&self);
+impl HttpServer {
+    pub fn new(pool_size: usize) -> HttpServer {
+        return HttpServer {
+            pool_size,
+            route: Route::new(),
+        }
+    }
+
+    pub fn listen(&self, port: String) {
+        start_with(&self, port);
+    }
 }
 
-impl BaseServer for HttpServerDefinition {
-    fn start_with(&self) {
-        let port =
-            if self.port.is_empty() {
-                String::from("8080")
-            } else {
-                String::from(&self.port[..])
-            };
+fn start_with(server: &HttpServer, port: String) {
+    let server_port =
+        if port.is_empty() {
+            String::from("8080")
+        } else {
+            String::from(&port[..])
+        };
 
-        let listener =
-            TcpListener::bind(format!("127.0.0.1:{}", port)).unwrap();
+    let listener: TcpListener;
+    match TcpListener::bind(format!("127.0.0.1:{}", server_port)) {
+        Ok(result) => {
+            println!("Listening for connections on port {}", server_port);
+            listener = result;
+        },
+        Err(e) => {
+            println!("Unable to start the http server: {}", e);
+            return;
+        }
+    }
 
-        for stream in listener.incoming() {
-            match stream {
-                Ok(stream) => {
-                    println!("Connected...\nListening for connections on port {}", self.port);
-
-                    let pool = ThreadPool::new(self.pool_size);
-                    pool.execute(|| {
-                        handle_connection(stream);
-                    });
-                },
-                Err(e) => {
-                    println!("Unable to start the server: {}", e);
-                }
+    for stream in listener.incoming() {
+        match stream {
+            Ok(stream) => {
+                let pool = ThreadPool::new(server.pool_size);
+                pool.execute(|| {
+                    handle_connection(stream);
+                });
+            },
+            Err(e) => {
+                println!("Server is unable to read from the upcoming stream: {}", e);
             }
         }
     }
