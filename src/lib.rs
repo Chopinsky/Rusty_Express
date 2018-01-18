@@ -1,7 +1,8 @@
 extern crate thread_utils;
 
-pub mod router;
 pub mod connection;
+pub mod http;
+pub mod router;
 
 use std::net::TcpListener;
 use connection::*;
@@ -25,6 +26,8 @@ impl HttpServer {
         start_with(&self, port);
     }
 }
+
+//TODO: impl trait for Router
 
 fn start_with(server: &HttpServer, port: String) {
     let server_port =

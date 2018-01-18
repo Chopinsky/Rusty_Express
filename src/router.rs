@@ -17,6 +17,10 @@ pub struct Route {
     delete: HashMap<String, fn(String) -> String>,
 }
 
+//TODO: trait for Router
+
+//TODO: impl trait for Router
+
 impl Route {
     pub fn new() -> Route {
         Route {
@@ -27,5 +31,9 @@ impl Route {
         }
     }
 
-
+    pub fn get(&mut self, uri: String, callback: fn(String) -> String) {
+        if !uri.is_empty() {
+            self.get.insert(uri, callback);
+        }
+    }
 }
