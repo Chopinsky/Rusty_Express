@@ -7,7 +7,7 @@ fn main() {
 
     server.route.get(String::from("/"), simple_response);
 
-    server.listen(String::from("8080"));
+    server.listen(8080);
 }
 
 fn simple_response(_path: String) -> String {

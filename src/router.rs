@@ -10,6 +10,10 @@ pub enum REST {
     DELETE,
 }
 
+impl Default for REST {
+    fn default() -> REST { REST::NONE }
+}
+
 pub struct Route {
     get: HashMap<String, fn(String) -> String>,
     post: HashMap<String, fn(String) -> String>,
@@ -22,7 +26,7 @@ pub struct Route {
 //TODO: impl trait for Router
 
 impl Route {
-    pub fn new() -> Route {
+    pub fn new() -> Self {
         Route {
             get: HashMap::new(),
             post: HashMap::new(),

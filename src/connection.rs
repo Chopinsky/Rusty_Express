@@ -60,7 +60,10 @@ fn get_request_from_stream(mut stream: &TcpStream) -> Result<Request, String> {
                 return Err(String::from("Unable to parse the request: the incoming stream is blank..."));
             }
 
-            Ok(parse_request(&request))
+            match parse_request(&request) {
+                Some(request_info) => Ok(request_info),
+                None => Err(format!("Unable to parse the request from the stream...")),
+            }
         },
         Err(e) => {
             Err(format!("Failed to read request from stream: {}", e))
@@ -68,9 +71,9 @@ fn get_request_from_stream(mut stream: &TcpStream) -> Result<Request, String> {
     }
 }
 
-fn parse_request(request: &str) -> Request {
+fn parse_request(request: &str) -> Option<Request> {
     if request.is_empty() {
-        return Request::new();
+        return None;
     }
 
     let mut method = REST::NONE;
@@ -112,7 +115,7 @@ fn parse_request(request: &str) -> Request {
         }
     }
 
-    Request::build_from(method, path, header)
+    Some(Request::build_from(method, path, header))
 }
 
 fn make_response(request_info: &Request) -> Result<String, String> {
