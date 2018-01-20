@@ -7,7 +7,23 @@ use std::io::prelude::*;
 use std::net::TcpStream;
 use std::path::Path;
 use http::*;
-use router::REST;
+use router::*;
+
+pub struct ConnectionHandler {
+    router: Option<Route>,
+}
+
+impl ConnectionHandler {
+    pub fn new() -> Self {
+        ConnectionHandler {
+            router: None,
+        }
+    }
+
+    pub fn use_router(&mut self, router: Route) {
+        self.router = Some(router);
+    }
+}
 
 pub fn handle_connection(stream: TcpStream) -> Option<u8> {
     let request: Request;
@@ -121,6 +137,7 @@ fn parse_request(request: &str) -> Option<Request> {
 fn make_response(request_info: &Request) -> Result<String, String> {
     match request_info.method {
         REST::GET => {
+
             Ok(get_response_content(&request_info.path[..]))
         },
         REST::NONE => {

@@ -2,20 +2,38 @@ extern crate rust_simple_server;
 
 use rust_simple_server::HttpServer;
 use rust_simple_server::http::*;
-use rust_simple_server::router::Router;
+use rust_simple_server::router::*;
 
 fn main() {
     let mut server = HttpServer::new(4);
-
-    //literal definition
-    //server.route.get(String::from("/"), simple_response);
+    server.def_context(Some(Model::new()));
 
     //delegated definition
-    server.get(String::from("/"), simple_response);
+    server.get(RequestPath::Literal("/"), Model::simple_response);
 
     server.listen(8080);
 }
 
-fn simple_response(path: String, _req: Request) -> String {
-    return String::from("Hello world from {}!", path);
+struct Model {
+    pub data: i32
 }
+
+impl Model  {
+    pub fn new() -> Self {
+        Model { data: 1 }
+    }
+
+    pub fn set_data(&mut self, val: i32) {
+       self.data = val;
+    }
+
+    pub fn simple_response(path: String, _req: Request, context: Option<Model>) -> String {
+        let data = match context {
+            Some(val) => val.data,
+            None => 0,
+        };
+
+        return format!("Hello world from {} with {}!", path, data);
+    }
+}
+

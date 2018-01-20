@@ -5,3 +5,4 @@ authors = ["Jacob Zuo <chopinsky@live.com>"]
 
 [dependencies]
 thread_utils = { path = "./thread_utils" }
+regex = "0.2"

@@ -1,4 +1,5 @@
 extern crate thread_utils;
+extern crate regex;
 
 pub mod connection;
 pub mod http;
@@ -7,72 +8,77 @@ pub mod router;
 use std::net::{SocketAddr, TcpListener};
 use connection::*;
 use router::*;
-use http::*;
 use thread_utils::ThreadPool;
 
 pub struct HttpServer {
     pub pool_size: usize,
-    pub route: Route,
+    router: Route,
 }
 
 impl HttpServer {
     pub fn new(pool_size: usize) -> Self {
-        return HttpServer {
+        HttpServer {
             pool_size,
-            route: Route::new(),
+            router: Route::new(),
         }
+    }
+
+    pub fn use_router(&mut self, router: Route) {
+        self.router = router;
     }
 
     pub fn listen(&self, port: u16) {
-        start_with(&self, port);
-    }
-}
-
-//TODO: impl trait for Router
-impl Router for HttpServer {
-    fn get(&mut self, uri:String, callback: fn(String, Request) -> String) {
-        self.route.get(uri, callback);
+        self.start_with(port);
     }
 
-    fn put(&mut self, uri:String, callback: fn(String, Request) -> String) {
-        self.route.get(uri, callback);
-    }
+    fn start_with(&self, port: u16) {
 
-    fn post(&mut self, uri:String, callback: fn(String, Request) -> String) {
-        self.route.get(uri, callback);
-    }
+        let listener: TcpListener;
+        let server_address = SocketAddr::from(([127, 0, 0, 1], port));
 
-    fn delete(&mut self, uri:String, callback: fn(String, Request) -> String) {
-        self.route.get(uri, callback);
-    }
-}
-
-fn start_with(server: &HttpServer, port: u16) {
-    let listener: TcpListener;
-    let server_address = SocketAddr::from(([127, 0, 0, 1], port));
-
-    match TcpListener::bind(server_address) {
-        Ok(result) => {
-            println!("Listening for connections on port {}", port);
-            listener = result;
-        },
-        Err(e) => {
-            println!("Unable to start the http server: {}", e);
-            return;
-        }
-    }
-
-    for stream in listener.incoming() {
-        match stream {
-            Ok(s) => {
-                let pool = ThreadPool::new(server.pool_size);
-                pool.execute(|| {
-                    handle_connection(s);
-                });
+        match TcpListener::bind(server_address) {
+            Ok(result) => {
+                println!("Listening for connections on port {}", port);
+                listener = result;
             },
             Err(e) => {
-                panic!("Server is unable to read from the upcoming stream: {}", e);
+                println!("Unable to start the http server: {}", e);
+                return;
+            }
+        }
+
+        for stream in listener.incoming() {
+            match stream {
+                Ok(s) => {
+                    let pool = ThreadPool::new(self.pool_size);
+                    pool.execute(|| {
+                        handle_connection(s);
+                    });
+                },
+                Err(e) => {
+                    panic!("Server is unable to read from the upcoming stream: {}", e);
+                }
             }
         }
     }
 }
+
+impl Router for HttpServer {
+    fn get(&mut self, uri: RequestPath, callback: Callback) {
+        self.router.get(uri, callback);
+    }
+
+    fn put(&mut self, uri: RequestPath, callback: Callback) {
+        self.router.get(uri, callback);
+    }
+
+    fn post(&mut self, uri: RequestPath, callback: Callback) {
+        self.router.get(uri, callback);
+    }
+
+    fn delete(&mut self, uri: RequestPath, callback: Callback) {
+        self.router.get(uri, callback);
+    }
+}
+
+
