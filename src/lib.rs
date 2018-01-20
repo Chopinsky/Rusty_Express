@@ -7,6 +7,7 @@ pub mod router;
 use std::net::{SocketAddr, TcpListener};
 use connection::*;
 use router::*;
+use http::*;
 use thread_utils::ThreadPool;
 
 pub struct HttpServer {
@@ -28,6 +29,23 @@ impl HttpServer {
 }
 
 //TODO: impl trait for Router
+impl Router for HttpServer {
+    fn get(&mut self, uri:String, callback: fn(String, Request) -> String) {
+        self.route.get(uri, callback);
+    }
+
+    fn put(&mut self, uri:String, callback: fn(String, Request) -> String) {
+        self.route.get(uri, callback);
+    }
+
+    fn post(&mut self, uri:String, callback: fn(String, Request) -> String) {
+        self.route.get(uri, callback);
+    }
+
+    fn delete(&mut self, uri:String, callback: fn(String, Request) -> String) {
+        self.route.get(uri, callback);
+    }
+}
 
 fn start_with(server: &HttpServer, port: u16) {
     let listener: TcpListener;
