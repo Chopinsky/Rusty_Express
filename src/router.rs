@@ -15,7 +15,7 @@ impl Default for REST {
     fn default() -> REST { REST::NONE }
 }
 
-#[derive(PartialEq, Eq, Hash)]
+#[derive(PartialEq, Eq, Hash, Clone, Copy)]
 pub enum RequestPath {
     Literal(&'static str),
     WildCard(&'static str),
@@ -79,6 +79,30 @@ impl Route {
             post: HashMap::new(),
             put: HashMap::new(),
             delete: HashMap::new(),
+        }
+    }
+
+    pub fn from(source: &Route) -> Self {
+        let mut router = Route::new();
+        router.clone_from(&source);
+        router
+    }
+
+    pub fn clone_from(&mut self, source: &Route) {
+        for (key, val) in source.get.iter() {
+            self.get.insert(key.to_owned(), val.to_owned());
+        }
+
+        for (key, val) in source.post.iter() {
+            self.get.insert(key.to_owned(), val.to_owned());
+        }
+
+        for (key, val) in source.put.iter() {
+            self.get.insert(key.to_owned(), val.to_owned());
+        }
+
+        for (key, val) in source.delete.iter() {
+            self.get.insert(key.to_owned(), val.to_owned());
         }
     }
 }

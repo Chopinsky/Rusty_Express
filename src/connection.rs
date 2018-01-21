@@ -9,23 +9,23 @@ use std::path::Path;
 use http::*;
 use router::*;
 
-pub struct ConnectionHandler {
-    router: Option<Route>,
-}
+//pub struct ConnectionHandler {
+//    router: Route,
+//}
+//
+//impl ConnectionHandler {
+//    pub fn new() -> Self {
+//        ConnectionHandler {
+//            router: Route::new(),
+//        }
+//    }
+//
+//    pub fn use_router(&mut self, router: Route) {
+//        self.router = router;
+//    }
+//}
 
-impl ConnectionHandler {
-    pub fn new() -> Self {
-        ConnectionHandler {
-            router: None,
-        }
-    }
-
-    pub fn use_router(&mut self, router: Route) {
-        self.router = Some(router);
-    }
-}
-
-pub fn handle_connection(stream: TcpStream) -> Option<u8> {
+pub fn handle_connection(stream: TcpStream, router: Route) -> Option<u8> {
     let request: Request;
     match get_request_from_stream(&stream) {
         Ok(req) => {

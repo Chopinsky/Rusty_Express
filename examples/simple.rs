@@ -6,7 +6,6 @@ use rust_simple_server::router::*;
 
 fn main() {
     let mut server = HttpServer::new(4);
-    server.def_context(Some(Model::new()));
 
     //delegated definition
     server.get(RequestPath::Literal("/"), Model::simple_response);
@@ -27,13 +26,8 @@ impl Model  {
        self.data = val;
     }
 
-    pub fn simple_response(path: String, _req: Request, context: Option<Model>) -> String {
-        let data = match context {
-            Some(val) => val.data,
-            None => 0,
-        };
-
-        return format!("Hello world from {} with {}!", path, data);
+    pub fn simple_response(path: String, _req: Request) -> String {
+        return format!("Hello world from {}!", path);
     }
 }
 

@@ -47,12 +47,14 @@ impl HttpServer {
             }
         }
 
+        let pool = ThreadPool::new(self.pool_size);
+
         for stream in listener.incoming() {
             match stream {
                 Ok(s) => {
-                    let pool = ThreadPool::new(self.pool_size);
-                    pool.execute(|| {
-                        handle_connection(s);
+                    let router = Route::from(&self.router);
+                    pool.execute(move || {
+                        handle_connection(s, router);
                     });
                 },
                 Err(e) => {
