@@ -23,35 +23,35 @@ pub enum RequestPath {
 
 /* Manual mayham...
 
-//impl PartialEq for RequestPath {
-//    fn eq(&self, other: &RequestPath) -> bool {
-//        match self {
-//            &RequestPath::Literal(lit_val) => {
-//                match other {
-//                    &RequestPath::Literal(other_val) => lit_val == other_val,
-//                    _ => false,
-//                }
-//            },
-//            &RequestPath::WildCard(wild_card_val) => {
-//                match other {
-//                    &RequestPath::WildCard(other_val) => wild_card_val == other_val,
-//                    _ => false,
-//                }
-//            }
-//        }
-//    }
-//}
-//
-//impl Eq for RequestPath {}
-//
-//impl Hash for RequestPath {
-//    fn hash<H: Hasher>(&self, state: &mut H) {
-//        match self {
-//            &RequestPath::Literal(lit_val) => lit_val.hash(state),
-//            &RequestPath::WildCard(wild_card_val) => wild_card_val.hash(state)
-//        }
-//    }
-//}
+impl PartialEq for RequestPath {
+    fn eq(&self, other: &RequestPath) -> bool {
+        match self {
+            &RequestPath::Literal(lit_val) => {
+                match other {
+                    &RequestPath::Literal(other_val) => lit_val == other_val,
+                    _ => false,
+                }
+            },
+            &RequestPath::WildCard(wild_card_val) => {
+                match other {
+                    &RequestPath::WildCard(other_val) => wild_card_val == other_val,
+                    _ => false,
+                }
+            }
+        }
+    }
+}
+
+impl Eq for RequestPath {}
+
+impl Hash for RequestPath {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        match self {
+            &RequestPath::Literal(lit_val) => lit_val.hash(state),
+            &RequestPath::WildCard(wild_card_val) => wild_card_val.hash(state)
+        }
+    }
+}
 
  * End of manual mayham
  */

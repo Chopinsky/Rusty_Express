@@ -9,25 +9,27 @@ use std::path::Path;
 use http::*;
 use router::*;
 
-//pub struct ConnectionHandler {
-//    router: Route,
-//}
-//
-//impl ConnectionHandler {
-//    pub fn new() -> Self {
-//        ConnectionHandler {
-//            router: Route::new(),
-//        }
-//    }
-//
-//    pub fn use_router(&mut self, router: Route) {
-//        self.router = router;
-//    }
-//}
+/* no need to instanciate this
+pub struct ConnectionHandler {
+    router: Route,
+}
+
+impl ConnectionHandler {
+    pub fn new() -> Self {
+        ConnectionHandler {
+            router: Route::new(),
+        }
+    }
+
+    pub fn use_router(&mut self, router: Route) {
+        self.router = router;
+    }
+}
+*/
 
 pub fn handle_connection(stream: TcpStream, router: Route) -> Option<u8> {
     let request: Request;
-    match get_request_from_stream(&stream) {
+    match request_from_stream(&stream) {
         Ok(req) => {
             request = req;
         },
@@ -37,7 +39,7 @@ pub fn handle_connection(stream: TcpStream, router: Route) -> Option<u8> {
         },
     }
 
-    match make_response(&request) {
+    match make_response(&request, &router) {
         Ok(response) => {
             return write_to_stream(stream, response);
         },
@@ -66,7 +68,7 @@ fn write_to_stream(mut stream: TcpStream, response: String) -> Option<u8> {
     }
 }
 
-fn get_request_from_stream(mut stream: &TcpStream) -> Result<Request, String> {
+fn request_from_stream(mut stream: &TcpStream) -> Result<Request, String> {
     let mut buffer = [0; 512];
 
     match stream.read(&mut buffer) {
@@ -134,7 +136,7 @@ fn parse_request(request: &str) -> Option<Request> {
     Some(Request::build_from(method, path, header))
 }
 
-fn make_response(request_info: &Request) -> Result<String, String> {
+fn make_response(request_info: &Request, router: &Route) -> Result<String, String> {
     match request_info.method {
         REST::GET => {
 

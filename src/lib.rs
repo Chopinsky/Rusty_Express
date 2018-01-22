@@ -32,8 +32,25 @@ impl HttpServer {
     }
 }
 
-fn start_with(server: &HttpServer, port: u16) {
+impl Router for HttpServer {
+    fn get(&mut self, uri: RequestPath, callback: Callback) {
+        self.router.get(uri, callback);
+    }
 
+    fn put(&mut self, uri: RequestPath, callback: Callback) {
+        self.router.get(uri, callback);
+    }
+
+    fn post(&mut self, uri: RequestPath, callback: Callback) {
+        self.router.get(uri, callback);
+    }
+
+    fn delete(&mut self, uri: RequestPath, callback: Callback) {
+        self.router.get(uri, callback);
+    }
+}
+
+fn start_with(server: &HttpServer, port: u16) {
     let listener: TcpListener;
     let server_address = SocketAddr::from(([127, 0, 0, 1], port));
 
@@ -62,24 +79,6 @@ fn start_with(server: &HttpServer, port: u16) {
                 panic!("Server is unable to read from the upcoming stream: {}", e);
             }
         }
-    }
-}
-
-impl Router for HttpServer {
-    fn get(&mut self, uri: RequestPath, callback: Callback) {
-        self.router.get(uri, callback);
-    }
-
-    fn put(&mut self, uri: RequestPath, callback: Callback) {
-        self.router.get(uri, callback);
-    }
-
-    fn post(&mut self, uri: RequestPath, callback: Callback) {
-        self.router.get(uri, callback);
-    }
-
-    fn delete(&mut self, uri: RequestPath, callback: Callback) {
-        self.router.get(uri, callback);
     }
 }
 
