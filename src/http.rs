@@ -32,7 +32,7 @@ impl Request {
 }
 
 pub struct Response {
-    header: String,
-    body: String,
+    pub header: String,
+    pub body: String,
 }
 

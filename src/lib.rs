@@ -68,16 +68,11 @@ fn start_with(server: &HttpServer, port: u16) {
     let pool = ThreadPool::new(server.pool_size);
 
     for stream in listener.incoming() {
-        match stream {
-            Ok(s) => {
-                let router = Route::from(&server.router);
-                pool.execute(move || {
-                    handle_connection(s, router);
-                });
-            },
-            Err(e) => {
-                panic!("Server is unable to read from the upcoming stream: {}", e);
-            }
+        if let Ok(s) = stream {
+            let router = Route::from(&server.router);
+            pool.execute(move || {
+                handle_connection(s, router);
+            });
         }
     }
 }

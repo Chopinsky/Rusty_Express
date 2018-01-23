@@ -1,7 +1,8 @@
 #![allow(dead_code)]
 
 use std::collections::HashMap;
-use http::Request;
+use regex::Regex;
+use http::*;
 
 pub enum REST {
     NONE,
@@ -56,7 +57,7 @@ impl Hash for RequestPath {
  * End of manual mayham
  */
 
-pub type Callback = fn(String, Request) -> String;
+pub type Callback = fn(String, &Request) -> String;
 
 pub struct Route {
     get: HashMap<RequestPath, Callback>,
@@ -70,6 +71,13 @@ pub trait Router {
     fn post(&mut self, uri: RequestPath, callback: Callback);
     fn put(&mut self, uri: RequestPath, callback: Callback);
     fn delete(&mut self, uri: RequestPath, callback: Callback);
+}
+
+pub trait RouteHandler {
+    fn handle_get(&self, req: Request) -> Option<Response>;
+    fn handle_put(&self, req: Request) -> Option<Response>;
+    fn handle_post(&self, req: Request) -> Option<Response>;
+    fn handle_delete(&self, req: Request) -> Option<Response>;
 }
 
 impl Route {
@@ -123,4 +131,58 @@ impl Router for Route {
     fn delete(&mut self, uri: RequestPath, callback: Callback) {
         self.delete.insert(uri, callback);
     }
+}
+
+impl RouteHandler for Route {
+    fn handle_get(&self, req: Request) -> Option<Response> {
+        handle_request_worker(&self.get, &req)
+    }
+
+    fn handle_put(&self, req: Request) -> Option<Response> {
+        handle_request_worker(&self.put, &req)
+    }
+
+    fn handle_post(&self, req: Request) -> Option<Response> {
+        handle_request_worker(&self.post, &req)
+    }
+
+    fn handle_delete(&self, req: Request) -> Option<Response> {
+        handle_request_worker(&self.delete, &req)
+    }
+}
+
+fn handle_request_worker(routes: &HashMap<RequestPath, Callback>, req: &Request) -> Option<Response> {
+    let uri = req.path.clone();
+    for (req_path, callback) in routes.iter() {
+        match req_path.to_owned() {
+            RequestPath::Literal(literal) => {
+                if req.path.eq(literal) {
+
+                    //TODO: write to the response stream
+                    let result = callback(uri, req);
+
+                    return Some(Response{
+                        header: String::new(),
+                        body: result,
+                    });
+                }
+            },
+            RequestPath::WildCard(wild) => {
+                if let Ok(re) = Regex::new(wild) {
+                    if re.is_match(&uri) {
+
+                        //TODO: write to the response stream
+                        let result = callback(uri, req);
+
+                        return Some(Response{
+                            header: String::new(),
+                            body: result,
+                        });
+                    }
+                }
+            }
+        }
+    }
+
+    None
 }

@@ -15,17 +15,21 @@ pub struct ConnectionHandler {
 }
 
 impl ConnectionHandler {
-    pub fn new() -> Self {
+    pub fn new(router: Route) -> Self {
         ConnectionHandler {
-            router: Route::new(),
+            router,
         }
     }
 
     pub fn use_router(&mut self, router: Route) {
         self.router = router;
     }
+
+    pub fn get_router(&self) -> &Route {
+        &self.router
+    }
 }
-*/
+ */
 
 pub fn handle_connection(stream: TcpStream, router: Route) -> Option<u8> {
     let request: Request;
@@ -39,7 +43,7 @@ pub fn handle_connection(stream: TcpStream, router: Route) -> Option<u8> {
         },
     }
 
-    match make_response(&request, &router) {
+    match handle_request(&request, &router) {
         Ok(response) => {
             return write_to_stream(stream, response);
         },
@@ -51,21 +55,13 @@ pub fn handle_connection(stream: TcpStream, router: Route) -> Option<u8> {
 }
 
 fn write_to_stream(mut stream: TcpStream, response: String) -> Option<u8> {
-    match stream.write(response.as_bytes()) {
-        Ok(_) => {
-            match stream.flush() {
-                Ok(_) => return Some(1),
-                Err(e) => {
-                    println!("Failed to flush the stream: {}", e);
-                    None
-                },
-            }
-        },
-        Err(e) => {
-            println!("Failed to write to the stream: {}", e);
-            None
-        },
+    if let Ok(_) = stream.write(response.as_bytes()) {
+        if let Ok(_) = stream.flush() {
+            return Some(1);
+        }
     }
+
+    None
 }
 
 fn request_from_stream(mut stream: &TcpStream) -> Result<Request, String> {
@@ -136,10 +132,10 @@ fn parse_request(request: &str) -> Option<Request> {
     Some(Request::build_from(method, path, header))
 }
 
-fn make_response(request_info: &Request, router: &Route) -> Result<String, String> {
+fn handle_request(request_info: &Request, router: &Route) -> Result<String, String> {
     match request_info.method {
         REST::GET => {
-
+            //router.han
             Ok(get_response_content(&request_info.path[..]))
         },
         REST::NONE => {

@@ -26,7 +26,7 @@ impl Model  {
        self.data = val;
     }
 
-    pub fn simple_response(path: String, _req: Request) -> String {
+    pub fn simple_response(path: String, _req: &Request) -> String {
         return format!("Hello world from {}!", path);
     }
 }
