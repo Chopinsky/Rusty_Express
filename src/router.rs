@@ -1,4 +1,5 @@
 #![allow(dead_code)]
+#![allow(unused_mut)]
 
 use std::collections::HashMap;
 use regex::Regex;
@@ -74,10 +75,10 @@ pub trait Router {
 }
 
 pub trait RouteHandler {
-    fn handle_get(&self, req: Request) -> Option<Response>;
-    fn handle_put(&self, req: Request) -> Option<Response>;
-    fn handle_post(&self, req: Request) -> Option<Response>;
-    fn handle_delete(&self, req: Request) -> Option<Response>;
+    fn handle_get(&self, req: Request, resp: &Response);
+    fn handle_put(&self, req: Request, resp: &Response);
+    fn handle_post(&self, req: Request, resp: &Response);
+    fn handle_delete(&self, req: Request, resp: &Response);
 }
 
 impl Route {
@@ -134,24 +135,24 @@ impl Router for Route {
 }
 
 impl RouteHandler for Route {
-    fn handle_get(&self, req: Request) -> Option<Response> {
-        handle_request_worker(&self.get, &req)
+    fn handle_get(&self, req: Request, mut resp: &Response) {
+        handle_request_worker(&self.get, &req, &mut resp)
     }
 
-    fn handle_put(&self, req: Request) -> Option<Response> {
-        handle_request_worker(&self.put, &req)
+    fn handle_put(&self, req: Request, mut resp: &Response) {
+        handle_request_worker(&self.put, &req, &mut resp)
     }
 
-    fn handle_post(&self, req: Request) -> Option<Response> {
-        handle_request_worker(&self.post, &req)
+    fn handle_post(&self, req: Request, mut resp: &Response) {
+        handle_request_worker(&self.post, &req, &mut resp)
     }
 
-    fn handle_delete(&self, req: Request) -> Option<Response> {
-        handle_request_worker(&self.delete, &req)
+    fn handle_delete(&self, req: Request, mut resp: &Response) {
+        handle_request_worker(&self.delete, &req, &mut resp)
     }
 }
 
-fn handle_request_worker(routes: &HashMap<RequestPath, Callback>, req: &Request) -> Option<Response> {
+fn handle_request_worker(routes: &HashMap<RequestPath, Callback>, req: &Request, mut _resp: &Response) {
     let uri = req.path.clone();
     for (req_path, callback) in routes.iter() {
         match req_path.to_owned() {
@@ -159,12 +160,8 @@ fn handle_request_worker(routes: &HashMap<RequestPath, Callback>, req: &Request)
                 if req.path.eq(literal) {
 
                     //TODO: write to the response stream
-                    let result = callback(uri, req);
+                    let _result = callback(uri.to_owned(), req);
 
-                    return Some(Response{
-                        header: String::new(),
-                        body: result,
-                    });
                 }
             },
             RequestPath::WildCard(wild) => {
@@ -172,17 +169,11 @@ fn handle_request_worker(routes: &HashMap<RequestPath, Callback>, req: &Request)
                     if re.is_match(&uri) {
 
                         //TODO: write to the response stream
-                        let result = callback(uri, req);
+                        let _result = callback(uri.to_owned(), req);
 
-                        return Some(Response{
-                            header: String::new(),
-                            body: result,
-                        });
                     }
                 }
             }
         }
     }
-
-    None
 }

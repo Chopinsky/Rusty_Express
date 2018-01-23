@@ -1,4 +1,6 @@
 #![allow(dead_code)]
+#![allow(unused_mut)]
+#![allow(unused_variables)]
 
 use std::collections::HashMap;
 use std::fs::File;
@@ -39,7 +41,7 @@ pub fn handle_connection(stream: TcpStream, router: Route) -> Option<u8> {
         },
         Err(e) => {
             println!("Error on parsing request -- {}", e);
-            return write_to_stream(stream, get_status(400));
+            return write_to_stream(stream, Response::get_status(400));
         },
     }
 
@@ -49,7 +51,7 @@ pub fn handle_connection(stream: TcpStream, router: Route) -> Option<u8> {
         },
         Err(e) => {
             println!("Error on generating response -- {}", e);
-            return write_to_stream(stream, get_status(400));
+            return write_to_stream(stream, Response::get_status(400));
         },
     }
 }
@@ -133,18 +135,25 @@ fn parse_request(request: &str) -> Option<Request> {
 }
 
 fn handle_request(request_info: &Request, router: &Route) -> Result<String, String> {
+    let mut resp = Response::new();
+
     match request_info.method {
         REST::GET => {
             //router.han
             Ok(get_response_content(&request_info.path[..]))
         },
-        REST::NONE => {
-            Err(String::from("Invalid request method"))
+        REST::PUT => {
+            Ok(get_response_content(&request_info.path[..]))
+        },
+        REST::POST => {
+            Ok(get_response_content(&request_info.path[..]))
+        },
+        REST::DELETE => {
+            Ok(get_response_content(&request_info.path[..]))
         },
         _ => {
-            /* Don't do anything special here */
-            Ok(get_response_content(""))
-        }
+            Err(String::from("Invalid request method"))
+        },
     }
 }
 
@@ -153,23 +162,23 @@ fn get_response_content(request_path: &str) -> String {
     let (status_line, path) =
         match &request_path[..] {
             "/" => (
-                get_status(200),
+                Response::get_status(200),
                 get_source_path("index.html"),
             ),
             "/styles.css" => (
-                get_status(200),
+                Response::get_status(200),
                 get_source_path("styles.css"),
             ),
             "/bundle.js" => (
-                get_status(200),
+                Response::get_status(200),
                 get_source_path("bundle.js"),
             ),
             "/favicon.ico" => (
-                get_status(200),
+                Response::get_status(200),
                 get_source_path(""),
             ),
             _ => (
-                get_status(404),
+                Response::get_status(404),
                 get_source_path("404.html"),
             ),
         };
@@ -181,39 +190,36 @@ fn get_response_content(request_path: &str) -> String {
         if !file_path.is_file() {
             // if doesn't exist or not a file, fail now
             println!("Can't locate requested file");
-            response = get_status(404);
+            response = Response::get_status(404);
         } else {
             // try open the file
-            match File::open(file_path) {
-                Ok(file) => {
-                    let mut buf_reader = BufReader::new(file);
-                    let mut contents: String = String::new();
+            if let Ok(file) = File::open(file_path) {
+                let mut buf_reader = BufReader::new(file);
+                let mut contents: String = String::new();
 
-                    match buf_reader.read_to_string(&mut contents) {
-                        Err(e) => {
-                            println!("Unable to read file: {} (requested path: {})", e, path);
-                            response = get_status(500);
-                        },
-                        Ok(_) if contents.len() > 0 => {
-                            //things are truly ok now
-                            response.push_str(&status_line);
-                            response.push_str(&contents);
-                        },
-                        _ => {
-                            println!("File stream finds nothing...");
-                            response = get_status(404);
-                        }
-                    };
-                },
-                Err(e) => {
-                    println!("Unable to open requested file: {} (requested path: {})", e, path);
-                    response = get_status(404);
-                },
-            };
+                match buf_reader.read_to_string(&mut contents) {
+                    Err(e) => {
+                        println!("Unable to read file: {} (requested path: {})", e, path);
+                        response = Response::get_status(500);
+                    },
+                    Ok(_) if contents.len() > 0 => {
+                        //things are truly ok now
+                        response.push_str(&status_line);
+                        response.push_str(&contents);
+                    },
+                    _ => {
+                        println!("File stream finds nothing...");
+                        response = Response::get_status(404);
+                    }
+                }
+            } else {
+                println!("Unable to open requested file for path: {})", path);
+                response = Response::get_status(404);
+            }
         }
     } else {
         println!("Can't locate requested file");
-        response = get_status(404);
+        response = Response::get_status(404);
     }
 
     response
@@ -229,16 +235,4 @@ fn get_source_path(source: &str) -> String {
     }
 
     return path;
-}
-
-fn get_status(status: u16) -> String {
-    let status_base =
-        match status {
-            200 => "200 OK",
-            500 => "500 INTERNAL SERVER ERROR",
-            400 => "400 BAD REQUEST",
-            404 | _ => "404 NOT FOUND",
-        };
-
-    return format!("HTTP/1.1 {}\r\n\r\n", status_base);
 }

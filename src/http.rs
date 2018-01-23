@@ -32,7 +32,34 @@ impl Request {
 }
 
 pub struct Response {
-    pub header: String,
-    pub body: String,
+    status: String,
+    body: String,
+}
+
+impl Response {
+    pub fn new() -> Self {
+        Response {
+            status: String::new(),
+            body: String::new(),
+        }
+    }
+
+    pub fn write(&mut self, content: String) {
+        if !content.is_empty() {
+            self.body.push_str(&content);
+        }
+    }
+
+    pub fn get_status(status: u16) -> String {
+        let status_base =
+            match status {
+                200 => "200 OK",
+                500 => "500 INTERNAL SERVER ERROR",
+                400 => "400 BAD REQUEST",
+                404 | _ => "404 NOT FOUND",
+            };
+
+        return format!("HTTP/1.1 {}\r\n\r\n", status_base);
+    }
 }
 
