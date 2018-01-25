@@ -26,8 +26,11 @@ impl Model  {
        self.data = val;
     }
 
-    pub fn simple_response(path: String, _req: &Request) -> String {
-        return format!("Hello world from {}!", path);
+    pub fn simple_response(path: String, req: Request, resp: &mut Response) {
+        let uri = req.path;
+        resp.send(String::from("Hello world from rusty server!"));
+        resp.send(uri);
+        println!("Hello world!");
     }
 }
 

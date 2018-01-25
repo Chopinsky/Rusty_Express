@@ -33,9 +33,9 @@ impl ConnectionHandler {
 }
  */
 
-pub fn handle_connection(stream: TcpStream, router: Route) -> Option<u8> {
+pub fn handle_connection(stream: TcpStream, router: &Route) -> Option<u8> {
     let request: Request;
-    match request_from_stream(&stream) {
+    match parse_request(&stream) {
         Ok(req) => {
             request = req;
         },
@@ -45,9 +45,10 @@ pub fn handle_connection(stream: TcpStream, router: Route) -> Option<u8> {
         },
     }
 
-    match handle_request(&request, &router) {
+    match handle_request(request, &router) {
         Ok(response) => {
-            return write_to_stream(stream, response);
+            let content = response.serialize();
+            return write_to_stream(stream, content);
         },
         Err(e) => {
             println!("Error on generating response -- {}", e);
@@ -66,28 +67,28 @@ fn write_to_stream(mut stream: TcpStream, response: String) -> Option<u8> {
     None
 }
 
-fn request_from_stream(mut stream: &TcpStream) -> Result<Request, String> {
+fn parse_request(mut stream: &TcpStream) -> Result<Request, String> {
     let mut buffer = [0; 512];
+    let result: Result<Request, String>;
 
-    match stream.read(&mut buffer) {
-        Ok(_) => {
-            let request = String::from_utf8_lossy(&buffer[..]);
-            if request.is_empty() {
-                return Err(String::from("Unable to parse the request: the incoming stream is blank..."));
-            }
-
-            match parse_request(&request) {
-                Some(request_info) => Ok(request_info),
-                None => Err(format!("Unable to parse the request from the stream...")),
-            }
-        },
-        Err(e) => {
-            Err(format!("Failed to read request from stream: {}", e))
+    if let Ok(_) = stream.read(&mut buffer) {
+        let request = String::from_utf8_lossy(&buffer[..]);
+        if request.is_empty() {
+            return Err(String::from("Unable to parse the request: the incoming stream is blank..."));
         }
+
+        result = match build_request_from_stream(&request) {
+            Some(request_info) => Ok(request_info),
+            None => Err(format!("Unable to parse the request from the stream...")),
+        }
+    } else {
+        result = Err(format!("Unable to parse the request from the stream..."))
     }
+
+    result
 }
 
-fn parse_request(request: &str) -> Option<Request> {
+fn build_request_from_stream(request: &str) -> Option<Request> {
     if request.is_empty() {
         return None;
     }
@@ -134,22 +135,29 @@ fn parse_request(request: &str) -> Option<Request> {
     Some(Request::build_from(method, path, header))
 }
 
-fn handle_request(request_info: &Request, router: &Route) -> Result<String, String> {
+fn handle_request(request_info: Request, router: &Route) -> Result<Response, String> {
     let mut resp = Response::new();
 
     match request_info.method {
         REST::GET => {
-            //router.han
-            Ok(get_response_content(&request_info.path[..]))
+            router.handle_get(request_info, &mut resp);
+            Ok(resp)
+            //Ok(get_response_content(&request_info.path[..]))
         },
         REST::PUT => {
-            Ok(get_response_content(&request_info.path[..]))
+            router.handle_put(request_info, &mut resp);
+            Ok(resp)
+            //Ok(get_response_content(&request_info.path[..]))
         },
         REST::POST => {
-            Ok(get_response_content(&request_info.path[..]))
+            router.handle_post(request_info, &mut resp);
+            Ok(resp)
+            //Ok(get_response_content(&request_info.path[..]))
         },
         REST::DELETE => {
-            Ok(get_response_content(&request_info.path[..]))
+            router.handle_delete(request_info, &mut resp);
+            Ok(resp)
+            //Ok(get_response_content(&request_info.path[..]))
         },
         _ => {
             Err(String::from("Invalid request method"))

@@ -58,7 +58,7 @@ impl Hash for RequestPath {
  * End of manual mayham
  */
 
-pub type Callback = fn(String, &Request) -> String;
+pub type Callback = fn(String, Request, &mut Response);
 
 pub struct Route {
     get: HashMap<RequestPath, Callback>,
@@ -75,10 +75,10 @@ pub trait Router {
 }
 
 pub trait RouteHandler {
-    fn handle_get(&self, req: Request, resp: &Response);
-    fn handle_put(&self, req: Request, resp: &Response);
-    fn handle_post(&self, req: Request, resp: &Response);
-    fn handle_delete(&self, req: Request, resp: &Response);
+    fn handle_get(&self, req: Request, resp: &mut Response);
+    fn handle_put(&self, req: Request, resp: &mut Response);
+    fn handle_post(&self, req: Request, resp: &mut Response);
+    fn handle_delete(&self, req: Request, resp: &mut Response);
 }
 
 impl Route {
@@ -135,45 +135,47 @@ impl Router for Route {
 }
 
 impl RouteHandler for Route {
-    fn handle_get(&self, req: Request, mut resp: &Response) {
-        handle_request_worker(&self.get, &req, &mut resp)
+    fn handle_get(&self, req: Request, resp: &mut Response) {
+        handle_request_worker(&self.get, req, resp)
     }
 
-    fn handle_put(&self, req: Request, mut resp: &Response) {
-        handle_request_worker(&self.put, &req, &mut resp)
+    fn handle_put(&self, req: Request, resp: &mut Response) {
+        handle_request_worker(&self.put, req, resp)
     }
 
-    fn handle_post(&self, req: Request, mut resp: &Response) {
-        handle_request_worker(&self.post, &req, &mut resp)
+    fn handle_post(&self, req: Request, resp: &mut Response) {
+        handle_request_worker(&self.post, req, resp)
     }
 
-    fn handle_delete(&self, req: Request, mut resp: &Response) {
-        handle_request_worker(&self.delete, &req, &mut resp)
+    fn handle_delete(&self, req: Request, resp: &mut Response) {
+        handle_request_worker(&self.delete, req, resp)
     }
 }
 
-fn handle_request_worker(routes: &HashMap<RequestPath, Callback>, req: &Request, mut _resp: &Response) {
-    let uri = req.path.clone();
+fn handle_request_worker(routes: &HashMap<RequestPath, Callback>, req: Request, resp: &mut Response) {
+    if let Some(callback) = seek_path(&routes, req.path.clone()) {
+        //TODO: write to the response stream
+        callback(req.path.clone(), req, resp);
+    }
+}
+
+fn seek_path(routes: &HashMap<RequestPath, Callback>, uri: String) -> Option<&Callback> {
     for (req_path, callback) in routes.iter() {
         match req_path.to_owned() {
             RequestPath::Literal(literal) => {
-                if req.path.eq(literal) {
-
-                    //TODO: write to the response stream
-                    let _result = callback(uri.to_owned(), req);
-
+                if literal.eq(&uri) {
+                    return Some(callback);
                 }
             },
             RequestPath::WildCard(wild) => {
                 if let Ok(re) = Regex::new(wild) {
                     if re.is_match(&uri) {
-
-                        //TODO: write to the response stream
-                        let _result = callback(uri.to_owned(), req);
-
+                        return Some(callback);
                     }
                 }
             }
         }
     }
+
+    None
 }

@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 extern crate thread_utils;
 extern crate regex;
 
@@ -51,29 +53,26 @@ impl Router for HttpServer {
 }
 
 fn start_with(server: &HttpServer, port: u16) {
-    let listener: TcpListener;
     let server_address = SocketAddr::from(([127, 0, 0, 1], port));
 
-    match TcpListener::bind(server_address) {
-        Ok(result) => {
-            println!("Listening for connections on port {}", port);
-            listener = result;
-        },
-        Err(e) => {
-            println!("Unable to start the http server: {}", e);
-            return;
-        }
-    }
+    if let Ok(listener) = TcpListener::bind(server_address) {
+        println!("Listening for connections on port {}", port);
 
-    let pool = ThreadPool::new(server.pool_size);
+        let pool = ThreadPool::new(server.pool_size);
 
-    for stream in listener.incoming() {
-        if let Ok(s) = stream {
-            let router = Route::from(&server.router);
-            pool.execute(move || {
-                handle_connection(s, router);
-            });
+        for stream in listener.incoming() {
+            if let Ok(s) = stream {
+                // clone the router so it can out live the closure.
+                let router = Route::from(&server.router);
+                pool.execute(move || {
+                    handle_connection(s, &router);
+                });
+            }
         }
+
+    } else {
+        println!("Unable to start the http server...");
+        return;
     }
 }
 
