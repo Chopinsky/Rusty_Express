@@ -19,7 +19,8 @@ impl Default for REST {
 
 #[derive(PartialEq, Eq, Hash, Clone, Copy)]
 pub enum RequestPath {
-    Literal(&'static str),
+    Raw(&'static str),
+    Explicit(&'static str),
     WildCard(&'static str),
 }
 
@@ -92,26 +93,11 @@ impl Route {
     }
 
     pub fn from(source: &Route) -> Self {
-        let mut router = Route::new();
-        router.clone_from(&source);
-        router
-    }
-
-    pub fn clone_from(&mut self, source: &Route) {
-        for (key, val) in source.get.iter() {
-            self.get.insert(key.to_owned(), val.to_owned());
-        }
-
-        for (key, val) in source.post.iter() {
-            self.get.insert(key.to_owned(), val.to_owned());
-        }
-
-        for (key, val) in source.put.iter() {
-            self.get.insert(key.to_owned(), val.to_owned());
-        }
-
-        for (key, val) in source.delete.iter() {
-            self.get.insert(key.to_owned(), val.to_owned());
+        Route {
+            get: source.get.clone(),
+            put: source.put.clone(),
+            post: source.post.clone(),
+            delete: source.delete.clone(),
         }
     }
 }
@@ -154,7 +140,7 @@ impl RouteHandler for Route {
 
 fn handle_request_worker(routes: &HashMap<RequestPath, Callback>, req: Request, resp: &mut Response) {
     if let Some(callback) = seek_path(&routes, req.path.clone()) {
-        //TODO: write to the response stream
+        //Callback function will decide what to be written into the response
         callback(req.path.clone(), req, resp);
     }
 }
@@ -162,7 +148,12 @@ fn handle_request_worker(routes: &HashMap<RequestPath, Callback>, req: Request, 
 fn seek_path(routes: &HashMap<RequestPath, Callback>, uri: String) -> Option<&Callback> {
     for (req_path, callback) in routes.iter() {
         match req_path.to_owned() {
-            RequestPath::Literal(literal) => {
+            RequestPath::Raw(literal) => {
+                if literal.starts_with(&uri) {
+                    return Some(callback);
+                }
+            },
+            RequestPath::Explicit(literal) => {
                 if literal.eq(&uri) {
                     return Some(callback);
                 }

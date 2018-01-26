@@ -8,7 +8,7 @@ fn main() {
     let mut server = HttpServer::new(4);
 
     //delegated definition
-    server.get(RequestPath::Literal("/"), Model::simple_response);
+    server.get(RequestPath::Raw("/"), Model::simple_response);
 
     server.listen(8080);
 }
@@ -27,10 +27,8 @@ impl Model  {
     }
 
     pub fn simple_response(path: String, req: Request, resp: &mut Response) {
-        let uri = req.path;
-        resp.send(String::from("Hello world from rusty server!"));
-        resp.send(uri);
-        println!("Hello world!");
+        resp.send(String::from("Hello world from rusty server!\n"));
+        resp.status(200);
     }
 }
 

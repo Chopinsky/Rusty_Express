@@ -3,11 +3,8 @@
 #![allow(unused_variables)]
 
 use std::collections::HashMap;
-use std::fs::File;
-use std::io::BufReader;
 use std::io::prelude::*;
 use std::net::TcpStream;
-use std::path::Path;
 use http::*;
 use router::*;
 
@@ -47,8 +44,7 @@ pub fn handle_connection(stream: TcpStream, router: &Route) -> Option<u8> {
 
     match handle_request(request, &router) {
         Ok(response) => {
-            let content = response.serialize();
-            return write_to_stream(stream, content);
+            return write_to_stream(stream, response.serialize());
         },
         Err(e) => {
             println!("Error on generating response -- {}", e);
@@ -142,22 +138,18 @@ fn handle_request(request_info: Request, router: &Route) -> Result<Response, Str
         REST::GET => {
             router.handle_get(request_info, &mut resp);
             Ok(resp)
-            //Ok(get_response_content(&request_info.path[..]))
         },
         REST::PUT => {
             router.handle_put(request_info, &mut resp);
             Ok(resp)
-            //Ok(get_response_content(&request_info.path[..]))
         },
         REST::POST => {
             router.handle_post(request_info, &mut resp);
             Ok(resp)
-            //Ok(get_response_content(&request_info.path[..]))
         },
         REST::DELETE => {
             router.handle_delete(request_info, &mut resp);
             Ok(resp)
-            //Ok(get_response_content(&request_info.path[..]))
         },
         _ => {
             Err(String::from("Invalid request method"))
@@ -165,6 +157,7 @@ fn handle_request(request_info: Request, router: &Route) -> Result<Response, Str
     }
 }
 
+/* Deprecated...
 fn get_response_content(request_path: &str) -> String {
 
     let (status_line, path) =
@@ -244,3 +237,4 @@ fn get_source_path(source: &str) -> String {
 
     return path;
 }
+*/
