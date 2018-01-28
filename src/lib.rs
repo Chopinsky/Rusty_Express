@@ -2,37 +2,61 @@
 
 extern crate regex;
 
+pub mod config;
 pub mod connection;
 pub mod http;
 pub mod router;
+pub mod server_states;
 pub mod thread_utils;
 
 use std::net::{SocketAddr, TcpListener};
+use std::time::Duration;
+use config::*;
 use connection::*;
 use router::*;
+use server_states::*;
 use thread_utils::ThreadPool;
 
-//TODO: better handling of errors
+//TODO: handle errors with grace...
 
 pub struct HttpServer {
-    pub pool_size: usize,
     router: Route,
+    config: ServerConfig,
+    states: ServerStates,
+}
+
+pub trait ServerDef {
+    fn def_router(&mut self, router: Route);
+    fn set_pool_size(&mut self, size: usize);
+    fn set_read_timeout(&mut self, timeout: u8);
+    fn set_write_timeout(&mut self, timeout: u8);
 }
 
 impl HttpServer {
-    pub fn new(pool_size: usize) -> Self {
+    pub fn new() -> Self {
         HttpServer {
-            pool_size,
             router: Route::new(),
+            config: ServerConfig::new(),
+            states: ServerStates::new(),
         }
     }
 
-    pub fn use_router(&mut self, router: Route) {
-        self.router = router;
+    pub fn listen(&self, port: u16) {
+        let server_address = SocketAddr::from(([127, 0, 0, 1], port));
+        if let Ok(listener) = TcpListener::bind(server_address) {
+            println!("Listening for connections on port {}", port);
+
+            start_with(&listener, &self.router, &self.config, &self.states);
+            drop(listener);
+
+        } else {
+            println!("Unable to start the http server...");
+
+        }
     }
 
-    pub fn listen(&self, port: u16) {
-        start_with(self, port);
+    pub fn terminate(&mut self) {
+        self.states.set_to_terminate();
     }
 }
 
@@ -58,28 +82,60 @@ impl Router for HttpServer {
     }
 }
 
-fn start_with(server: &HttpServer, port: u16) {
-    let server_address = SocketAddr::from(([127, 0, 0, 1], port));
+impl ServerDef for HttpServer {
+    fn def_router(&mut self, router: Route) {
+        self.router = router;
+    }
 
-    if let Ok(listener) = TcpListener::bind(server_address) {
-        println!("Listening for connections on port {}", port);
+    fn set_pool_size(&mut self, size: usize) {
+        self.config.pool_size = size;
+    }
 
-        let pool = ThreadPool::new(server.pool_size);
+    fn set_read_timeout(&mut self, timeout: u8) {
+        self.config.read_timeout = timeout;
+    }
 
-        for stream in listener.incoming() {
-            if let Ok(s) = stream {
-                // clone the router so it can out live the closure.
-                let router = Route::from(&server.router);
-                pool.execute(move || {
-                    handle_connection(s, &router);
-                });
-            }
-        }
-
-    } else {
-        println!("Unable to start the http server...");
-        return;
+    fn set_write_timeout(&mut self, timeout: u8) {
+        self.config.write_timeout = timeout;
     }
 }
 
+fn start_with(listener: &TcpListener, router: &Route, config: &ServerConfig, server_states: &ServerStates) {
 
+    let pool = ThreadPool::new(config.pool_size);
+    let read_timeout = Some(Duration::new(config.read_timeout as u64, 0));
+    let write_timeout = Some(Duration::new(config.write_timeout as u64, 0));
+
+    for stream in listener.incoming() {
+        if let Ok(s) = stream {
+            if let Err(e) = s.set_read_timeout(read_timeout) {
+                println!("Unable to set read timeout: {}", e);
+                continue;
+            }
+
+            if let Err(e) = s.set_write_timeout(write_timeout) {
+                println!("Unable to set write timeout: {}", e);
+                continue;
+            }
+
+            // clone the router so it can out live the closure.
+            let router = Route::from(&router);
+            pool.execute(move || {
+                handle_connection(s, &router);
+            });
+
+            if server_states.is_terminating() {
+                break;
+            }
+        } else {
+            if server_states.is_terminating() {
+                break;
+            }
+
+            continue;
+        }
+    }
+
+    //close the listener with grace
+    drop(pool);
+}

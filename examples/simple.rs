@@ -5,7 +5,7 @@ use rusty_express::http::*;
 use rusty_express::router::*;
 
 fn main() {
-    let mut server = HttpServer::new(4);
+    let mut server = HttpServer::new();
 
     //delegated definition
     server.get(RequestPath::Exact("/"), Model::simple_response);
