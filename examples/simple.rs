@@ -1,14 +1,14 @@
-extern crate rust_simple_server;
+extern crate rusty_express;
 
-use rust_simple_server::HttpServer;
-use rust_simple_server::http::*;
-use rust_simple_server::router::*;
+use rusty_express::HttpServer;
+use rusty_express::http::*;
+use rusty_express::router::*;
 
 fn main() {
     let mut server = HttpServer::new(4);
 
     //delegated definition
-    server.get(RequestPath::Raw("/"), Model::simple_response);
+    server.get(RequestPath::Exact("/"), Model::simple_response);
 
     server.listen(8080);
 }

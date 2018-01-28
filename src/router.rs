@@ -20,8 +20,8 @@ impl Default for REST {
 
 #[derive(PartialEq, Eq, Hash, Clone, Copy)]
 pub enum RequestPath {
-    Raw(&'static str),
     Exact(&'static str),
+    Partial(&'static str),
     WildCard(&'static str),
 }
 
@@ -166,13 +166,13 @@ fn handle_request_worker(routes: &HashMap<RequestPath, Callback>, req: Request, 
 fn seek_path(routes: &HashMap<RequestPath, Callback>, uri: String) -> Option<&Callback> {
     for (req_path, callback) in routes.iter() {
         match req_path.to_owned() {
-            RequestPath::Raw(val) => {
-                if uri.starts_with(&val) {
+            RequestPath::Exact(val) => {
+                if uri.eq(&val) {
                     return Some(callback);
                 }
             },
-            RequestPath::Exact(val) => {
-                if uri.eq(&val) {
+            RequestPath::Partial(val) => {
+                if uri.starts_with(&val) {
                     return Some(callback);
                 }
             },
