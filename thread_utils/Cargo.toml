@@ -1,6 +1,0 @@
-[package]
-name = "thread_utils"
-version = "0.1.0"
-authors = ["Jacob Zuo <chopinsky@live.com>"]
-
-[dependencies]

@@ -1,11 +1,11 @@
 #![allow(dead_code)]
 
-extern crate thread_utils;
 extern crate regex;
 
 pub mod connection;
 pub mod http;
 pub mod router;
+pub mod thread_utils;
 
 use std::net::{SocketAddr, TcpListener};
 use connection::*;
