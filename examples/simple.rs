@@ -8,9 +8,7 @@ fn main() {
     let mut server = HttpServer::new(4);
 
     //delegated definition
-    server.get(RequestPath::Raw("/"
-
-    ), Model::simple_response);
+    server.get(RequestPath::Raw("/"), Model::simple_response);
 
     server.listen(8080);
 }

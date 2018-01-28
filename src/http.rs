@@ -166,6 +166,9 @@ impl ResponseWriter for Response {
 }
 
 fn return_default_page(status: u16, result: &mut String) {
+
+    //TODO: create default pages
+
     match status {
         500 => {
             result.push_str(&Response::get_status(500));

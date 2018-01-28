@@ -109,6 +109,8 @@ impl Route {
 }
 
 impl Router for Route {
+    //TODO: add special handling for "*"
+
     fn get(&mut self, uri: RequestPath, callback: Callback) {
         self.get.entry(uri).or_insert(callback);
     }
@@ -156,19 +158,21 @@ fn handle_request_worker(routes: &HashMap<RequestPath, Callback>, req: Request, 
     if let Some(callback) = seek_path(&routes, req.path.clone()) {
         //Callback function will decide what to be written into the response
         callback(req, resp);
+    } else {
+        resp.status(404);
     }
 }
 
 fn seek_path(routes: &HashMap<RequestPath, Callback>, uri: String) -> Option<&Callback> {
     for (req_path, callback) in routes.iter() {
         match req_path.to_owned() {
-            RequestPath::Raw(literal) => {
-                if literal.starts_with(&uri) {
+            RequestPath::Raw(val) => {
+                if uri.starts_with(&val) {
                     return Some(callback);
                 }
             },
-            RequestPath::Exact(literal) => {
-                if literal.eq(&uri) {
+            RequestPath::Exact(val) => {
+                if uri.eq(&val) {
                     return Some(callback);
                 }
             },
