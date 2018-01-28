@@ -11,6 +11,7 @@ pub enum REST {
     POST,
     PUT,
     DELETE,
+    OTHER(String),
 }
 
 impl Default for REST {
@@ -20,7 +21,7 @@ impl Default for REST {
 #[derive(PartialEq, Eq, Hash, Clone, Copy)]
 pub enum RequestPath {
     Raw(&'static str),
-    Explicit(&'static str),
+    Exact(&'static str),
     WildCard(&'static str),
 }
 
@@ -59,13 +60,14 @@ impl Hash for RequestPath {
  * End of manual mayham
  */
 
-pub type Callback = fn(String, Request, &mut Response);
+pub type Callback = fn(Request, &mut Response);
 
 pub struct Route {
     get: HashMap<RequestPath, Callback>,
     post: HashMap<RequestPath, Callback>,
     put: HashMap<RequestPath, Callback>,
     delete: HashMap<RequestPath, Callback>,
+    others: HashMap<RequestPath, Callback>,
 }
 
 pub trait Router {
@@ -73,6 +75,7 @@ pub trait Router {
     fn post(&mut self, uri: RequestPath, callback: Callback);
     fn put(&mut self, uri: RequestPath, callback: Callback);
     fn delete(&mut self, uri: RequestPath, callback: Callback);
+    fn other(&mut self, uri: RequestPath, callback: Callback);
 }
 
 pub trait RouteHandler {
@@ -80,6 +83,7 @@ pub trait RouteHandler {
     fn handle_put(&self, req: Request, resp: &mut Response);
     fn handle_post(&self, req: Request, resp: &mut Response);
     fn handle_delete(&self, req: Request, resp: &mut Response);
+    fn handle_other(&self, req: Request, resp: &mut Response);
 }
 
 impl Route {
@@ -89,6 +93,7 @@ impl Route {
             post: HashMap::new(),
             put: HashMap::new(),
             delete: HashMap::new(),
+            others: HashMap::new(),
         }
     }
 
@@ -98,25 +103,30 @@ impl Route {
             put: source.put.clone(),
             post: source.post.clone(),
             delete: source.delete.clone(),
+            others: source.others.clone(),
         }
     }
 }
 
 impl Router for Route {
     fn get(&mut self, uri: RequestPath, callback: Callback) {
-        self.get.insert(uri, callback);
+        self.get.entry(uri).or_insert(callback);
     }
 
     fn put(&mut self, uri: RequestPath, callback: Callback) {
-        self.put.insert(uri, callback);
+        self.put.entry(uri).or_insert( callback);
     }
 
     fn post(&mut self, uri: RequestPath, callback: Callback) {
-        self.post.insert(uri, callback);
+        self.post.entry(uri).or_insert(callback);
     }
 
     fn delete(&mut self, uri: RequestPath, callback: Callback) {
-        self.delete.insert(uri, callback);
+        self.delete.entry(uri).or_insert( callback);
+    }
+
+    fn other(&mut self, uri: RequestPath, callback: Callback) {
+        self.others.entry(uri).or_insert( callback);
     }
 }
 
@@ -136,12 +146,16 @@ impl RouteHandler for Route {
     fn handle_delete(&self, req: Request, resp: &mut Response) {
         handle_request_worker(&self.delete, req, resp)
     }
+
+    fn handle_other(&self, req: Request, resp: &mut Response) {
+        handle_request_worker(&self.others, req, resp)
+    }
 }
 
 fn handle_request_worker(routes: &HashMap<RequestPath, Callback>, req: Request, resp: &mut Response) {
     if let Some(callback) = seek_path(&routes, req.path.clone()) {
         //Callback function will decide what to be written into the response
-        callback(req.path.clone(), req, resp);
+        callback(req, resp);
     }
 }
 
@@ -153,7 +167,7 @@ fn seek_path(routes: &HashMap<RequestPath, Callback>, uri: String) -> Option<&Ca
                     return Some(callback);
                 }
             },
-            RequestPath::Explicit(literal) => {
+            RequestPath::Exact(literal) => {
                 if literal.eq(&uri) {
                     return Some(callback);
                 }

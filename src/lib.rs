@@ -12,6 +12,8 @@ use connection::*;
 use router::*;
 use thread_utils::ThreadPool;
 
+//TODO: better handling of errors
+
 pub struct HttpServer {
     pub pool_size: usize,
     router: Route,
@@ -40,15 +42,19 @@ impl Router for HttpServer {
     }
 
     fn put(&mut self, uri: RequestPath, callback: Callback) {
-        self.router.get(uri, callback);
+        self.router.put(uri, callback);
     }
 
     fn post(&mut self, uri: RequestPath, callback: Callback) {
-        self.router.get(uri, callback);
+        self.router.post(uri, callback);
     }
 
     fn delete(&mut self, uri: RequestPath, callback: Callback) {
-        self.router.get(uri, callback);
+        self.router.delete(uri, callback);
+    }
+
+    fn other(&mut self, uri: RequestPath, callback: Callback) {
+        self.router.other(uri, callback);
     }
 }
 

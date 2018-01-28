@@ -8,28 +8,6 @@ use std::net::TcpStream;
 use http::*;
 use router::*;
 
-/* no need to instanciate this
-pub struct ConnectionHandler {
-    router: Route,
-}
-
-impl ConnectionHandler {
-    pub fn new(router: Route) -> Self {
-        ConnectionHandler {
-            router,
-        }
-    }
-
-    pub fn use_router(&mut self, router: Route) {
-        self.router = router;
-    }
-
-    pub fn get_router(&self) -> &Route {
-        &self.router
-    }
-}
- */
-
 pub fn handle_connection(stream: TcpStream, router: &Route) -> Option<u8> {
     let request: Request;
     match parse_request(&stream) {
@@ -104,7 +82,8 @@ fn build_request_from_stream(request: &str) -> Option<Request> {
                             "PUT" => REST::PUT,
                             "POST" => REST::POST,
                             "DELETE" => REST::DELETE,
-                            _ => REST::NONE,
+                            "" => REST::NONE,
+                            _ => REST::OTHER(request_info[0].to_owned()),
                         };
                     },
                     1 => { path.push_str(info); },
@@ -149,6 +128,10 @@ fn handle_request(request_info: Request, router: &Route) -> Result<Response, Str
         },
         REST::DELETE => {
             router.handle_delete(request_info, &mut resp);
+            Ok(resp)
+        },
+        REST::OTHER(_) => {
+            router.handle_other(request_info, &mut resp);
             Ok(resp)
         },
         _ => {

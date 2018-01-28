@@ -49,7 +49,7 @@ impl Response {
     pub fn new() -> Self {
         Response {
             status: 0,
-            body: String::new(),  // TODO: use string buffer instead of string literals
+            body: String::new(),
         }
     }
 
@@ -112,6 +112,33 @@ impl Response {
 
         return format!("HTTP/1.1 {}\r\n\r\n", status_base);
     }
+
+    fn read_from_file(&mut self, file_path: &Path) {
+        // try open the file
+        if let Ok(file) = File::open(file_path) {
+            let mut buf_reader = BufReader::new(file);
+            let mut contents: String = String::new();
+
+            match buf_reader.read_to_string(&mut contents) {
+                Err(e) => {
+                    println!("Unable to read file: {}", e);
+                    self.status(500);
+                },
+                Ok(_) if contents.len() > 0 => {
+                    //things are truly ok now
+                    if !self.status_is_set() { self.status(200); }
+                    self.body.push_str(&contents);
+                },
+                _ => {
+                    println!("File stream finds nothing...");
+                    self.status(404);
+                }
+            }
+        } else {
+            println!("Unable to open requested file for path");
+            self.status(404);
+        }
+    }
 }
 
 impl ResponseWriter for Response {
@@ -128,38 +155,12 @@ impl ResponseWriter for Response {
         }
 
         let file_path = Path::new(&path);
-
-        /* TODO: instead of write to response, write to self body */
-        let mut response = String::new();
         if !file_path.is_file() {
             // if doesn't exist or not a file, fail now
             println!("Can't locate requested file");
-            response = Response::get_status(404);
+            self.status(404);
         } else {
-            // try open the file
-            if let Ok(file) = File::open(file_path) {
-                let mut buf_reader = BufReader::new(file);
-                let mut contents: String = String::new();
-
-                match buf_reader.read_to_string(&mut contents) {
-                    Err(e) => {
-                        println!("Unable to read file: {} (requested path: {})", e, path);
-                        response = Response::get_status(500);
-                    },
-                    Ok(_) if contents.len() > 0 => {
-                        //things are truly ok now
-                        //response.push_str(&status_line);
-                        response.push_str(&contents);
-                    },
-                    _ => {
-                        println!("File stream finds nothing...");
-                        response = Response::get_status(404);
-                    }
-                }
-            } else {
-                println!("Unable to open requested file for path: {})", path);
-                response = Response::get_status(404);
-            }
+            self.read_from_file(&file_path);
         }
     }
 }
@@ -170,10 +171,14 @@ fn return_default_page(status: u16, result: &mut String) {
             result.push_str(&Response::get_status(500));
             /* return default/override 500 page */
         },
-        _ => {
+        404 => {
             result.push_str(&Response::get_status(404));
             /* return default/override 404 page */
+        },
+        _ => {
+            /* Do nothing for now */
         }
     }
 }
+
 
