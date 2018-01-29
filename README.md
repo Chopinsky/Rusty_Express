@@ -9,6 +9,7 @@ rusty_express = "0.2.1"
 ...
 ```
 
+In `src\main.rs`:
 ```rust
 extern crate rusty_express;
 
