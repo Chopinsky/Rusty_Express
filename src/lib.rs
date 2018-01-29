@@ -1,5 +1,3 @@
-#![allow(dead_code)]
-
 extern crate regex;
 
 pub mod config;
@@ -48,14 +46,15 @@ impl HttpServer {
 
             start_with(&listener, &self.router, &self.config, &self.states);
             drop(listener);
-
         } else {
-            println!("Unable to start the http server...");
-
+            panic!("Unable to start the http server...");
         }
+
+        println!("Shutting down...");
     }
 
     pub fn terminate(&mut self) {
+        println!("Requested to shutdown...");
         self.states.set_to_terminate();
     }
 }
@@ -123,16 +122,10 @@ fn start_with(listener: &TcpListener, router: &Route, config: &ServerConfig, ser
             pool.execute(move || {
                 handle_connection(s, &router);
             });
+        }
 
-            if server_states.is_terminating() {
-                break;
-            }
-        } else {
-            if server_states.is_terminating() {
-                break;
-            }
-
-            continue;
+        if server_states.is_terminating() {
+            break;
         }
     }
 

@@ -101,7 +101,7 @@ impl Response {
         result
     }
 
-    pub fn get_status(status: u16) -> String {
+    fn get_status(status: u16) -> String {
         let status_base =
             match status {
                 200 => "200 OK",

@@ -1,7 +1,3 @@
-#![allow(dead_code)]
-#![allow(unused_mut)]
-#![allow(unused_variables)]
-
 use std::collections::HashMap;
 use std::io::prelude::*;
 use std::net::TcpStream;
@@ -16,29 +12,43 @@ pub fn handle_connection(stream: TcpStream, router: &Route) -> Option<u8> {
         },
         Err(e) => {
             println!("Error on parsing request -- {}", e);
-            return write_to_stream(stream, Response::get_status(400));
+            return write_to_stream(stream, None);
         },
     }
 
     match handle_request(request, &router) {
         Ok(response) => {
-            return write_to_stream(stream, response.serialize());
+            return write_to_stream(stream, Some(response));
         },
         Err(e) => {
             println!("Error on generating response -- {}", e);
-            return write_to_stream(stream, Response::get_status(400));
+            return write_to_stream(stream, None);
         },
     }
 }
 
-fn write_to_stream(mut stream: TcpStream, response: String) -> Option<u8> {
-    if let Ok(_) = stream.write(response.as_bytes()) {
-        if let Ok(_) = stream.flush() {
-            return Some(1);
-        }
+fn write_to_stream(mut stream: TcpStream, response: Option<Response>) -> Option<u8> {
+    match response {
+        Some(resp) => {
+            if let Ok(_) = stream.write(resp.serialize().as_bytes()) {
+                if let Ok(_) = stream.flush() {
+                    return Some(0);
+                }
+            }
+        },
+        None => {
+            let mut resp = Response::new();
+            resp.status(500);
+
+            if let Ok(_) = stream.write(resp.serialize().as_bytes()) {
+                if let Ok(_) = stream.flush() {
+                    return Some(1);
+                }
+            }
+        },
     }
 
-    None
+    Some(1)
 }
 
 fn parse_request(mut stream: &TcpStream) -> Result<Request, String> {

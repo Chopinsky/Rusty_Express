@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 use std::thread;
 use std::sync::mpsc;
 use std::sync::Arc;
