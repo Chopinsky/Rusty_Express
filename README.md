@@ -14,6 +14,7 @@ In `src\main.rs`:
 extern crate rusty_express;
 
 use rusty_express::HttpServer;
+use rusty_express::ServerDef;
 use rusty_express::http::*;
 use rusty_express::router::*;
 
