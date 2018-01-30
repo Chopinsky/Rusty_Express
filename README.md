@@ -1,11 +1,14 @@
 # Rusty_Express
 A simple http server written in Rust and provide Express-alike APIs.
 
+## Under Development
+_This library is still actively worked on, to get the latest feature and bug fixes, please update to the latest version._
+
 ## How to use
 In your project's `Cargo.toml`, add dependency:
 ```rust
 [dependencies]
-rusty_express = "0.2.1"
+rusty_express = "^0.2.2"
 ...
 ```
 

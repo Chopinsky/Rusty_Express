@@ -8,6 +8,13 @@ pub mod router;
 pub mod server_states;
 pub mod thread_utils;
 
+pub mod prelude {
+    pub use {HttpServer, ServerDef};
+    pub use config::*;
+    pub use http::*;
+    pub use router::*;
+}
+
 use std::collections::HashMap;
 use std::net::{SocketAddr, TcpListener};
 use std::time::Duration;
