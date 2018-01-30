@@ -7,4 +7,5 @@ authors = ["Jacob Zuo <chopinsky@live.com>"]
 license = "MIT"
 
 [dependencies]
-regex = "0.2"
+regex = "^0.2"
+chrono = "^0.4"

@@ -8,6 +8,7 @@ use rusty_express::router::*;
 
 fn main() {
     let mut server = HttpServer::new();
+    server.set_pool_size(8);
 
     //define router directly
     server.get(RequestPath::Exact("/"), simple_response);

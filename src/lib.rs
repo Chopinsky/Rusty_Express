@@ -1,4 +1,5 @@
 extern crate regex;
+extern crate chrono;
 
 pub mod config;
 pub mod connection;
@@ -7,6 +8,7 @@ pub mod router;
 pub mod server_states;
 pub mod thread_utils;
 
+use std::collections::HashMap;
 use std::net::{SocketAddr, TcpListener};
 use std::time::Duration;
 use config::*;
@@ -28,6 +30,8 @@ pub trait ServerDef {
     fn set_pool_size(&mut self, size: usize);
     fn set_read_timeout(&mut self, timeout: u8);
     fn set_write_timeout(&mut self, timeout: u8);
+    fn def_default_response_header(&mut self, header: HashMap<String, String>);
+    fn set_default_response_header(&mut self, field: String, value: String);
 }
 
 impl HttpServer {
@@ -97,6 +101,14 @@ impl ServerDef for HttpServer {
     fn set_write_timeout(&mut self, timeout: u8) {
         self.config.write_timeout = timeout;
     }
+
+    fn def_default_response_header(&mut self, header: HashMap<String, String>) {
+        self.config.use_default_header(&header);
+    }
+
+    fn set_default_response_header(&mut self, field: String, value: String) {
+        self.config.default_header(field, value, true);
+    }
 }
 
 fn start_with(listener: &TcpListener, router: &Route, config: &ServerConfig, server_states: &ServerStates) {
@@ -119,8 +131,10 @@ fn start_with(listener: &TcpListener, router: &Route, config: &ServerConfig, ser
 
             // clone the router so it can out live the closure.
             let router = Route::from(&router);
+            let default_header = config.get_default_header();
+
             pool.execute(move || {
-                handle_connection(s, &router);
+                handle_connection(s, &router, &default_header);
             });
         }
 

@@ -5,6 +5,7 @@ use std::fs::File;
 use std::io::BufReader;
 use std::io::prelude::*;
 use std::path::Path;
+use chrono::prelude::*;
 use router::REST;
 
 pub struct Request {
@@ -37,18 +38,36 @@ impl Request {
 
 pub struct Response {
     status: u16,
+    content_type: String,
+    cookie: String,
+    header: HashMap<String, String>,
     body: String,
 }
 
 pub trait ResponseWriter {
     fn send(&mut self, content: String);
     fn send_file(&mut self, file_path: String);
+    fn set_cookies(&mut self, cookie: Vec<(String, String)>);
+    fn set_content_type(&mut self, content_type: String);
 }
 
 impl Response {
     pub fn new() -> Self {
         Response {
             status: 0,
+            content_type: String::new(),
+            cookie: String::new(),
+            header: HashMap::new(),
+            body: String::new(),
+        }
+    }
+
+    pub fn new_with_default_header(default_header: &HashMap<String, String>) -> Self {
+        Response {
+            status: 0,
+            content_type: String::new(),
+            cookie: String::new(),
+            header: default_header.clone(),
             body: String::new(),
         }
     }
@@ -56,6 +75,7 @@ impl Response {
     pub fn status(&mut self, status: u16) {
         self.status =
             match status {
+                100 ... 101 => status,
                 200 ... 206 => status,
                 300 ... 308 if status != 307 && status != 308 => status,
                 400 ... 417 if status != 402 => status,
@@ -63,6 +83,10 @@ impl Response {
                 500 ... 505 | 511 => status,
                 _ => 0,
             };
+    }
+
+    pub fn header(&mut self, field: String, value: String, replace: bool) {
+        set_header(&mut self.header, field, value, replace);
     }
 
     pub fn status_is_set(&self) -> bool {
@@ -73,44 +97,24 @@ impl Response {
         (!self.body.is_empty() && self.body.len() > 0)
     }
 
+    //TODO: also create header, maybe in a different fun?
     pub fn serialize(&self) -> String {
         let mut result= String::new();
 
-        match self.status {
-            404 | 500 => {
-                return_default_page(self.status, &mut result);
-            },
-            0 => {
-                /* No status has been explicitly set, be smart here */
-                if self.has_contents() {
-                    result.push_str(&Response::get_status(200));
-                    result.push_str(&self.body);
-                } else {
-                    return_default_page(404, &mut result);
-                }
-            },
-            _ => {
-                /* A status has been set explicitly, respect that here. */
-                result.push_str(&Response::get_status(self.status));
-                if self.has_contents() {
-                    result.push_str(&self.body);
-                }
-            },
+        result.push_str(&self.get_header());
+
+        if self.status == 404 || self.status == 500 {
+            //explicit error status
+            result.push_str(&get_default_page(self.status));
+        } else if self.status == 0 && !self.has_contents() {
+            //implicit error status
+            result.push_str(&get_default_page(404));
+        } else if self.has_contents() {
+            //all good
+            result.push_str(&self.body);
         }
 
         result
-    }
-
-    fn get_status(status: u16) -> String {
-        let status_base =
-            match status {
-                200 => "200 OK",
-                500 => "500 INTERNAL SERVER ERROR",
-                400 => "400 BAD REQUEST",
-                404 | _ => "404 NOT FOUND",
-            };
-
-        return format!("HTTP/1.1 {}\r\n\r\n", status_base);
     }
 
     fn read_from_file(&mut self, file_path: &Path) {
@@ -127,6 +131,11 @@ impl Response {
                 Ok(_) if contents.len() > 0 => {
                     //things are truly ok now
                     if !self.status_is_set() { self.status(200); }
+
+                    if self.content_type.is_empty() {
+                        self.set_content_type(default_content_type_on_ext(&file_path));
+                    }
+
                     self.body.push_str(&contents);
                 },
                 _ => {
@@ -138,6 +147,57 @@ impl Response {
             println!("Unable to open requested file for path");
             self.status(404);
         }
+    }
+
+    fn get_header(&self) -> String {
+        let mut header = String::new();
+
+        match self.status {
+            404 | 500 => {
+                header.push_str(&get_status(self.status));
+            },
+            0 => {
+                /* No status has been explicitly set, be smart here */
+                if self.has_contents() {
+                    header.push_str(&get_status(200));
+                } else {
+                    header.push_str(&get_status(404));
+                }
+            },
+            _ => {
+                /* A status has been set explicitly, respect that here. */
+                header.push_str(&get_status(self.status));
+            },
+        }
+
+        if !self.content_type.is_empty() {
+            header.push_str(&format!("Content-Type: {}\r\n", self.content_type));
+        }
+
+        if !self.cookie.is_empty() {
+            header.push_str(&format!("Set-Cookie: {}\r\n", self.cookie));
+        }
+
+        if !self.header.contains_key("date") {
+            let dt = Local::now();
+            header.push_str(&format!("Date: {}\r\n", dt.to_rfc2822()));
+        }
+
+        //other header field-value pairs
+        for (field, value) in self.header.iter() {
+            //special cases that shall be set using given methods
+            let f = field.to_lowercase();
+            if f.eq("content-type") || f.eq("set-cookie") || f.eq("date") {
+                continue;
+            }
+
+            //otherwise, write to the header
+            header.push_str(&format!("{}: {}\r\n", field, value));
+        }
+
+        //write an empty line to end the header
+        header.push_str("\r\n");
+        header
     }
 }
 
@@ -163,25 +223,104 @@ impl ResponseWriter for Response {
             self.read_from_file(&file_path);
         }
     }
+
+    fn set_cookies(&mut self, cookie: Vec<(String, String)>) {
+        if !cookie.is_empty() {
+            // pair data structure: (key, value)
+            for pair in cookie.into_iter() {
+                //if key is empty, skip
+                if pair.0.is_empty() { continue; }
+                //if multiple cookies, set delimiter ";"
+                if !self.cookie.is_empty() { self.cookie.push_str(&"; "); }
+
+                if pair.1.is_empty() {
+                    //if no value, then only set the key
+                    self.cookie.push_str(&pair.0);
+                } else {
+                    //if a key-value pair, then set the pair
+                    self.cookie.push_str(&format!("{}={}", pair.0, pair.1));
+                }
+            }
+        }
+    }
+
+    fn set_content_type(&mut self, content_type: String) {
+        if !content_type.is_empty() {
+            self.content_type = content_type;
+        }
+    }
 }
 
-fn return_default_page(status: u16, result: &mut String) {
+pub fn set_header(header: &mut HashMap<String, String>, field: String, value: String, replace: bool) {
+    if field.is_empty() || value.is_empty() { return; }
 
+    let f = field.to_lowercase();
+    if !header.contains_key(&f) {
+        //new field, insert
+        header.insert(f, value);
+    } else if let Some(store) = header.get_mut(&f) {
+        //existing field, replace existing value or append depending on the parameter
+        if replace {
+            *store = value;
+        } else {
+            *store = format!("{}; {}", store, value);
+        }
+    }
+}
+
+fn get_default_page(status: u16) -> String {
     //TODO: create default pages
+    let mut content = String::new();
 
     match status {
         500 => {
-            result.push_str(&Response::get_status(500));
             /* return default/override 500 page */
         },
         404 => {
-            result.push_str(&Response::get_status(404));
             /* return default/override 404 page */
         },
         _ => {
             /* Do nothing for now */
         }
     }
+
+    content
 }
 
+fn get_status(status: u16) -> String {
+    let status_base =
+        match status {
+            200 => "200 OK",
+            500 => "500 INTERNAL SERVER ERROR",
+            400 => "400 BAD REQUEST",
+            404 | _ => "404 NOT FOUND",
+        };
+
+    return format!("HTTP/1.1 {}\r\n", status_base);
+}
+
+fn default_content_type_on_ext(path: &Path) -> String {
+    if let Some(ext) = path.extension() {
+        match ext.to_str() {
+            Some("css") | Some("scss") | Some("sass") | Some("less") => String::from("text/css"),
+            Some("js") | Some("ts") | Some("jsx") => String::from("application/javascript"),
+            Some("html") => String::from("text/html"),
+            Some("jpeg") | Some("gif") | Some("png") | Some("bmp") | Some("webp") => {
+                format!("image/{}", ext.to_string_lossy())
+            },
+            Some("midi") | Some("mp3") => {
+                format!("audio/{}", ext.to_string_lossy())
+            },
+            Some("webm") | Some("mp4") | Some("ogg") | Some("wav") => {
+                format!("video/{}", ext.to_string_lossy())
+            },
+            Some("xml") | Some("xhtml") | Some("pdf") => {
+                format!("application/{}", ext.to_string_lossy())
+            },
+            _ => String::from("text/plain"),
+        }
+    } else {
+        String::from("text/plain")
+    }
+}
 

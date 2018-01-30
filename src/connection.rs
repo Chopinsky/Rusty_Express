@@ -4,19 +4,28 @@ use std::net::TcpStream;
 use http::*;
 use router::*;
 
-pub fn handle_connection(stream: TcpStream, router: &Route) -> Option<u8> {
+enum ParseError {
+    EmptyRequestErr,
+    ReadStreamErr,
+}
+
+pub fn handle_connection(stream: TcpStream, router: &Route, header: &HashMap<String, String>) -> Option<u8> {
     let request: Request;
     match parse_request(&stream) {
         Ok(req) => {
             request = req;
         },
-        Err(e) => {
-            println!("Error on parsing request -- {}", e);
+        Err(ParseError::ReadStreamErr) => {
+            //can't read from the stream, no need to write back...
+            return None;
+        },
+        Err(ParseError::EmptyRequestErr) => {
+            println!("Error on parsing request");
             return write_to_stream(stream, None);
         },
     }
 
-    match handle_request(request, &router) {
+    match handle_request(request, &router, &header) {
         Ok(response) => {
             return write_to_stream(stream, Some(response));
         },
@@ -48,25 +57,27 @@ fn write_to_stream(mut stream: TcpStream, response: Option<Response>) -> Option<
         },
     }
 
-    Some(1)
+    None
 }
 
-fn parse_request(mut stream: &TcpStream) -> Result<Request, String> {
+fn parse_request(mut stream: &TcpStream) -> Result<Request, ParseError> {
     let mut buffer = [0; 512];
-    let result: Result<Request, String>;
+    let result: Result<Request, ParseError>;
+
+    //TODO: handle disconnection requests more gracefully
 
     if let Ok(_) = stream.read(&mut buffer) {
         let request = String::from_utf8_lossy(&buffer[..]);
         if request.is_empty() {
-            return Err(String::from("Unable to parse the request: the incoming stream is blank..."));
+            return Err(ParseError::EmptyRequestErr);
         }
 
         result = match build_request_from_stream(&request) {
             Some(request_info) => Ok(request_info),
-            None => Err(format!("Unable to parse the request from the stream...")),
-        }
+            None => Err(ParseError::EmptyRequestErr),
+        };
     } else {
-        result = Err(format!("Unable to parse the request from the stream..."))
+        result = Err(ParseError::ReadStreamErr);
     }
 
     result
@@ -109,6 +120,8 @@ fn build_request_from_stream(request: &str) -> Option<Request> {
         } else {
             let header_info: Vec<&str> = line.splitn(2, ':').collect();
             if header_info.len() == 2 {
+                // TODO: create cookie struct and set it here
+
                 header.insert(
                     String::from(header_info[0]),
                     String::from(header_info[1])
@@ -120,8 +133,13 @@ fn build_request_from_stream(request: &str) -> Option<Request> {
     Some(Request::build_from(method, path, header))
 }
 
-fn handle_request(request_info: Request, router: &Route) -> Result<Response, String> {
-    let mut resp = Response::new();
+fn handle_request(request_info: Request, router: &Route, header: &HashMap<String, String>) -> Result<Response, String> {
+    let mut resp =
+        if header.is_empty() {
+            Response::new()
+        } else {
+            Response::new_with_default_header(&header)
+        };
 
     match request_info.method {
         REST::GET => {
