@@ -1,6 +1,7 @@
 #![allow(dead_code)]
 
 use std::collections::HashMap;
+use std::collections::hash_map::Iter;
 use std::fs::File;
 use std::io::BufReader;
 use std::io::prelude::*;
@@ -11,28 +12,50 @@ use router::REST;
 pub struct Request {
     pub method: REST,
     pub path: String,
+    cookie: HashMap<String, String>,
     header: HashMap<String, String>,
+    body: Vec<String>,
 }
 
 impl Request {
-    pub fn build_from(method: REST,
-                      path: String,
-                      header: HashMap<String, String>) -> Self {
+    pub fn build_from(
+        method: REST,
+        path: String,
+        cookie: HashMap<String, String>,
+        header: HashMap<String, String>,
+        body: Vec<String>
+    ) -> Self {
         Request {
             method,
             path,
+            cookie,
             header,
+            body,
         }
     }
 
-    pub fn get(&self, key: String) -> Option<String> {
-        if key.is_empty() { return None; }
+    pub fn header(&self, field: &str) -> Option<String> {
+        if field.is_empty() { return None; }
         if self.header.is_empty() { return None; }
 
-        match self.header.get(&key[..]) {
+        match self.header.get(&field[..]) {
             Some(value) => Some(value.to_owned()),
             None => None,
         }
+    }
+
+    pub fn cookie(&self, key: &str) -> Option<String> {
+        if key.is_empty() { return None; }
+        if self.cookie.is_empty() { return None; }
+
+        match self.cookie.get(&key[..]) {
+            Some(value) => Some(value.to_owned()),
+            None => None,
+        }
+    }
+
+    pub fn cookie_iter(&self) -> Iter<String, String> {
+        self.cookie.iter()
     }
 }
 
@@ -47,7 +70,7 @@ pub struct Response {
 pub trait ResponseWriter {
     fn send(&mut self, content: String);
     fn send_file(&mut self, file_path: String);
-    fn set_cookies(&mut self, cookie: Vec<(String, String)>);
+    fn set_cookies(&mut self, cookie: HashMap<String, String>);
     fn set_content_type(&mut self, content_type: String);
 }
 
@@ -224,21 +247,21 @@ impl ResponseWriter for Response {
         }
     }
 
-    fn set_cookies(&mut self, cookie: Vec<(String, String)>) {
+    fn set_cookies(&mut self, cookie: HashMap<String, String>) {
         if !cookie.is_empty() {
             // pair data structure: (key, value)
-            for pair in cookie.into_iter() {
+            for (key, val) in cookie.iter() {
                 //if key is empty, skip
-                if pair.0.is_empty() { continue; }
+                if key.is_empty() { continue; }
                 //if multiple cookies, set delimiter ";"
                 if !self.cookie.is_empty() { self.cookie.push_str(&"; "); }
 
-                if pair.1.is_empty() {
+                if val.is_empty() {
                     //if no value, then only set the key
-                    self.cookie.push_str(&pair.0);
+                    self.cookie.push_str(key);
                 } else {
                     //if a key-value pair, then set the pair
-                    self.cookie.push_str(&format!("{}={}", pair.0, pair.1));
+                    self.cookie.push_str(&format!("{}={}", key, val));
                 }
             }
         }

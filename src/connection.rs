@@ -1,9 +1,10 @@
 use std::collections::HashMap;
 use std::io::prelude::*;
-use std::net::TcpStream;
+use std::net::{TcpStream, Shutdown};
 use http::*;
 use router::*;
 
+#[derive(PartialEq, Eq, Clone, Copy)]
 enum ParseError {
     EmptyRequestErr,
     ReadStreamErr,
@@ -17,6 +18,7 @@ pub fn handle_connection(stream: TcpStream, router: &Route, header: &HashMap<Str
         },
         Err(ParseError::ReadStreamErr) => {
             //can't read from the stream, no need to write back...
+            stream.shutdown(Shutdown::Both).unwrap();
             return None;
         },
         Err(ParseError::EmptyRequestErr) => {
@@ -64,8 +66,6 @@ fn parse_request(mut stream: &TcpStream) -> Result<Request, ParseError> {
     let mut buffer = [0; 512];
     let result: Result<Request, ParseError>;
 
-    //TODO: handle disconnection requests more gracefully
-
     if let Ok(_) = stream.read(&mut buffer) {
         let request = String::from_utf8_lossy(&buffer[..]);
         if request.is_empty() {
@@ -90,7 +90,10 @@ fn build_request_from_stream(request: &str) -> Option<Request> {
 
     let mut method = REST::NONE;
     let mut path = String::new();
+    let mut cookie = HashMap::new();
     let mut header = HashMap::new();
+    let mut body = Vec::new();
+    let mut is_body = false;
 
     for (num, line) in request.trim().lines().enumerate() {
         if num == 0 {
@@ -118,19 +121,31 @@ fn build_request_from_stream(request: &str) -> Option<Request> {
                 };
             }
         } else {
-            let header_info: Vec<&str> = line.splitn(2, ':').collect();
-            if header_info.len() == 2 {
-                // TODO: create cookie struct and set it here
+            if line.is_empty() {
+                // meeting the empty line dividing header and body
+                is_body = true;
+                continue;
+            }
 
-                header.insert(
-                    String::from(header_info[0]),
-                    String::from(header_info[1])
-                );
+            if !is_body {
+                let header_info: Vec<&str> = line.splitn(2, ':').collect();
+                if header_info.len() == 2 {
+                    if header_info[0].to_lowercase().eq("cookie") {
+                        cookie_parser(header_info[1], &mut cookie);
+                    } else {
+                        header.insert(
+                            String::from(header_info[0].to_lowercase()),
+                            String::from(header_info[1])
+                        );
+                    }
+                }
+            } else {
+                body.push(line.to_owned());
             }
         }
     }
 
-    Some(Request::build_from(method, path, header))
+    Some(Request::build_from(method, path, cookie, header, body))
 }
 
 fn handle_request(request_info: Request, router: &Route, header: &HashMap<String, String>) -> Result<Response, String> {
@@ -165,5 +180,21 @@ fn handle_request(request_info: Request, router: &Route, header: &HashMap<String
         _ => {
             Err(String::from("Invalid request method"))
         },
+    }
+}
+
+fn cookie_parser(request_info: &str, cookie: &mut HashMap<String, String>) {
+    if request_info.is_empty() { return; }
+
+    let cookie_set: Vec<&str> = request_info.split(";").collect();
+    let mut pair: Vec<&str>;
+
+    for set in cookie_set {
+        pair = set.trim().splitn(2, "=").collect();
+        if pair.len() == 2 {
+            cookie.entry(pair[0].to_owned()).or_insert(pair[1].to_owned());
+        } else if pair.len() > 0 {
+            cookie.entry(pair[0].to_owned()).or_insert(String::new());
+        }
     }
 }

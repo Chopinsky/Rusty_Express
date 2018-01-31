@@ -5,6 +5,7 @@ use std::collections::HashMap;
 use regex::Regex;
 use http::*;
 
+#[derive(PartialEq, Eq, Hash, Clone)]
 pub enum REST {
     NONE,
     GET,
@@ -12,10 +13,6 @@ pub enum REST {
     PUT,
     DELETE,
     OTHER(String),
-}
-
-impl Default for REST {
-    fn default() -> REST { REST::NONE }
 }
 
 #[derive(PartialEq, Eq, Hash, Clone, Copy)]
