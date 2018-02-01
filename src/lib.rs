@@ -139,9 +139,10 @@ fn start_with(listener: &TcpListener, router: &Route, config: &ServerConfig, ser
             // clone the router so it can out live the closure.
             let router = Route::from(&router);
             let default_header = config.get_default_header();
+            let default_pages = config.get_default_pages();
 
             pool.execute(move || {
-                handle_connection(s, &router, &default_header);
+                handle_connection(s, &router, &default_header, &default_pages);
             });
         }
 

@@ -6,6 +6,7 @@ pub struct ServerConfig {
     pub read_timeout: u8,
     pub write_timeout: u8,
     header: HashMap<String, String>,
+    default_pages: HashMap<u16, String>,
 }
 
 impl ServerConfig {
@@ -15,6 +16,7 @@ impl ServerConfig {
             read_timeout: 5,
             write_timeout: 5,
             header: HashMap::new(),
+            default_pages: HashMap::new(),
         }
     }
 
@@ -28,5 +30,9 @@ impl ServerConfig {
 
     pub fn get_default_header(&self) -> HashMap<String, String> {
         self.header.clone()
+    }
+
+    pub fn get_default_pages(&self) -> HashMap<u16, String> {
+        self.default_pages.clone()
     }
 }

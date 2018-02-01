@@ -9,9 +9,15 @@ use std::path::Path;
 use chrono::prelude::*;
 use router::REST;
 
+//TODO: create response status struct, instead of using u16 to represent it
+
+static FOUR_OH_FOUR: &'static str = include_str!("./default/404.html");
+static FIVE_HUNDRED: &'static str = include_str!("./default/500.html");
+
 pub struct Request {
     pub method: REST,
     pub path: String,
+    scheme: HashMap<String, Vec<String>>,
     cookie: HashMap<String, String>,
     header: HashMap<String, String>,
     body: Vec<String>,
@@ -21,6 +27,7 @@ impl Request {
     pub fn build_from(
         method: REST,
         path: String,
+        scheme: HashMap<String, Vec<String>>,
         cookie: HashMap<String, String>,
         header: HashMap<String, String>,
         body: Vec<String>
@@ -29,6 +36,7 @@ impl Request {
             method,
             path,
             cookie,
+            scheme,
             header,
             body,
         }
@@ -56,6 +64,16 @@ impl Request {
 
     pub fn cookie_iter(&self) -> Iter<String, String> {
         self.cookie.iter()
+    }
+
+    pub fn scheme(&self, field: &str) -> Option<Vec<String>> {
+        if field.is_empty() { return None; }
+        if self.scheme.is_empty() { return None; }
+
+        match self.scheme.get(&field[..]) {
+            Some(value) => Some(value.to_owned()),
+            None => None,
+        }
     }
 }
 
@@ -120,56 +138,44 @@ impl Response {
         (!self.body.is_empty() && self.body.len() > 0)
     }
 
-    //TODO: also create header, maybe in a different fun?
+    pub fn check_and_update(&mut self, fallback: &HashMap<u16, String>) {
+        //if contents have been provided, we're all good.
+        if self.has_contents() { return; }
+
+        if self.status == 0 || self.status == 404 {
+            if let Some(file_path) = fallback.get(&404) {
+                let (_, content) = read_from_file(Path::new(file_path));
+                if !content.is_empty() { self.body.push_str(&content); }
+            } else {
+                self.body.push_str(FOUR_OH_FOUR);
+            }
+        } else {
+            if let Some(file_path) = fallback.get(&500) {
+                let (_, content) = read_from_file(Path::new(file_path));
+                if !content.is_empty() { self.body.push_str(&content); }
+            } else {
+                self.body.push_str(FIVE_HUNDRED);
+            }
+        }
+    }
+
     pub fn serialize(&self) -> String {
         let mut result= String::new();
 
         result.push_str(&self.get_header());
 
-        if self.status == 404 || self.status == 500 {
+        if self.has_contents() {
+            //content has been explicitly set, use them
+            result.push_str(&self.body);
+        } else if self.status == 404 || self.status == 500 {
             //explicit error status
             result.push_str(&get_default_page(self.status));
-        } else if self.status == 0 && !self.has_contents() {
+        } else if self.status == 0 {
             //implicit error status
             result.push_str(&get_default_page(404));
-        } else if self.has_contents() {
-            //all good
-            result.push_str(&self.body);
         }
 
         result
-    }
-
-    fn read_from_file(&mut self, file_path: &Path) {
-        // try open the file
-        if let Ok(file) = File::open(file_path) {
-            let mut buf_reader = BufReader::new(file);
-            let mut contents: String = String::new();
-
-            match buf_reader.read_to_string(&mut contents) {
-                Err(e) => {
-                    println!("Unable to read file: {}", e);
-                    self.status(500);
-                },
-                Ok(_) if contents.len() > 0 => {
-                    //things are truly ok now
-                    if !self.status_is_set() { self.status(200); }
-
-                    if self.content_type.is_empty() {
-                        self.set_content_type(default_content_type_on_ext(&file_path));
-                    }
-
-                    self.body.push_str(&contents);
-                },
-                _ => {
-                    println!("File stream finds nothing...");
-                    self.status(404);
-                }
-            }
-        } else {
-            println!("Unable to open requested file for path");
-            self.status(404);
-        }
     }
 
     fn get_header(&self) -> String {
@@ -243,7 +249,14 @@ impl ResponseWriter for Response {
             println!("Can't locate requested file");
             self.status(404);
         } else {
-            self.read_from_file(&file_path);
+            let (status, contents) = read_from_file(&file_path);
+
+            if !self.status_is_set() { self.status(status); }
+            if !contents.is_empty() { self.body.push_str(&contents); }
+
+            if self.status == 200 && self.content_type.is_empty() {
+                self.set_content_type(default_content_type_on_ext(&file_path));
+            }
         }
     }
 
@@ -292,22 +305,48 @@ pub fn set_header(header: &mut HashMap<String, String>, field: String, value: St
 }
 
 fn get_default_page(status: u16) -> String {
-    //TODO: create default pages
-    let mut content = String::new();
-
     match status {
         500 => {
-            /* return default/override 500 page */
+            /* return default 500 page */
+            String::from(FIVE_HUNDRED)
         },
         404 => {
             /* return default/override 404 page */
+            String::from(FOUR_OH_FOUR)
         },
         _ => {
-            /* Do nothing for now */
+            /* return 404 page for now */
+            String::from(FOUR_OH_FOUR)
         }
     }
+}
 
-    content
+fn read_from_file(file_path: &Path) -> (u16, String) {
+    // try open the file
+    println!("{:?}", file_path);
+
+    if let Ok(file) = File::open(file_path) {
+        let mut buf_reader = BufReader::new(file);
+        let mut contents: String = String::new();
+
+        return match buf_reader.read_to_string(&mut contents) {
+            Err(e) => {
+                println!("Unable to read file: {}", e);
+                (500, String::new())
+            },
+            Ok(_) if contents.len() > 0 => {
+                //things are truly ok now
+                (200, contents)
+            },
+            _ => {
+                println!("File stream finds nothing...");
+                (404, String::new())
+            }
+        };
+    } else {
+        println!("Unable to open requested file for path");
+        (404, String::new())
+    }
 }
 
 fn get_status(status: u16) -> String {

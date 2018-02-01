@@ -10,7 +10,13 @@ enum ParseError {
     ReadStreamErr,
 }
 
-pub fn handle_connection(stream: TcpStream, router: &Route, header: &HashMap<String, String>) -> Option<u8> {
+pub fn handle_connection(
+        stream: TcpStream,
+        router: &Route,
+        header: &HashMap<String, String>,
+        default_pages: &HashMap<u16, String>
+    ) -> Option<u8> {
+
     let request: Request;
     match parse_request(&stream) {
         Ok(req) => {
@@ -23,40 +29,27 @@ pub fn handle_connection(stream: TcpStream, router: &Route, header: &HashMap<Str
         },
         Err(ParseError::EmptyRequestErr) => {
             println!("Error on parsing request");
-            return write_to_stream(stream, None);
+            return write_to_stream(stream, build_default_response(&default_pages));
         },
     }
 
-    match handle_request(request, &router, &header) {
+    match handle_request_with_fallback(request, &router, &header, &default_pages) {
         Ok(response) => {
-            return write_to_stream(stream, Some(response));
+            return write_to_stream(stream, response);
         },
         Err(e) => {
             println!("Error on generating response -- {}", e);
-            return write_to_stream(stream, None);
+            return write_to_stream(stream, build_default_response(&default_pages));
         },
     }
 }
 
-fn write_to_stream(mut stream: TcpStream, response: Option<Response>) -> Option<u8> {
-    match response {
-        Some(resp) => {
-            if let Ok(_) = stream.write(resp.serialize().as_bytes()) {
-                if let Ok(_) = stream.flush() {
-                    return Some(0);
-                }
-            }
-        },
-        None => {
-            let mut resp = Response::new();
-            resp.status(500);
+fn write_to_stream(mut stream: TcpStream, response: Response) -> Option<u8> {
 
-            if let Ok(_) = stream.write(resp.serialize().as_bytes()) {
-                if let Ok(_) = stream.flush() {
-                    return Some(1);
-                }
-            }
-        },
+    if let Ok(_) = stream.write(response.serialize().as_bytes()) {
+        if let Ok(_) = stream.flush() {
+            return Some(0);
+        }
     }
 
     None
@@ -90,6 +83,7 @@ fn build_request_from_stream(request: &str) -> Option<Request> {
 
     let mut method = REST::NONE;
     let mut path = String::new();
+    let mut scheme = HashMap::new();
     let mut cookie = HashMap::new();
     let mut header = HashMap::new();
     let mut body = Vec::new();
@@ -110,7 +104,14 @@ fn build_request_from_stream(request: &str) -> Option<Request> {
                             _ => REST::OTHER(request_info[0].to_owned()),
                         };
                     },
-                    1 => { path.push_str(info); },
+                    1 => {
+                        let (req_path, req_scheme) = split_path(info);
+                        path.push_str(&req_path[..]);
+
+                        if !req_scheme.is_empty() {
+                            scheme_parser(&req_scheme[..], &mut scheme);
+                        }
+                    },
                     2 => {
                         header.insert(
                             String::from("HttpProtocol"),
@@ -130,12 +131,12 @@ fn build_request_from_stream(request: &str) -> Option<Request> {
             if !is_body {
                 let header_info: Vec<&str> = line.splitn(2, ':').collect();
                 if header_info.len() == 2 {
-                    if header_info[0].to_lowercase().eq("cookie") {
+                    if header_info[0].trim().to_lowercase().eq("cookie") {
                         cookie_parser(header_info[1], &mut cookie);
                     } else {
                         header.insert(
-                            String::from(header_info[0].to_lowercase()),
-                            String::from(header_info[1])
+                            String::from(header_info[0].trim().to_lowercase()),
+                            String::from(header_info[1].trim())
                         );
                     }
                 }
@@ -145,10 +146,16 @@ fn build_request_from_stream(request: &str) -> Option<Request> {
         }
     }
 
-    Some(Request::build_from(method, path, cookie, header, body))
+    Some(Request::build_from(method, path, scheme, cookie, header, body))
 }
 
-fn handle_request(request_info: Request, router: &Route, header: &HashMap<String, String>) -> Result<Response, String> {
+fn handle_request_with_fallback(
+        request_info: Request,
+        router: &Route,
+        header: &HashMap<String, String>,
+        fallback: &HashMap<u16, String>
+    ) -> Result<Response, String> {
+
     let mut resp =
         if header.is_empty() {
             Response::new()
@@ -159,42 +166,96 @@ fn handle_request(request_info: Request, router: &Route, header: &HashMap<String
     match request_info.method {
         REST::GET => {
             router.handle_get(request_info, &mut resp);
-            Ok(resp)
         },
         REST::PUT => {
             router.handle_put(request_info, &mut resp);
-            Ok(resp)
         },
         REST::POST => {
             router.handle_post(request_info, &mut resp);
-            Ok(resp)
         },
         REST::DELETE => {
             router.handle_delete(request_info, &mut resp);
-            Ok(resp)
         },
         REST::OTHER(_) => {
             router.handle_other(request_info, &mut resp);
-            Ok(resp)
         },
         _ => {
-            Err(String::from("Invalid request method"))
+            return Err(String::from("Invalid request method"));
         },
+    }
+
+    resp.check_and_update(&fallback);
+    Ok(resp)
+}
+
+fn split_path(path: &str) -> (String, String) {
+    let mut path_parts: Vec<&str> = path.rsplitn(2, "/").collect();
+
+    if path_parts[0].starts_with("?") {
+        let scheme: &str = &path_parts.swap_remove(0)[1..];
+        let mut act_path = String::new();
+
+        for part in path_parts.into_iter() {
+            if part.is_empty() { continue; }
+            act_path = format!("/{}{}", part.trim(), act_path);
+        }
+
+        (act_path, scheme.trim().to_owned())
+    } else {
+        (path.trim().to_owned(), String::new())
     }
 }
 
+// Cookie parser will parse the request header's cookie field into a hash-map, where the
+// field is the key of the map, which map to a single value of the key from the Cookie
+// header field. Assuming no duplicate cookie keys, or the first cookie key-value pair
+// will be stored.
 fn cookie_parser(request_info: &str, cookie: &mut HashMap<String, String>) {
     if request_info.is_empty() { return; }
 
     let cookie_set: Vec<&str> = request_info.split(";").collect();
     let mut pair: Vec<&str>;
 
-    for set in cookie_set {
+    for set in cookie_set.into_iter() {
         pair = set.trim().splitn(2, "=").collect();
         if pair.len() == 2 {
-            cookie.entry(pair[0].to_owned()).or_insert(pair[1].to_owned());
+            cookie.entry(pair[0].trim().to_owned()).or_insert(pair[1].trim().to_owned());
         } else if pair.len() > 0 {
-            cookie.entry(pair[0].to_owned()).or_insert(String::new());
+            cookie.entry(pair[0].trim().to_owned()).or_insert(String::new());
         }
     }
+}
+
+fn scheme_parser(scheme: &str, scheme_collection: &mut HashMap<String, Vec<String>>) {
+    let schemes: Vec<&str> = scheme.trim().split("&").collect();
+
+    for kv_pair in schemes.into_iter() {
+        let store: Vec<&str> = kv_pair.trim().splitn(2, "=").collect();
+        if store.len() > 0 {
+            let key = store[0].trim();
+            let val =
+                if store.len() == 2 {
+                    store[1].trim().to_owned()
+                } else {
+                    String::new()
+                };
+
+            if scheme_collection.contains_key(key) {
+                if let Some(val_vec) = scheme_collection.get_mut(key) {
+                    val_vec.push(val);
+                }
+            } else {
+                scheme_collection.insert(key.to_owned(), vec![val]);
+            }
+        }
+    }
+}
+
+fn build_default_response(default_pages: &HashMap<u16, String>) -> Response {
+    let mut resp = Response::new();
+
+    resp.status(500);
+    resp.check_and_update(&default_pages);
+
+    resp
 }
