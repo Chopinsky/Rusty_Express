@@ -14,7 +14,7 @@ static FIVE_HUNDRED: &'static str = include_str!("./default/500.html");
 
 pub struct Request {
     pub method: REST,
-    pub path: String,
+    pub uri: String,
     scheme: HashMap<String, Vec<String>>,
     cookie: HashMap<String, String>,
     header: HashMap<String, String>,
@@ -24,7 +24,7 @@ pub struct Request {
 impl Request {
     pub fn build_from(
         method: REST,
-        path: String,
+        uri: String,
         scheme: HashMap<String, Vec<String>>,
         cookie: HashMap<String, String>,
         header: HashMap<String, String>,
@@ -32,7 +32,7 @@ impl Request {
     ) -> Self {
         Request {
             method,
-            path,
+            uri,
             cookie,
             scheme,
             header,
@@ -77,6 +77,7 @@ impl Request {
 
 pub struct Response {
     status: u16,
+    to_close: bool,
     content_type: String,
     cookie: String,
     header: HashMap<String, String>,
@@ -88,12 +89,15 @@ pub trait ResponseWriter {
     fn send_file(&mut self, file_path: String);
     fn set_cookies(&mut self, cookie: HashMap<String, String>);
     fn set_content_type(&mut self, content_type: String);
+    fn check_and_update(&mut self, fallback: &HashMap<u16, String>);
+    fn close_connection(&mut self, is_bad_request: bool);
 }
 
 impl Response {
     pub fn new() -> Self {
         Response {
             status: 0,
+            to_close: false,
             content_type: String::new(),
             cookie: String::new(),
             header: HashMap::new(),
@@ -104,6 +108,7 @@ impl Response {
     pub fn new_with_default_header(default_header: &HashMap<String, String>) -> Self {
         Response {
             status: 0,
+            to_close: false,
             content_type: String::new(),
             cookie: String::new(),
             header: default_header.clone(),
@@ -128,33 +133,16 @@ impl Response {
         set_header(&mut self.header, field, value, replace);
     }
 
+    pub fn to_close_connection(&self) -> bool {
+        self.to_close
+    }
+
     pub fn status_is_set(&self) -> bool {
         (self.status == 0)
     }
 
     pub fn has_contents(&self) -> bool {
         (!self.body.is_empty() && self.body.len() > 0)
-    }
-
-    pub fn check_and_update(&mut self, fallback: &HashMap<u16, String>) {
-        //if contents have been provided, we're all good.
-        if self.has_contents() { return; }
-
-        if self.status == 0 || self.status == 404 {
-            if let Some(file_path) = fallback.get(&404) {
-                let (_, content) = read_from_file(Path::new(file_path));
-                if !content.is_empty() { self.body.push_str(&content); }
-            } else {
-                self.body.push_str(FOUR_OH_FOUR);
-            }
-        } else {
-            if let Some(file_path) = fallback.get(&500) {
-                let (_, content) = read_from_file(Path::new(file_path));
-                if !content.is_empty() { self.body.push_str(&content); }
-            } else {
-                self.body.push_str(FIVE_HUNDRED);
-            }
-        }
     }
 
     pub fn serialize(&self) -> String {
@@ -282,6 +270,35 @@ impl ResponseWriter for Response {
         if !content_type.is_empty() {
             self.content_type = content_type;
         }
+    }
+
+    fn check_and_update(&mut self, fallback: &HashMap<u16, String>) {
+        //if contents have been provided, we're all good.
+        if self.has_contents() { return; }
+
+        if self.status == 0 || self.status == 404 {
+            if let Some(file_path) = fallback.get(&404) {
+                let (_, content) = read_from_file(Path::new(file_path));
+                if !content.is_empty() { self.body.push_str(&content); }
+            } else {
+                self.body.push_str(FOUR_OH_FOUR);
+            }
+        } else {
+            if let Some(file_path) = fallback.get(&500) {
+                let (_, content) = read_from_file(Path::new(file_path));
+                if !content.is_empty() { self.body.push_str(&content); }
+            } else {
+                self.body.push_str(FIVE_HUNDRED);
+            }
+        }
+    }
+
+    fn close_connection(&mut self, is_bad_request: bool) {
+        if is_bad_request {
+            self.status(400);
+        }
+
+        self.to_close = true;
     }
 }
 

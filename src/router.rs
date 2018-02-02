@@ -22,40 +22,7 @@ pub enum RequestPath {
     WildCard(&'static str),
 }
 
-/* Manual mayham...
-
-impl PartialEq for RequestPath {
-    fn eq(&self, other: &RequestPath) -> bool {
-        match self {
-            &RequestPath::Literal(lit_val) => {
-                match other {
-                    &RequestPath::Literal(other_val) => lit_val == other_val,
-                    _ => false,
-                }
-            },
-            &RequestPath::WildCard(wild_card_val) => {
-                match other {
-                    &RequestPath::WildCard(other_val) => wild_card_val == other_val,
-                    _ => false,
-                }
-            }
-        }
-    }
-}
-
-impl Eq for RequestPath {}
-
-impl Hash for RequestPath {
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        match self {
-            &RequestPath::Literal(lit_val) => lit_val.hash(state),
-            &RequestPath::WildCard(wild_card_val) => wild_card_val.hash(state)
-        }
-    }
-}
-
- * End of manual mayham
- */
+//TODO: implement redirect handler
 
 pub type Callback = fn(Request, &mut Response);
 
@@ -152,7 +119,9 @@ impl RouteHandler for Route {
 }
 
 fn handle_request_worker(routes: &HashMap<RequestPath, Callback>, req: Request, resp: &mut Response) {
-    if let Some(callback) = seek_path(&routes, req.path.clone()) {
+    if let Some(callback) = seek_path(&routes, req.uri.clone()) {
+        //TODO: call redirect handler here...
+
         //Callback function will decide what to be written into the response
         callback(req, resp);
     } else {

@@ -18,7 +18,7 @@ pub fn handle_connection(
     ) -> Option<u8> {
 
     let request: Request;
-    match parse_request(&stream) {
+    match read_request(&stream) {
         Ok(req) => {
             request = req;
         },
@@ -48,6 +48,14 @@ fn write_to_stream(mut stream: TcpStream, response: Response) -> Option<u8> {
 
     if let Ok(_) = stream.write(response.serialize().as_bytes()) {
         if let Ok(_) = stream.flush() {
+            if response.to_close_connection() {
+                if let Ok(_) = stream.shutdown(Shutdown::Both) {
+                    return Some(0);
+                } else {
+                    return Some(1);
+                }
+            }
+
             return Some(0);
         }
     }
@@ -55,7 +63,7 @@ fn write_to_stream(mut stream: TcpStream, response: Response) -> Option<u8> {
     None
 }
 
-fn parse_request(mut stream: &TcpStream) -> Result<Request, ParseError> {
+fn read_request(mut stream: &TcpStream) -> Result<Request, ParseError> {
     let mut buffer = [0; 512];
     let result: Result<Request, ParseError>;
 
@@ -65,7 +73,7 @@ fn parse_request(mut stream: &TcpStream) -> Result<Request, ParseError> {
             return Err(ParseError::EmptyRequestErr);
         }
 
-        result = match build_request_from_stream(&request) {
+        result = match parse_request(&request) {
             Some(request_info) => Ok(request_info),
             None => Err(ParseError::EmptyRequestErr),
         };
@@ -76,13 +84,13 @@ fn parse_request(mut stream: &TcpStream) -> Result<Request, ParseError> {
     result
 }
 
-fn build_request_from_stream(request: &str) -> Option<Request> {
+fn parse_request(request: &str) -> Option<Request> {
     if request.is_empty() {
         return None;
     }
 
     let mut method = REST::NONE;
-    let mut path = String::new();
+    let mut uri = String::new();
     let mut scheme = HashMap::new();
     let mut cookie = HashMap::new();
     let mut header = HashMap::new();
@@ -105,8 +113,8 @@ fn build_request_from_stream(request: &str) -> Option<Request> {
                         };
                     },
                     1 => {
-                        let (req_path, req_scheme) = split_path(info);
-                        path.push_str(&req_path[..]);
+                        let (req_uri, req_scheme) = split_path(info);
+                        uri.push_str(&req_uri[..]);
 
                         if !req_scheme.is_empty() {
                             scheme_parser(&req_scheme[..], &mut scheme);
@@ -146,7 +154,7 @@ fn build_request_from_stream(request: &str) -> Option<Request> {
         }
     }
 
-    Some(Request::build_from(method, path, scheme, cookie, header, body))
+    Some(Request::build_from(method, uri, scheme, cookie, header, body))
 }
 
 fn handle_request_with_fallback(
@@ -188,21 +196,21 @@ fn handle_request_with_fallback(
     Ok(resp)
 }
 
-fn split_path(path: &str) -> (String, String) {
-    let mut path_parts: Vec<&str> = path.rsplitn(2, "/").collect();
+fn split_path(full_uri: &str) -> (String, String) {
+    let mut uri_parts: Vec<&str> = full_uri.trim().rsplitn(2, "/").collect();
 
-    if path_parts[0].starts_with("?") {
-        let scheme: &str = &path_parts.swap_remove(0)[1..];
-        let mut act_path = String::new();
+    if uri_parts[0].starts_with("?") {
+        let scheme: &str = &uri_parts.swap_remove(0)[1..];
+        let mut real_uri = String::new();
 
-        for part in path_parts.into_iter() {
+        for part in uri_parts.into_iter() {
             if part.is_empty() { continue; }
-            act_path = format!("/{}{}", part.trim(), act_path);
+            real_uri = format!("/{}{}", part.trim(), real_uri);
         }
 
-        (act_path, scheme.trim().to_owned())
+        (real_uri, scheme.trim().to_owned())
     } else {
-        (path.trim().to_owned(), String::new())
+        (full_uri.trim().to_owned(), String::new())
     }
 }
 
