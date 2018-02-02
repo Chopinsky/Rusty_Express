@@ -17,7 +17,7 @@ pub enum REST {
 
 #[derive(PartialEq, Eq, Hash, Clone, Copy)]
 pub enum RequestPath {
-    Exact(&'static str),
+    Explicit(&'static str),
     Partial(&'static str),
     WildCard(&'static str),
 }
@@ -112,12 +112,12 @@ impl Router for Route {
         self.get.entry(uri).or_insert(callback);
     }
 
-    fn put(&mut self, uri: RequestPath, callback: Callback) {
-        self.put.entry(uri).or_insert( callback);
-    }
-
     fn post(&mut self, uri: RequestPath, callback: Callback) {
         self.post.entry(uri).or_insert(callback);
+    }
+
+    fn put(&mut self, uri: RequestPath, callback: Callback) {
+        self.put.entry(uri).or_insert( callback);
     }
 
     fn delete(&mut self, uri: RequestPath, callback: Callback) {
@@ -163,7 +163,7 @@ fn handle_request_worker(routes: &HashMap<RequestPath, Callback>, req: Request, 
 fn seek_path(routes: &HashMap<RequestPath, Callback>, uri: String) -> Option<&Callback> {
     for (req_path, callback) in routes.iter() {
         match req_path.to_owned() {
-            RequestPath::Exact(val) => {
+            RequestPath::Explicit(val) => {
                 if uri.eq(&val) {
                     return Some(callback);
                 }

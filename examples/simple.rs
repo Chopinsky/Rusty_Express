@@ -9,7 +9,7 @@ fn main() {
     server.set_pool_size(8);
 
     //define router directly
-    server.get(RequestPath::Exact("/"), simple_response);
+    server.get(RequestPath::Explicit("/"), simple_response);
 
     server.listen(8080);
 }

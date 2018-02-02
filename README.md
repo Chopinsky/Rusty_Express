@@ -1,4 +1,4 @@
-[Rusty_Express][docsrs] v0.2.2
+[Rusty_Express][docsrs]
 ======================
 
 [![Rusty_Express on crates.io][cratesio-image]][cratesio]
@@ -19,7 +19,7 @@ _This library is still actively worked on, to get the latest feature and bug fix
 In your project's `Cargo.toml`, add dependency:
 ```rust
 [dependencies]
-rusty_express = "^0.2.2"
+rusty_express = "^0.2.4"
 ...
 ```
 
@@ -27,10 +27,7 @@ In `src\main.rs`:
 ```rust
 extern crate rusty_express;
 
-use rusty_express::HttpServer;
-use rusty_express::ServerDef;
-use rusty_express::http::*;
-use rusty_express::router::*;
+use rusty_express::prelude::*;
 
 fn main() {
     //A http server with default thread pool size of 4
@@ -50,3 +47,7 @@ pub fn simple_response(req: Request, resp: &mut Response) {
     resp.status(200);
 }
 ```
+
+## Examples
+- [Simple server](https://github.com/Chopinsky/Rusty_Express/blob/master/examples/simple.rs)
+- [Define server with router](https://github.com/Chopinsky/Rusty_Express/blob/master/examples/use_router.rs)

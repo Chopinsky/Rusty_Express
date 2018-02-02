@@ -9,8 +9,6 @@ use std::path::Path;
 use chrono::prelude::*;
 use router::REST;
 
-//TODO: create response status struct, instead of using u16 to represent it
-
 static FOUR_OH_FOUR: &'static str = include_str!("./default/404.html");
 static FIVE_HUNDRED: &'static str = include_str!("./default/500.html");
 
@@ -323,8 +321,6 @@ fn get_default_page(status: u16) -> String {
 
 fn read_from_file(file_path: &Path) -> (u16, String) {
     // try open the file
-    println!("{:?}", file_path);
-
     if let Ok(file) = File::open(file_path) {
         let mut buf_reader = BufReader::new(file);
         let mut contents: String = String::new();
