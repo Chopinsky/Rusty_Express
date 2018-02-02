@@ -6,8 +6,8 @@
 
 [cratesio]: https://crates.io/crates/rusty_express
 [cratesio-image]: https://img.shields.io/crates/v/rusty_express.svg
-[docsrs-image]: https://docs.rs/rusty_express/badge.svg?version=0.2.2
-[docsrs]: https://docs.rs/rusty_express/0.2.2/rusty_express/
+[docsrs-image]: https://docs.rs/rusty_express/badge.svg
+[docsrs]: https://docs.rs/rusty_express
 
 ## What is this
 A simple http server library written in Rust and provide Express-alike APIs.
