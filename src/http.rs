@@ -86,8 +86,8 @@ pub struct Response {
 }
 
 pub trait ResponseWriter {
-    fn send(&mut self, content: String);
-    fn send_file(&mut self, file_path: String);
+    fn send(&mut self, content: &str);
+    fn send_file(&mut self, file_path: &str);
     fn set_cookies(&mut self, cookie: HashMap<String, String>);
     fn set_content_type(&mut self, content_type: String);
     fn check_and_update(&mut self, fallback: &HashMap<u16, String>);
@@ -134,15 +134,15 @@ impl Response {
             };
     }
 
-    pub fn header(&mut self, field: String, value: String, replace: bool) {
-        set_header(&mut self.header, field, value, replace);
+    pub fn header(&mut self, field: &str, value: &str, replace: bool) {
+        set_header(&mut self.header, field.to_owned(), value.to_owned(), replace);
     }
 
     pub fn to_close_connection(&self) -> bool {
         self.to_close
     }
 
-    pub fn redirect(&mut self, path: String) {
+    pub fn redirect(&mut self, path: &str) {
         self.redirect = path.to_owned();
     }
 
@@ -230,19 +230,19 @@ impl Response {
 }
 
 impl ResponseWriter for Response {
-    fn send(&mut self, content: String) {
+    fn send(&mut self, content: &str) {
         if !content.is_empty() {
-            self.body.push_str(&content);
+            self.body.push_str(content);
         }
     }
 
-    fn send_file(&mut self, path: String) {
+    fn send_file(&mut self, path: &str) {
         if path.is_empty() {
             println!("Undefined file path to retrieve data from...");
             return;
         }
 
-        let file_path = Path::new(&path);
+        let file_path = Path::new(path);
         if !file_path.is_file() {
             // if doesn't exist or not a file, fail now
             println!("Can't locate requested file");
@@ -379,6 +379,8 @@ fn get_status(status: u16) -> String {
     let status_base =
         match status {
             200 => "200 OK",
+            301 => "301 MOVED PERMANENTLY",
+            302 => "302 FOUND",
             500 => "500 INTERNAL SERVER ERROR",
             400 => "400 BAD REQUEST",
             404 | _ => "404 NOT FOUND",

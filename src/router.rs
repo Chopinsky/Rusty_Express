@@ -126,11 +126,17 @@ fn handle_request_worker(routes: &HashMap<RequestPath, Callback>, req: &Request,
         //Callback function will decide what to be written into the response
         callback(req, resp);
 
-        let redirect = resp.get_redirect_path();
+        let mut redirect = resp.get_redirect_path();
         if !redirect.is_empty() {
-            //now reset
-            resp.redirect(String::new());
-            handle_request_worker(&routes, &req, resp, redirect);
+            resp.redirect("");
+            if !redirect.starts_with("/") { redirect.insert(0, '/'); }
+
+            println!("{}", redirect);
+
+            handle_request_worker(&routes, &req, resp, redirect.clone());
+
+            resp.header("Location", &redirect, true);
+            resp.status(301);
         }
     } else {
         resp.status(404);

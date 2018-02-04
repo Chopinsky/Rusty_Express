@@ -89,6 +89,8 @@ fn parse_request(request: &str) -> Option<Request> {
         return None;
     }
 
+    println!("{}", request);
+
     let mut method = REST::NONE;
     let mut uri = String::new();
     let mut scheme = HashMap::new();
@@ -122,7 +124,7 @@ fn parse_request(request: &str) -> Option<Request> {
                     },
                     2 => {
                         header.insert(
-                            String::from("HttpProtocol"),
+                            String::from("http_protocal"),
                             info.to_string()
                         );
                     },
