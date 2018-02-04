@@ -89,7 +89,7 @@ fn parse_request(request: &str) -> Option<Request> {
         return None;
     }
 
-    println!("{}", request);
+    //println!("{}", request);
 
     let mut method = REST::NONE;
     let mut uri = String::new();
@@ -201,14 +201,16 @@ fn handle_request_with_fallback(
 fn split_path(full_uri: &str) -> (String, String) {
     let mut uri_parts: Vec<&str> = full_uri.trim().rsplitn(2, "/").collect();
 
-    if uri_parts[0].starts_with("?") {
-        let scheme: &str = &uri_parts.swap_remove(0)[1..];
-        let mut real_uri = String::new();
+    if let Some(pos) = uri_parts[0].find("?") {
+        let (last_uri_pc, scheme) = uri_parts[0].split_at(pos);
+        uri_parts[0] = last_uri_pc;
 
-        for part in uri_parts.into_iter() {
-            if part.is_empty() { continue; }
-            real_uri = format!("/{}{}", part.trim(), real_uri);
-        }
+        let real_uri =
+            if uri_parts[1].is_empty() {
+                format!("/{}", uri_parts[0])
+            } else {
+                format!("{}/{}", uri_parts[1], uri_parts[0])
+            };
 
         (real_uri, scheme.trim().to_owned())
     } else {

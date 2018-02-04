@@ -142,6 +142,8 @@ impl Response {
         self.to_close
     }
 
+    //Can only redirect to internal path, no outsource path, sorry for the hackers (FYI, you can
+    //  still hack the redirection link via Javascript)!
     pub fn redirect(&mut self, path: &str) {
         self.redirect = path.to_owned();
     }
