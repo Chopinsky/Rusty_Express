@@ -18,11 +18,8 @@ pub enum REST {
 #[derive(PartialEq, Eq, Hash, Clone, Copy)]
 pub enum RequestPath {
     Explicit(&'static str),
-    Partial(&'static str),
     WildCard(&'static str),
 }
-
-//TODO: implement redirect handler
 
 pub type Callback = fn(&Request, &mut Response);
 
@@ -148,11 +145,6 @@ fn seek_path(routes: &HashMap<RequestPath, Callback>, uri: String) -> Option<&Ca
         match req_path.to_owned() {
             RequestPath::Explicit(val) => {
                 if uri.eq(&val) {
-                    return Some(callback);
-                }
-            },
-            RequestPath::Partial(val) => {
-                if uri.starts_with(&val) {
                     return Some(callback);
                 }
             },
