@@ -24,7 +24,7 @@ pub enum RequestPath {
 
 //TODO: implement redirect handler
 
-pub type Callback = fn(Request, &mut Response);
+pub type Callback = fn(&Request, &mut Response);
 
 pub struct Route {
     get: HashMap<RequestPath, Callback>,
@@ -73,8 +73,6 @@ impl Route {
 }
 
 impl Router for Route {
-    //TODO: add special handling for "*"
-
     fn get(&mut self, uri: RequestPath, callback: Callback) {
         self.get.entry(uri).or_insert(callback);
     }
@@ -98,32 +96,42 @@ impl Router for Route {
 
 impl RouteHandler for Route {
     fn handle_get(&self, req: Request, resp: &mut Response) {
-        handle_request_worker(&self.get, req, resp)
+        let uri = req.uri.clone();
+        handle_request_worker(&self.get, &req, resp, uri)
     }
 
     fn handle_put(&self, req: Request, resp: &mut Response) {
-        handle_request_worker(&self.put, req, resp)
+        let uri = req.uri.clone();
+        handle_request_worker(&self.put, &req, resp, uri)
     }
 
     fn handle_post(&self, req: Request, resp: &mut Response) {
-        handle_request_worker(&self.post, req, resp)
+        let uri = req.uri.clone();
+        handle_request_worker(&self.post, &req, resp, uri)
     }
 
     fn handle_delete(&self, req: Request, resp: &mut Response) {
-        handle_request_worker(&self.delete, req, resp)
+        let uri = req.uri.clone();
+        handle_request_worker(&self.delete, &req, resp, uri)
     }
 
     fn handle_other(&self, req: Request, resp: &mut Response) {
-        handle_request_worker(&self.others, req, resp)
+        let uri = req.uri.clone();
+        handle_request_worker(&self.others, &req, resp, uri)
     }
 }
 
-fn handle_request_worker(routes: &HashMap<RequestPath, Callback>, req: Request, resp: &mut Response) {
-    if let Some(callback) = seek_path(&routes, req.uri.clone()) {
-        //TODO: call redirect handler here...
-
+fn handle_request_worker(routes: &HashMap<RequestPath, Callback>, req: &Request, resp: &mut Response, dest: String) {
+    if let Some(callback) = seek_path(&routes, dest) {
         //Callback function will decide what to be written into the response
         callback(req, resp);
+
+        let redirect = resp.get_redirect_path();
+        if !redirect.is_empty() {
+            //now reset
+            resp.redirect(String::new());
+            handle_request_worker(&routes, &req, resp, redirect);
+        }
     } else {
         resp.status(404);
     }

@@ -82,6 +82,7 @@ pub struct Response {
     cookie: String,
     header: HashMap<String, String>,
     body: String,
+    redirect: String,
 }
 
 pub trait ResponseWriter {
@@ -93,6 +94,8 @@ pub trait ResponseWriter {
     fn close_connection(&mut self, is_bad_request: bool);
 }
 
+//TODO: refact to divide those exposed to consumers, and those used internally
+
 impl Response {
     pub fn new() -> Self {
         Response {
@@ -102,6 +105,7 @@ impl Response {
             cookie: String::new(),
             header: HashMap::new(),
             body: String::new(),
+            redirect: String::new(),
         }
     }
 
@@ -113,6 +117,7 @@ impl Response {
             cookie: String::new(),
             header: default_header.clone(),
             body: String::new(),
+            redirect: String::new(),
         }
     }
 
@@ -135,6 +140,14 @@ impl Response {
 
     pub fn to_close_connection(&self) -> bool {
         self.to_close
+    }
+
+    pub fn redirect(&mut self, path: String) {
+        self.redirect = path.to_owned();
+    }
+
+    pub fn get_redirect_path(&self) -> String {
+        self.redirect.to_owned()
     }
 
     pub fn status_is_set(&self) -> bool {

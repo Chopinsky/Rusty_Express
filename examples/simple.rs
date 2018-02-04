@@ -14,7 +14,7 @@ fn main() {
     server.listen(8080);
 }
 
-pub fn simple_response(req: Request, resp: &mut Response) {
+pub fn simple_response(req: &Request, resp: &mut Response) {
     resp.send(String::from("Hello world from rusty server!\n"));
     resp.status(200);
 }
