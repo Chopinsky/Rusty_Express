@@ -42,7 +42,7 @@ impl RouteMap {
                 self.explicit.entry(req_uri.to_owned()).or_insert(callback);
             },
             RequestPath::WildCard(req_uri) => {
-                self.explicit.entry(req_uri.to_owned()).or_insert(callback);
+                self.wildcard.entry(req_uri.to_owned()).or_insert(callback);
             },
         }
     }
