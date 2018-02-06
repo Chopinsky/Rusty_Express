@@ -23,12 +23,62 @@ pub enum RequestPath {
 
 pub type Callback = fn(&Request, &mut Response);
 
+pub struct RouteMap {
+    explicit: HashMap<String, Callback>,
+    wildcard: HashMap<String, Callback>,
+}
+
+impl RouteMap {
+    pub fn new() -> Self {
+        RouteMap {
+            explicit: HashMap::new(),
+            wildcard: HashMap::new(),
+        }
+    }
+
+    pub fn insert(&mut self, uri: RequestPath, callback: Callback) {
+        match uri {
+            RequestPath::Explicit(req_uri) => {
+                self.explicit.entry(req_uri.to_owned()).or_insert(callback);
+            },
+            RequestPath::WildCard(req_uri) => {
+                self.explicit.entry(req_uri.to_owned()).or_insert(callback);
+            },
+        }
+    }
+
+    fn seek_path(&self, uri: String) -> Option<&Callback> {
+        if let Some(callback) = self.explicit.get(&uri) {
+            return Some(callback);
+        }
+
+        for (req_path, callback) in self.wildcard.iter() {
+            if let Ok(re) = Regex::new(req_path) {
+                if re.is_match(&uri) {
+                    return Some(callback);
+                }
+            }
+        }
+
+        None
+    }
+}
+
+impl Clone for RouteMap {
+    fn clone(&self) -> Self {
+        RouteMap {
+            explicit: self.explicit.clone(),
+            wildcard: self.wildcard.clone(),
+        }
+    }
+}
+
 pub struct Route {
-    get: HashMap<RequestPath, Callback>,
-    post: HashMap<RequestPath, Callback>,
-    put: HashMap<RequestPath, Callback>,
-    delete: HashMap<RequestPath, Callback>,
-    others: HashMap<RequestPath, Callback>,
+    get: RouteMap,
+    post: RouteMap,
+    put: RouteMap,
+    delete: RouteMap,
+    others: RouteMap,
 }
 
 pub trait Router {
@@ -50,11 +100,11 @@ pub trait RouteHandler {
 impl Route {
     pub fn new() -> Self {
         Route {
-            get: HashMap::new(),
-            post: HashMap::new(),
-            put: HashMap::new(),
-            delete: HashMap::new(),
-            others: HashMap::new(),
+            get: RouteMap::new(),
+            post: RouteMap::new(),
+            put: RouteMap::new(),
+            delete: RouteMap::new(),
+            others: RouteMap::new(),
         }
     }
 
@@ -71,23 +121,23 @@ impl Route {
 
 impl Router for Route {
     fn get(&mut self, uri: RequestPath, callback: Callback) {
-        self.get.entry(uri).or_insert(callback);
+        self.get.insert(uri, callback);
     }
 
     fn post(&mut self, uri: RequestPath, callback: Callback) {
-        self.post.entry(uri).or_insert(callback);
+        self.post.insert(uri, callback);
     }
 
     fn put(&mut self, uri: RequestPath, callback: Callback) {
-        self.put.entry(uri).or_insert( callback);
+        self.put.insert(uri, callback);
     }
 
     fn delete(&mut self, uri: RequestPath, callback: Callback) {
-        self.delete.entry(uri).or_insert( callback);
+        self.delete.insert(uri, callback);
     }
 
     fn other(&mut self, uri: RequestPath, callback: Callback) {
-        self.others.entry(uri).or_insert( callback);
+        self.others.insert(uri, callback);
     }
 }
 
@@ -118,8 +168,8 @@ impl RouteHandler for Route {
     }
 }
 
-fn handle_request_worker(routes: &HashMap<RequestPath, Callback>, req: &Request, resp: &mut Response, dest: String) {
-    if let Some(callback) = seek_path(&routes, dest) {
+fn handle_request_worker(routes: &RouteMap, req: &Request, resp: &mut Response, dest: String) {
+    if let Some(callback) = routes.seek_path(dest) {
         //Callback function will decide what to be written into the response
         callback(req, resp);
 
@@ -128,7 +178,7 @@ fn handle_request_worker(routes: &HashMap<RequestPath, Callback>, req: &Request,
             resp.redirect("");
             if !redirect.starts_with("/") { redirect.insert(0, '/'); }
 
-            println!("{}", redirect);
+            //println!("{}", redirect);
 
             handle_request_worker(&routes, &req, resp, redirect.clone());
 
@@ -138,25 +188,4 @@ fn handle_request_worker(routes: &HashMap<RequestPath, Callback>, req: &Request,
     } else {
         resp.status(404);
     }
-}
-
-fn seek_path(routes: &HashMap<RequestPath, Callback>, uri: String) -> Option<&Callback> {
-    for (req_path, callback) in routes.iter() {
-        match req_path.to_owned() {
-            RequestPath::Explicit(val) => {
-                if uri.eq(&val) {
-                    return Some(callback);
-                }
-            },
-            RequestPath::WildCard(wild) => {
-                if let Ok(re) = Regex::new(wild) {
-                    if re.is_match(&uri) {
-                        return Some(callback);
-                    }
-                }
-            }
-        }
-    }
-
-    None
 }

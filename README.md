@@ -19,7 +19,7 @@ _This library is still actively worked on, to get the latest feature and bug fix
 In your project's `Cargo.toml`, add dependency:
 ```rust
 [dependencies]
-rusty_express = "^0.2.4"
+rusty_express = "^0.2.5"
 ...
 ```
 
