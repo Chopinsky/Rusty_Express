@@ -86,15 +86,24 @@ pub struct Response {
 }
 
 pub trait ResponseWriter {
+    fn status(&mut self, status: u16);
+    fn header(&mut self, field: &str, value: &str, replace: bool);
     fn send(&mut self, content: &str);
     fn send_file(&mut self, file_path: &str);
     fn set_cookies(&mut self, cookie: HashMap<String, String>);
     fn set_content_type(&mut self, content_type: String);
     fn check_and_update(&mut self, fallback: &HashMap<u16, String>);
     fn close_connection(&mut self, is_bad_request: bool);
+    fn redirect(&mut self, path: &str);
 }
 
-//TODO: refact to divide those exposed to consumers, and those used internally
+pub trait ResponseStates {
+    fn to_close_connection(&self) -> bool;
+    fn get_redirect_path(&self) -> String;
+    fn status_is_set(&self) -> bool;
+    fn has_contents(&self) -> bool;
+    fn serialize(&self) -> String;
+}
 
 impl Response {
     pub fn new() -> Self {
@@ -119,64 +128,6 @@ impl Response {
             body: String::new(),
             redirect: String::new(),
         }
-    }
-
-    pub fn status(&mut self, status: u16) {
-        self.status =
-            match status {
-                100 ... 101 => status,
-                200 ... 206 => status,
-                300 ... 308 if status != 307 && status != 308 => status,
-                400 ... 417 if status != 402 => status,
-                426 | 428 | 429 | 431 | 451 => status,
-                500 ... 505 | 511 => status,
-                _ => 0,
-            };
-    }
-
-    pub fn header(&mut self, field: &str, value: &str, replace: bool) {
-        set_header(&mut self.header, field.to_owned(), value.to_owned(), replace);
-    }
-
-    pub fn to_close_connection(&self) -> bool {
-        self.to_close
-    }
-
-    //Can only redirect to internal path, no outsource path, sorry for the hackers (FYI, you can
-    //  still hack the redirection link via Javascript)!
-    pub fn redirect(&mut self, path: &str) {
-        self.redirect = path.to_owned();
-    }
-
-    pub fn get_redirect_path(&self) -> String {
-        self.redirect.to_owned()
-    }
-
-    pub fn status_is_set(&self) -> bool {
-        (self.status == 0)
-    }
-
-    pub fn has_contents(&self) -> bool {
-        (!self.body.is_empty() && self.body.len() > 0)
-    }
-
-    pub fn serialize(&self) -> String {
-        let mut result= String::new();
-
-        result.push_str(&self.get_header());
-
-        if self.has_contents() {
-            //content has been explicitly set, use them
-            result.push_str(&self.body);
-        } else if self.status == 404 || self.status == 500 {
-            //explicit error status
-            result.push_str(&get_default_page(self.status));
-        } else if self.status == 0 {
-            //implicit error status
-            result.push_str(&get_default_page(404));
-        }
-
-        result
     }
 
     fn get_header(&self) -> String {
@@ -231,7 +182,61 @@ impl Response {
     }
 }
 
+impl ResponseStates for Response {
+    fn to_close_connection(&self) -> bool {
+        self.to_close
+    }
+
+    fn get_redirect_path(&self) -> String {
+        self.redirect.to_owned()
+    }
+
+    fn status_is_set(&self) -> bool {
+        (self.status == 0)
+    }
+
+    fn has_contents(&self) -> bool {
+        (!self.body.is_empty() && self.body.len() > 0)
+    }
+
+    fn serialize(&self) -> String {
+        let mut result= String::new();
+
+        result.push_str(&self.get_header());
+
+        if self.has_contents() {
+            //content has been explicitly set, use them
+            result.push_str(&self.body);
+        } else if self.status == 404 || self.status == 500 {
+            //explicit error status
+            result.push_str(&get_default_page(self.status));
+        } else if self.status == 0 {
+            //implicit error status
+            result.push_str(&get_default_page(404));
+        }
+
+        result
+    }
+}
+
 impl ResponseWriter for Response {
+    fn status(&mut self, status: u16) {
+        self.status =
+            match status {
+                100 ... 101 => status,
+                200 ... 206 => status,
+                300 ... 308 if status != 307 && status != 308 => status,
+                400 ... 417 if status != 402 => status,
+                426 | 428 | 429 | 431 | 451 => status,
+                500 ... 505 | 511 => status,
+                _ => 0,
+            };
+    }
+
+    fn header(&mut self, field: &str, value: &str, replace: bool) {
+        set_header(&mut self.header, field.to_owned(), value.to_owned(), replace);
+    }
+
     fn send(&mut self, content: &str) {
         if !content.is_empty() {
             self.body.push_str(content);
@@ -314,6 +319,12 @@ impl ResponseWriter for Response {
         }
 
         self.to_close = true;
+    }
+
+    //Can only redirect to internal path, no outsource path, sorry for the hackers (FYI, you can
+    //  still hack the redirection link via Javascript)!
+    fn redirect(&mut self, path: &str) {
+        self.redirect = path.to_owned();
     }
 }
 

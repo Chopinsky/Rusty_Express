@@ -12,14 +12,16 @@
 ## What is this
 A simple http server library written in Rust and provide Express-alike APIs.
 
-## Under Development
-_This library is still actively worked on, to get the latest feature and bug fixes, please update to the latest version._
+## Feature Request and PR Welcome 
+The project is new and lack many common http server features. Please feel free to submit feature request as an issue.
+
+You're also very welcome to submit PR to fix bugs or implement new features. 
 
 ## How to use
 In your project's `Cargo.toml`, add dependency:
 ```rust
 [dependencies]
-rusty_express = "^0.2.5"
+rusty_express = "^0.2.7"
 ...
 ```
 
@@ -50,4 +52,5 @@ pub fn simple_response(req: &Request, resp: &mut Response) {
 
 ## Examples
 - [Simple server](https://github.com/Chopinsky/Rusty_Express/blob/master/examples/simple.rs)
-- [Define server with router](https://github.com/Chopinsky/Rusty_Express/blob/master/examples/use_router.rs)
+- [Server with defined router](https://github.com/Chopinsky/Rusty_Express/blob/master/examples/use_router.rs)
+- [Use redirect in the router](https://github.com/Chopinsky/Rusty_Express/blob/master/examples/simple_redirect.rs)

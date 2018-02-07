@@ -11,8 +11,8 @@ pub mod thread_utils;
 pub mod prelude {
     pub use {HttpServer, ServerDef};
     pub use config::*;
-    pub use http::*;
-    pub use router::*;
+    pub use http::{Request, Response, ResponseWriter};
+    pub use router::{REST, Route, Router, RequestPath};
 }
 
 use std::collections::HashMap;
@@ -24,7 +24,8 @@ use router::*;
 use server_states::*;
 use thread_utils::ThreadPool;
 
-//TODO: handle errors with grace...
+//TODO: 1. handle errors with grace...
+//TODO: 2. Impl middlewear
 
 pub struct HttpServer {
     router: Route,
@@ -75,12 +76,12 @@ impl Router for HttpServer {
         self.router.get(uri, callback);
     }
 
-    fn put(&mut self, uri: RequestPath, callback: Callback) {
-        self.router.put(uri, callback);
-    }
-
     fn post(&mut self, uri: RequestPath, callback: Callback) {
         self.router.post(uri, callback);
+    }
+
+    fn put(&mut self, uri: RequestPath, callback: Callback) {
+        self.router.put(uri, callback);
     }
 
     fn delete(&mut self, uri: RequestPath, callback: Callback) {
