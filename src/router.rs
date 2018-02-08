@@ -74,11 +74,52 @@ impl Clone for RouteMap {
 }
 
 pub struct Route {
-    get: RouteMap,
-    post: RouteMap,
-    put: RouteMap,
-    delete: RouteMap,
-    others: RouteMap,
+    store: HashMap<REST, RouteMap>,
+//    get: RouteMap,
+//    post: RouteMap,
+//    put: RouteMap,
+//    delete: RouteMap,
+//    others: RouteMap,
+}
+
+impl Route {
+    pub fn new() -> Self {
+        Route {
+            store: HashMap::new(),
+//            get: RouteMap::new(),
+//            post: RouteMap::new(),
+//            put: RouteMap::new(),
+//            delete: RouteMap::new(),
+//            others: RouteMap::new(),
+        }
+    }
+
+    pub fn from(source: &Route) -> Self {
+        Route {
+            store: source.store.clone(),
+//            get: source.get.clone(),
+//            put: source.put.clone(),
+//            post: source.post.clone(),
+//            delete: source.delete.clone(),
+//            others: source.others.clone(),
+        }
+    }
+
+    fn add_route(&mut self, method: REST, uri: RequestPath, callback: Callback) {
+        if method == REST::NONE { return; }
+
+        if let Some(route) = self.store.get_mut(&method) {
+            //find, insert, done.
+            route.insert(uri, callback);
+            return;
+        }
+
+        // the route for the given method has not yet initialized
+        let mut route = RouteMap::new();
+        route.insert(uri, callback);
+
+        self.store.insert(method, route);
+    }
 }
 
 pub trait Router {
@@ -86,85 +127,49 @@ pub trait Router {
     fn post(&mut self, uri: RequestPath, callback: Callback);
     fn put(&mut self, uri: RequestPath, callback: Callback);
     fn delete(&mut self, uri: RequestPath, callback: Callback);
-    fn other(&mut self, uri: RequestPath, callback: Callback);
-}
-
-pub trait RouteHandler {
-    fn handle_get(&self, req: Request, resp: &mut Response);
-    fn handle_put(&self, req: Request, resp: &mut Response);
-    fn handle_post(&self, req: Request, resp: &mut Response);
-    fn handle_delete(&self, req: Request, resp: &mut Response);
-    fn handle_other(&self, req: Request, resp: &mut Response);
-}
-
-impl Route {
-    pub fn new() -> Self {
-        Route {
-            get: RouteMap::new(),
-            post: RouteMap::new(),
-            put: RouteMap::new(),
-            delete: RouteMap::new(),
-            others: RouteMap::new(),
-        }
-    }
-
-    pub fn from(source: &Route) -> Self {
-        Route {
-            get: source.get.clone(),
-            put: source.put.clone(),
-            post: source.post.clone(),
-            delete: source.delete.clone(),
-            others: source.others.clone(),
-        }
-    }
+    fn other(&mut self, method: &str, uri: RequestPath, callback: Callback);
 }
 
 impl Router for Route {
     fn get(&mut self, uri: RequestPath, callback: Callback) {
-        self.get.insert(uri, callback);
+        self.add_route(REST::GET, uri, callback);
     }
 
     fn post(&mut self, uri: RequestPath, callback: Callback) {
-        self.post.insert(uri, callback);
+        self.add_route(REST::POST, uri, callback);
     }
 
     fn put(&mut self, uri: RequestPath, callback: Callback) {
-        self.put.insert(uri, callback);
+        self.add_route(REST::PUT, uri, callback);
     }
 
     fn delete(&mut self, uri: RequestPath, callback: Callback) {
-        self.delete.insert(uri, callback);
+        self.add_route(REST::DELETE, uri, callback);
     }
 
-    fn other(&mut self, uri: RequestPath, callback: Callback) {
-        self.others.insert(uri, callback);
+    fn other(&mut self, method: &str, uri: RequestPath, callback: Callback) {
+        let request_method = REST::OTHER(method.to_lowercase().to_owned());
+        self.add_route(request_method, uri, callback);
     }
 }
 
+pub trait RouteHandler {
+    fn handle_request_method(&self, req: Request, resp: &mut Response);
+}
+
 impl RouteHandler for Route {
-    fn handle_get(&self, req: Request, resp: &mut Response) {
-        let uri = req.uri.clone();
-        handle_request_worker(&self.get, &req, resp, uri)
-    }
-
-    fn handle_put(&self, req: Request, resp: &mut Response) {
-        let uri = req.uri.clone();
-        handle_request_worker(&self.put, &req, resp, uri)
-    }
-
-    fn handle_post(&self, req: Request, resp: &mut Response) {
-        let uri = req.uri.clone();
-        handle_request_worker(&self.post, &req, resp, uri)
-    }
-
-    fn handle_delete(&self, req: Request, resp: &mut Response) {
-        let uri = req.uri.clone();
-        handle_request_worker(&self.delete, &req, resp, uri)
-    }
-
-    fn handle_other(&self, req: Request, resp: &mut Response) {
-        let uri = req.uri.clone();
-        handle_request_worker(&self.others, &req, resp, uri)
+    fn handle_request_method(&self, req: Request, resp: &mut Response) {
+        if req.method == REST::NONE {
+            resp.status(404);
+            return;
+        } else {
+            let uri = req.uri.clone();
+            if let Some(routes) = self.store.get(&req.method) {
+                handle_request_worker(&routes, &req, resp, uri);
+            } else {
+                resp.status(404);
+            }
+        }
     }
 }
 

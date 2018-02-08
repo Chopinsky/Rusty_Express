@@ -26,6 +26,7 @@ use thread_utils::ThreadPool;
 
 //TODO: 1. handle errors with grace...
 //TODO: 2. Impl middlewear
+//TODO: 3. Use lazy_static to create session control
 
 pub struct HttpServer {
     router: Route,
@@ -88,8 +89,8 @@ impl Router for HttpServer {
         self.router.delete(uri, callback);
     }
 
-    fn other(&mut self, uri: RequestPath, callback: Callback) {
-        self.router.other(uri, callback);
+    fn other(&mut self, method: &str, uri: RequestPath, callback: Callback) {
+        self.router.other(method, uri, callback);
     }
 }
 

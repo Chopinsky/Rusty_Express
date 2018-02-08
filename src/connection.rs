@@ -1,6 +1,8 @@
 use std::collections::HashMap;
 use std::io::prelude::*;
 use std::net::{TcpStream, Shutdown};
+use std::sync::mpsc;
+use std::thread;
 use http::*;
 use router::*;
 
@@ -8,6 +10,13 @@ use router::*;
 enum ParseError {
     EmptyRequestErr,
     ReadStreamErr,
+}
+
+struct RequestBase {
+    method: REST,
+    uri: String,
+    http_version: String,
+    scheme: HashMap<String, Vec<String>>,
 }
 
 pub fn handle_connection(
@@ -94,6 +103,98 @@ fn parse_request(request: &str) -> Option<Request> {
     let mut method = REST::NONE;
     let mut uri = String::new();
     let mut scheme = HashMap::new();
+
+    let mut cookie = HashMap::new();
+    let mut header = HashMap::new();
+    let mut body = Vec::new();
+    let mut is_body = false;
+
+    let mut handles: Vec<thread::JoinHandle<_>> = vec![];
+    let (tx_base, rx_base) = mpsc::channel();
+    let (tx_cookie, rx_cookie) = mpsc::channel();
+
+    for (num, line) in request.trim().lines().enumerate() {
+        if num == 0 {
+            if line.is_empty() { continue; }
+
+            let val = line.to_owned();
+            let tx_clone = mpsc::Sender::clone(&tx_base);
+
+            let handle = thread::spawn(move || {
+                parse_request_base(val, tx_clone);
+            });
+
+            handles.push(handle);
+
+        } else {
+            if line.is_empty() {
+                // meeting the empty line dividing header and body
+                is_body = true;
+                continue;
+            }
+
+            if !is_body {
+                let val = line.to_owned();
+                let header_info: Vec<&str> = val.splitn(2, ':').collect();
+
+                if header_info.len() == 2 {
+                    if header_info[0].trim().to_lowercase().eq("cookie") {
+                        let cookie_body = header_info[1].to_owned();
+                        let tx_clone = mpsc::Sender::clone(&tx_cookie);
+
+                        let handle = thread::spawn(move || {
+                            cookie_parser(cookie_body, tx_clone);
+                        });
+
+                        handles.push(handle);
+
+                    } else {
+                        header.insert(
+                            String::from(header_info[0].trim().to_lowercase()),
+                            String::from(header_info[1].trim())
+                        );
+                    }
+                }
+            } else {
+                body.push(line.to_owned());
+                body.push(String::from("\r\n"));  //keep the line break
+            }
+        }
+    }
+
+    for handle in handles {
+        if let Ok(_) = handle.join() {    }
+    }
+
+    drop(tx_base);
+    drop(tx_cookie);
+
+    if let Ok(base) = rx_base.recv() {
+        method = base.method;
+        uri = base.uri;
+        scheme = base.scheme;
+        header.entry(String::from("http_version")).or_insert(base.http_version);
+    }
+
+    if let Ok(cookie_set) = rx_cookie.recv() {
+        cookie = cookie_set;
+    }
+
+    Some(Request::build_from(method, uri, scheme, cookie, header, body))
+}
+
+/* Single thread request parser -- slightly worse performance.
+fn parse_request_single(request: &str) -> Option<Request> {
+    if request.is_empty() {
+        return None;
+    }
+
+    //println!("{}", request);
+
+    let mut method = REST::NONE;
+    let mut uri = String::new();
+    let mut scheme = HashMap::new();
+
     let mut cookie = HashMap::new();
     let mut header = HashMap::new();
     let mut body = Vec::new();
@@ -142,7 +243,7 @@ fn parse_request(request: &str) -> Option<Request> {
                 let header_info: Vec<&str> = line.splitn(2, ':').collect();
                 if header_info.len() == 2 {
                     if header_info[0].trim().to_lowercase().eq("cookie") {
-                        cookie_parser(header_info[1], &mut cookie);
+                        cookie_parser_single(header_info[1], &mut cookie);
                     } else {
                         header.insert(
                             String::from(header_info[0].trim().to_lowercase()),
@@ -157,6 +258,66 @@ fn parse_request(request: &str) -> Option<Request> {
     }
 
     Some(Request::build_from(method, uri, scheme, cookie, header, body))
+
+}
+
+fn cookie_parser_single(request_info: &str, cookie: &mut HashMap<String, String>) {
+    if request_info.is_empty() { return; }
+
+    let cookie_set: Vec<&str> = request_info.split(";").collect();
+    let mut pair: Vec<&str>;
+
+    for set in cookie_set.into_iter() {
+        pair = set.trim().splitn(2, "=").collect();
+        if pair.len() == 2 {
+            cookie.entry(pair[0].trim().to_owned()).or_insert(pair[1].trim().to_owned());
+        } else if pair.len() > 0 {
+            cookie.entry(pair[0].trim().to_owned()).or_insert(String::new());
+        }
+    }
+}
+*/
+
+fn parse_request_base(line: String, tx: mpsc::Sender<RequestBase>) {
+    let mut method = REST::NONE;
+    let mut uri = String::new();
+    let mut http_version = String::new();
+    let mut scheme = HashMap::new();
+
+    let request_info: Vec<&str> = line.split_whitespace().collect();
+    for (num, info) in request_info.iter().enumerate() {
+        match num {
+            0 => {
+                method = match &info[..] {
+                    "GET" => REST::GET,
+                    "PUT" => REST::PUT,
+                    "POST" => REST::POST,
+                    "DELETE" => REST::DELETE,
+                    "" => REST::NONE,
+                    _ => REST::OTHER(request_info[0].to_lowercase().to_owned()),
+                };
+            },
+            1 => {
+                let (req_uri, req_scheme) = split_path(info);
+                uri.push_str(&req_uri[..]);
+
+                if !req_scheme.is_empty() {
+                    scheme_parser(&req_scheme[..], &mut scheme);
+                }
+            },
+            2 => {
+                http_version.push_str(*info);
+            },
+            _ => { /* Shouldn't happen, do nothing for now */ },
+        };
+    }
+
+    if let Ok(_) = tx.send(RequestBase {
+        method,
+        uri,
+        http_version,
+        scheme,
+    }) {}
 }
 
 fn handle_request_with_fallback(
@@ -174,24 +335,12 @@ fn handle_request_with_fallback(
         };
 
     match request_info.method {
-        REST::GET => {
-            router.handle_get(request_info, &mut resp);
-        },
-        REST::PUT => {
-            router.handle_put(request_info, &mut resp);
-        },
-        REST::POST => {
-            router.handle_post(request_info, &mut resp);
-        },
-        REST::DELETE => {
-            router.handle_delete(request_info, &mut resp);
-        },
-        REST::OTHER(_) => {
-            router.handle_other(request_info, &mut resp);
-        },
-        _ => {
+        REST::NONE => {
             return Err(String::from("Invalid request method"));
         },
+        _ => {
+            router.handle_request_method(request_info, &mut resp);
+        }
     }
 
     resp.check_and_update(&fallback);
@@ -222,13 +371,14 @@ fn split_path(full_uri: &str) -> (String, String) {
 // field is the key of the map, which map to a single value of the key from the Cookie
 // header field. Assuming no duplicate cookie keys, or the first cookie key-value pair
 // will be stored.
-fn cookie_parser(request_info: &str, cookie: &mut HashMap<String, String>) {
-    if request_info.is_empty() { return; }
+fn cookie_parser(cookie_body: String, tx: mpsc::Sender<HashMap<String, String>>) { //cookie: &mut HashMap<String, String>) {
+    if cookie_body.is_empty() { return; }
 
-    let cookie_set: Vec<&str> = request_info.split(";").collect();
+    let mut cookie = HashMap::new();
+    let cookie_pairs: Vec<&str> = cookie_body.split(";").collect();
     let mut pair: Vec<&str>;
 
-    for set in cookie_set.into_iter() {
+    for set in cookie_pairs.into_iter() {
         pair = set.trim().splitn(2, "=").collect();
         if pair.len() == 2 {
             cookie.entry(pair[0].trim().to_owned()).or_insert(pair[1].trim().to_owned());
@@ -236,6 +386,8 @@ fn cookie_parser(request_info: &str, cookie: &mut HashMap<String, String>) {
             cookie.entry(pair[0].trim().to_owned()).or_insert(String::new());
         }
     }
+
+    if let Ok(_) = tx.send(cookie) {}
 }
 
 fn scheme_parser(scheme: &str, scheme_collection: &mut HashMap<String, Vec<String>>) {
