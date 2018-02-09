@@ -75,33 +75,18 @@ impl Clone for RouteMap {
 
 pub struct Route {
     store: HashMap<REST, RouteMap>,
-//    get: RouteMap,
-//    post: RouteMap,
-//    put: RouteMap,
-//    delete: RouteMap,
-//    others: RouteMap,
 }
 
 impl Route {
     pub fn new() -> Self {
         Route {
             store: HashMap::new(),
-//            get: RouteMap::new(),
-//            post: RouteMap::new(),
-//            put: RouteMap::new(),
-//            delete: RouteMap::new(),
-//            others: RouteMap::new(),
         }
     }
 
     pub fn from(source: &Route) -> Self {
         Route {
             store: source.store.clone(),
-//            get: source.get.clone(),
-//            put: source.put.clone(),
-//            post: source.post.clone(),
-//            delete: source.delete.clone(),
-//            others: source.others.clone(),
         }
     }
 

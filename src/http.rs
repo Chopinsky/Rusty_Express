@@ -6,6 +6,8 @@ use std::fs::File;
 use std::io::BufReader;
 use std::io::prelude::*;
 use std::path::Path;
+use std::sync::mpsc;
+use std::thread;
 use chrono::prelude::*;
 use router::REST;
 
@@ -131,49 +133,57 @@ impl Response {
     }
 
     fn get_header(&self) -> String {
+
         let mut header = String::new();
+        let mut header_misc = String::new();
 
-        match self.status {
-            404 | 500 => {
-                header.push_str(&get_status(self.status));
-            },
-            0 => {
-                /* No status has been explicitly set, be smart here */
-                if self.has_contents() {
-                    header.push_str(&get_status(200));
-                } else {
-                    header.push_str(&get_status(404));
-                }
-            },
-            _ => {
-                /* A status has been set explicitly, respect that here. */
-                header.push_str(&get_status(self.status));
-            },
-        }
+        let (tx_core, rx_core) = mpsc::channel();
+        let status = self.status.clone();
+        let has_contents = self.has_contents().clone();
 
-        if !self.content_type.is_empty() {
-            header.push_str(&format!("Content-Type: {}\r\n", self.content_type));
+        thread::spawn(move || {
+            write_status(status, has_contents, tx_core);
+        });
+
+        //other header field-value pairs
+        let (tx_header, rx_header) = mpsc::channel();
+        let header_set = self.header.clone();
+
+        thread::spawn(move || {
+            write_headers(header_set, tx_header);
+        });
+
+        if !self.content_type.is_empty() && !self.header.contains_key("content-type") {
+            header_misc.push_str(&format!("Content-Type: {}\r\n", self.content_type));
         }
 
         if !self.cookie.is_empty() {
-            header.push_str(&format!("Set-Cookie: {}\r\n", self.cookie));
+            header_misc.push_str(&format!("Set-Cookie: {}\r\n", self.cookie));
         }
 
         if !self.header.contains_key("date") {
             let dt = Local::now();
-            header.push_str(&format!("Date: {}\r\n", dt.to_rfc2822()));
+            header_misc.push_str(&format!("Date: {}\r\n", dt.to_rfc2822()));
         }
 
-        //other header field-value pairs
-        for (field, value) in self.header.iter() {
-            //special cases that shall be set using given methods
-            let f = field.to_lowercase();
-            if f.eq("content-type") || f.eq("set-cookie") || f.eq("date") {
-                continue;
-            }
+        if !self.header.contains_key("content-length") && !self.body.is_empty() {
+            header_misc.push_str(&format!("Content-Length: {}\r\n", self.body.len()));
+        }
 
-            //otherwise, write to the header
-            header.push_str(&format!("{}: {}\r\n", field, value));
+        if let Ok(val) = rx_core.recv() {
+            if !val.is_empty() {
+                header.push_str(&val);
+            }
+        }
+
+        if let Ok(val) = rx_header.recv() {
+            if !val.is_empty() {
+                header.push_str(&val);
+            }
+        }
+
+        if !header_misc.is_empty() {
+            header.push_str(&header_misc);
         }
 
         //write an empty line to end the header
@@ -391,12 +401,52 @@ fn read_from_file(file_path: &Path) -> (u16, String) {
 fn get_status(status: u16) -> String {
     let status_base =
         match status {
+            100 => "100 Continue",
+            101 => "101 Switching Protocols",
             200 => "200 OK",
-            301 => "301 MOVED PERMANENTLY",
-            302 => "302 FOUND",
-            500 => "500 INTERNAL SERVER ERROR",
-            400 => "400 BAD REQUEST",
-            404 | _ => "404 NOT FOUND",
+            201 => "201 Created",
+            202 => "202 Accepted",
+            203 => "203 Non-Authoritative Information",
+            204 => "204 No Content",
+            205 => "205 Reset Content",
+            206 => "206 Partial Content",
+            300 => "Multiple Choices",
+            301 => "301 Moved Permanently",
+            302 => "302 Found",
+            303 => "303 See Other",
+            304 => "304 Not Modified",
+            307 => "307 Temporary Redirect",
+            308 => "308 Permanent Redirect",
+            400 => "400 Bad Request",
+            401 => "401 Unauthorized",
+            403 => "403 Forbidden",
+            404 => "404 Not Found",
+            405 => "405 Method Not Allowed",
+            406 => "406 Not Acceptable",
+            407 => "407 Proxy Authentication Required",
+            408 => "408 Request Timeout",
+            409 => "409 Conflict",
+            410 => "410 Gone",
+            411 => "411 Length Required",
+            412 => "412 Precondition Failed",
+            413 => "413 Payload Too Large",
+            414 => "414 URI Too Long",
+            415 => "415 Unsupported Media Type",
+            416 => "416 Range Not Satisfiable",
+            417 => "417 Expectation Failed",
+            426 => "426 Upgrade Required",
+            428 => "428 Precondition Required",
+            429 => "429 Too Many Requests",
+            431 => "431 Request Header Fields Too Large",
+            451 => "451 Unavailable For Legal Reasons",
+            500 => "500 Internal Server Error",
+            501 => "501 Not Implemented",
+            502 => "502 Bad Gateway",
+            503 => "503 Service Unavailable",
+            504 => "504 Gateway Timeout",
+            505 => "505 HTTP Version Not Supported",
+            511 => "511 Network Authentication Required",
+            _ => "403 Forbidden",
         };
 
     return format!("HTTP/1.1 {}\r\n", status_base);
@@ -425,5 +475,48 @@ fn default_content_type_on_ext(path: &Path) -> String {
     } else {
         String::from("text/plain")
     }
+}
+
+fn write_status(status: u16, has_contents: bool, tx: mpsc::Sender<String>) {
+    let header: String;
+    match status {
+        404 | 500 => {
+            header = get_status(status);
+        },
+        0 => {
+            /* No status has been explicitly set, be smart here */
+            if has_contents {
+                header = get_status(200);
+            } else {
+                header = get_status(404);
+            }
+        },
+        _ => {
+            /* A status has been set explicitly, respect that here. */
+            header = get_status(status);
+        },
+    }
+
+    if let Ok(_) = tx.send(header) {}
+}
+
+fn write_headers(header: HashMap<String, String>, tx: mpsc::Sender<String>) {
+    let mut headers = String::new();
+
+    for (field, value) in header.iter() {
+        //special cases that shall be set using given methods
+        let f = field.to_lowercase();
+        if f.eq("content-type")
+            || f.eq("date")
+            || f.eq("content-length") {
+
+            continue;
+        }
+
+        //otherwise, write to the header
+        headers.push_str(&format!("{}: {}\r\n", field, value));
+    }
+
+    if let Ok(_) = tx.send(headers) {}
 }
 

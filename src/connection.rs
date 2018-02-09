@@ -109,7 +109,6 @@ fn parse_request(request: &str) -> Option<Request> {
     let mut body = Vec::new();
     let mut is_body = false;
 
-    let mut handles: Vec<thread::JoinHandle<_>> = vec![];
     let (tx_base, rx_base) = mpsc::channel();
     let (tx_cookie, rx_cookie) = mpsc::channel();
 
@@ -120,11 +119,9 @@ fn parse_request(request: &str) -> Option<Request> {
             let val = line.to_owned();
             let tx_clone = mpsc::Sender::clone(&tx_base);
 
-            let handle = thread::spawn(move || {
+            thread::spawn(move || {
                 parse_request_base(val, tx_clone);
             });
-
-            handles.push(handle);
 
         } else {
             if line.is_empty() {
@@ -142,11 +139,9 @@ fn parse_request(request: &str) -> Option<Request> {
                         let cookie_body = header_info[1].to_owned();
                         let tx_clone = mpsc::Sender::clone(&tx_cookie);
 
-                        let handle = thread::spawn(move || {
+                        thread::spawn(move || {
                             cookie_parser(cookie_body, tx_clone);
                         });
-
-                        handles.push(handle);
 
                     } else {
                         header.insert(
@@ -162,10 +157,10 @@ fn parse_request(request: &str) -> Option<Request> {
         }
     }
 
-    for handle in handles {
-        if let Ok(_) = handle.join() {    }
-    }
-
+    /* Since we don't move the tx but cloned them, need to drop them
+     * specifically here, or we would hang forever before getting the
+     * messages back.
+     */
     drop(tx_base);
     drop(tx_cookie);
 
@@ -182,101 +177,6 @@ fn parse_request(request: &str) -> Option<Request> {
 
     Some(Request::build_from(method, uri, scheme, cookie, header, body))
 }
-
-/* Single thread request parser -- slightly worse performance.
-fn parse_request_single(request: &str) -> Option<Request> {
-    if request.is_empty() {
-        return None;
-    }
-
-    //println!("{}", request);
-
-    let mut method = REST::NONE;
-    let mut uri = String::new();
-    let mut scheme = HashMap::new();
-
-    let mut cookie = HashMap::new();
-    let mut header = HashMap::new();
-    let mut body = Vec::new();
-    let mut is_body = false;
-
-    for (num, line) in request.trim().lines().enumerate() {
-        if num == 0 {
-            let request_info: Vec<&str> = line.split_whitespace().collect();
-            for (num, info) in request_info.iter().enumerate() {
-                match num {
-                    0 => {
-                        method = match &info[..] {
-                            "GET" => REST::GET,
-                            "PUT" => REST::PUT,
-                            "POST" => REST::POST,
-                            "DELETE" => REST::DELETE,
-                            "" => REST::NONE,
-                            _ => REST::OTHER(request_info[0].to_owned()),
-                        };
-                    },
-                    1 => {
-                        let (req_uri, req_scheme) = split_path(info);
-                        uri.push_str(&req_uri[..]);
-
-                        if !req_scheme.is_empty() {
-                            scheme_parser(&req_scheme[..], &mut scheme);
-                        }
-                    },
-                    2 => {
-                        header.insert(
-                            String::from("http_protocal"),
-                            info.to_string()
-                        );
-                    },
-                    _ => { /* Shouldn't happen, do nothing for now */ },
-                };
-            }
-        } else {
-            if line.is_empty() {
-                // meeting the empty line dividing header and body
-                is_body = true;
-                continue;
-            }
-
-            if !is_body {
-                let header_info: Vec<&str> = line.splitn(2, ':').collect();
-                if header_info.len() == 2 {
-                    if header_info[0].trim().to_lowercase().eq("cookie") {
-                        cookie_parser_single(header_info[1], &mut cookie);
-                    } else {
-                        header.insert(
-                            String::from(header_info[0].trim().to_lowercase()),
-                            String::from(header_info[1].trim())
-                        );
-                    }
-                }
-            } else {
-                body.push(line.to_owned());
-            }
-        }
-    }
-
-    Some(Request::build_from(method, uri, scheme, cookie, header, body))
-
-}
-
-fn cookie_parser_single(request_info: &str, cookie: &mut HashMap<String, String>) {
-    if request_info.is_empty() { return; }
-
-    let cookie_set: Vec<&str> = request_info.split(";").collect();
-    let mut pair: Vec<&str>;
-
-    for set in cookie_set.into_iter() {
-        pair = set.trim().splitn(2, "=").collect();
-        if pair.len() == 2 {
-            cookie.entry(pair[0].trim().to_owned()).or_insert(pair[1].trim().to_owned());
-        } else if pair.len() > 0 {
-            cookie.entry(pair[0].trim().to_owned()).or_insert(String::new());
-        }
-    }
-}
-*/
 
 fn parse_request_base(line: String, tx: mpsc::Sender<RequestBase>) {
     let mut method = REST::NONE;
