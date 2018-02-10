@@ -12,6 +12,7 @@ pub enum REST {
     POST,
     PUT,
     DELETE,
+    OPTIONS,
     OTHER(String),
 }
 
@@ -112,6 +113,7 @@ pub trait Router {
     fn post(&mut self, uri: RequestPath, callback: Callback);
     fn put(&mut self, uri: RequestPath, callback: Callback);
     fn delete(&mut self, uri: RequestPath, callback: Callback);
+    fn options(&mut self, uri: RequestPath, callback: Callback);
     fn other(&mut self, method: &str, uri: RequestPath, callback: Callback);
 }
 
@@ -132,24 +134,39 @@ impl Router for Route {
         self.add_route(REST::DELETE, uri, callback);
     }
 
+    fn options(&mut self, uri: RequestPath, callback: Callback) {
+        self.add_route(REST::OPTIONS, uri, callback);
+    }
+
     fn other(&mut self, method: &str, uri: RequestPath, callback: Callback) {
+        if method.to_lowercase().eq(&"head"[..]) {
+            panic!("Can't...");
+        }
+
         let request_method = REST::OTHER(method.to_lowercase().to_owned());
         self.add_route(request_method, uri, callback);
     }
 }
 
 pub trait RouteHandler {
-    fn handle_request_method(&self, req: Request, resp: &mut Response);
+    fn handle_request_method(&self, req: &Request, resp: &mut Response);
 }
 
 impl RouteHandler for Route {
-    fn handle_request_method(&self, req: Request, resp: &mut Response) {
+    fn handle_request_method(&self, req: &Request, resp: &mut Response) {
         if req.method == REST::NONE {
             resp.status(404);
             return;
         } else {
             let uri = req.uri.clone();
-            if let Some(routes) = self.store.get(&req.method) {
+            let method =
+                if req.method.eq(&REST::OTHER(String::from("head"))) {
+                    REST::GET
+                } else {
+                    req.method.clone()
+                };
+
+            if let Some(routes) = self.store.get(&method) {
                 handle_request_worker(&routes, &req, resp, uri);
             } else {
                 resp.status(404);

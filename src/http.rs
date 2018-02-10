@@ -8,6 +8,7 @@ use std::io::prelude::*;
 use std::path::Path;
 use std::sync::mpsc;
 use std::thread;
+use std::time::Duration;
 use chrono::prelude::*;
 use router::REST;
 
@@ -104,7 +105,7 @@ pub trait ResponseStates {
     fn get_redirect_path(&self) -> String;
     fn status_is_set(&self) -> bool;
     fn has_contents(&self) -> bool;
-    fn serialize(&self) -> String;
+    fn serialize(&self, ignore_body: bool) -> String;
 }
 
 impl Response {
@@ -132,7 +133,7 @@ impl Response {
         }
     }
 
-    fn get_header(&self) -> String {
+    fn get_header(&self, ignore_body: bool) -> String {
 
         let mut header = String::new();
         let mut header_misc = String::new();
@@ -142,6 +143,7 @@ impl Response {
         let has_contents = self.has_contents().clone();
 
         thread::spawn(move || {
+            // tx_core has been moved in, no need to drop specifically
             write_status(status, has_contents, tx_core);
         });
 
@@ -150,6 +152,7 @@ impl Response {
         let header_set = self.header.clone();
 
         thread::spawn(move || {
+            // tx_header has been moved in, no need to drop specifically
             write_headers(header_set, tx_header);
         });
 
@@ -166,17 +169,21 @@ impl Response {
             header_misc.push_str(&format!("Date: {}\r\n", dt.to_rfc2822()));
         }
 
-        if !self.header.contains_key("content-length") && !self.body.is_empty() {
-            header_misc.push_str(&format!("Content-Length: {}\r\n", self.body.len()));
+        if !self.header.contains_key("content-length") {
+            if ignore_body || self.body.is_empty() {
+                header_misc.push_str("Content-Length: 0\r\n");
+            } else {
+                header_misc.push_str(&format!("Content-Length: {}\r\n", self.body.len()));
+            }
         }
 
-        if let Ok(val) = rx_core.recv() {
+        if let Ok(val) = rx_core.recv_timeout(Duration::from_millis(200)) {
             if !val.is_empty() {
                 header.push_str(&val);
             }
         }
 
-        if let Ok(val) = rx_header.recv() {
+        if let Ok(val) = rx_header.recv_timeout(Duration::from_millis(200)) {
             if !val.is_empty() {
                 header.push_str(&val);
             }
@@ -209,10 +216,15 @@ impl ResponseStates for Response {
         (!self.body.is_empty() && self.body.len() > 0)
     }
 
-    fn serialize(&self) -> String {
+    fn serialize(&self, ignore_body: bool) -> String {
         let mut result= String::new();
 
-        result.push_str(&self.get_header());
+        result.push_str(&self.get_header(ignore_body));
+
+        if ignore_body {
+            //no need to return body
+            return result;
+        }
 
         if self.has_contents() {
             //content has been explicitly set, use them
@@ -497,7 +509,9 @@ fn write_status(status: u16, has_contents: bool, tx: mpsc::Sender<String>) {
         },
     }
 
-    if let Ok(_) = tx.send(header) {}
+    match tx.send(header) {
+        _ => { drop(tx); }
+    }
 }
 
 fn write_headers(header: HashMap<String, String>, tx: mpsc::Sender<String>) {
@@ -517,6 +531,8 @@ fn write_headers(header: HashMap<String, String>, tx: mpsc::Sender<String>) {
         headers.push_str(&format!("{}: {}\r\n", field, value));
     }
 
-    if let Ok(_) = tx.send(headers) {}
+    match tx.send(headers) {
+        _ => { drop(tx); }
+    }
 }
 

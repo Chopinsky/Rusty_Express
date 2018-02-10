@@ -3,6 +3,7 @@ use std::io::prelude::*;
 use std::net::{TcpStream, Shutdown};
 use std::sync::mpsc;
 use std::thread;
+use std::time::Duration;
 use http::*;
 use router::*;
 
@@ -38,24 +39,31 @@ pub fn handle_connection(
         },
         Err(ParseError::EmptyRequestErr) => {
             println!("Error on parsing request");
-            return write_to_stream(stream, build_default_response(&default_pages));
+            return write_to_stream(stream, build_default_response(&default_pages), false);
         },
     }
 
-    match handle_request_with_fallback(request, &router, &header, &default_pages) {
+    match handle_request_with_fallback(&request, &router, &header, &default_pages) {
         Ok(response) => {
-            return write_to_stream(stream, response);
+            let ignore_body =
+                if request.method.eq(&REST::OTHER(String::from("head"))) {
+                    true
+                } else {
+                    false
+                };
+
+            return write_to_stream(stream, response, ignore_body);
         },
         Err(e) => {
             println!("Error on generating response -- {}", e);
-            return write_to_stream(stream, build_default_response(&default_pages));
+            return write_to_stream(stream, build_default_response(&default_pages), false);
         },
     }
 }
 
-fn write_to_stream(mut stream: TcpStream, response: Response) -> Option<u8> {
+fn write_to_stream(mut stream: TcpStream, response: Response, ignore_body: bool) -> Option<u8> {
 
-    if let Ok(_) = stream.write(response.serialize().as_bytes()) {
+    if let Ok(_) = stream.write(response.serialize(ignore_body).as_bytes()) {
         if let Ok(_) = stream.flush() {
             if response.to_close_connection() {
                 if let Ok(_) = stream.shutdown(Shutdown::Both) {
@@ -164,14 +172,14 @@ fn parse_request(request: &str) -> Option<Request> {
     drop(tx_base);
     drop(tx_cookie);
 
-    if let Ok(base) = rx_base.recv() {
+    if let Ok(base) = rx_base.recv_timeout(Duration::from_millis(200)) {
         method = base.method;
         uri = base.uri;
         scheme = base.scheme;
         header.entry(String::from("http_version")).or_insert(base.http_version);
     }
 
-    if let Ok(cookie_set) = rx_cookie.recv() {
+    if let Ok(cookie_set) = rx_cookie.recv_timeout(Duration::from_millis(200)) {
         cookie = cookie_set;
     }
 
@@ -193,6 +201,7 @@ fn parse_request_base(line: String, tx: mpsc::Sender<RequestBase>) {
                     "PUT" => REST::PUT,
                     "POST" => REST::POST,
                     "DELETE" => REST::DELETE,
+                    "OPTIONS" => REST::OPTIONS,
                     "" => REST::NONE,
                     _ => REST::OTHER(request_info[0].to_lowercase().to_owned()),
                 };
@@ -212,16 +221,18 @@ fn parse_request_base(line: String, tx: mpsc::Sender<RequestBase>) {
         };
     }
 
-    if let Ok(_) = tx.send(RequestBase {
+    match tx.send(RequestBase {
         method,
         uri,
         http_version,
         scheme,
-    }) {}
+    }) {
+        _ => { drop(tx); }
+    }
 }
 
 fn handle_request_with_fallback(
-        request_info: Request,
+        request_info: &Request,
         router: &Route,
         header: &HashMap<String, String>,
         fallback: &HashMap<u16, String>
@@ -239,7 +250,7 @@ fn handle_request_with_fallback(
             return Err(String::from("Invalid request method"));
         },
         _ => {
-            router.handle_request_method(request_info, &mut resp);
+            router.handle_request_method(&request_info, &mut resp);
         }
     }
 
@@ -287,7 +298,9 @@ fn cookie_parser(cookie_body: String, tx: mpsc::Sender<HashMap<String, String>>)
         }
     }
 
-    if let Ok(_) = tx.send(cookie) {}
+    match tx.send(cookie) {
+        _ => { drop(tx); }
+    }
 }
 
 fn scheme_parser(scheme: &str, scheme_collection: &mut HashMap<String, Vec<String>>) {

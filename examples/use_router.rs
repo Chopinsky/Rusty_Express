@@ -3,9 +3,14 @@ extern crate rusty_express;
 use rusty_express::prelude::*;
 
 fn main() {
+    // working with the generic data model
+    let mut model = Model::new();
+    model.set_data(100);
+
+    // define http server now
     let mut server = HttpServer::new();
 
-    //Define router separately
+    // Define router separately
     let mut router = Route::new();
 
     router.get(RequestPath::Explicit("/"), Model::simple_response);
@@ -28,13 +33,12 @@ impl Model  {
         self.data = val;
     }
 
-    pub fn simple_response(req: &Request, resp: &mut Response) {
+    pub fn simple_response(_req: &Request, resp: &mut Response) {
         resp.send("Hello world from rusty server!\n");
         resp.status(200);
     }
 
-    pub fn simple_index(req: &Request, resp: &mut Response) {
+    pub fn simple_index(_req: &Request, resp: &mut Response) {
         resp.send("Hello world from the index page!\n");
     }
-
 }

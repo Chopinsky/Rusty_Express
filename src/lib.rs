@@ -1,3 +1,5 @@
+#[macro_use]
+extern crate lazy_static;
 extern crate regex;
 extern crate chrono;
 
@@ -6,6 +8,7 @@ pub mod connection;
 pub mod http;
 pub mod router;
 pub mod server_states;
+pub mod session;
 pub mod thread_utils;
 
 pub mod prelude {
@@ -17,11 +20,13 @@ pub mod prelude {
 
 use std::collections::HashMap;
 use std::net::{SocketAddr, TcpListener};
-use std::time::Duration;
+use std::time::{Duration};
+
 use config::*;
 use connection::*;
 use router::*;
 use server_states::*;
+use session::*;
 use thread_utils::ThreadPool;
 
 //TODO: 1. handle errors with grace...
@@ -89,6 +94,10 @@ impl Router for HttpServer {
         self.router.delete(uri, callback);
     }
 
+    fn options(&mut self, uri: RequestPath, callback: Callback) {
+        self.router.options(uri, callback);
+    }
+
     fn other(&mut self, method: &str, uri: RequestPath, callback: Callback) {
         self.router.other(method, uri, callback);
     }
@@ -128,6 +137,9 @@ fn start_with(listener: &TcpListener, router: &Route, config: &ServerConfig, ser
 
     for stream in listener.incoming() {
         if let Ok(s) = stream {
+            let session = Session::new();
+            println!("Session id: {}", session.get_id());
+
             if let Err(e) = s.set_read_timeout(read_timeout) {
                 println!("Unable to set read timeout: {}", e);
                 continue;
