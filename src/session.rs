@@ -18,7 +18,8 @@ pub struct Session {
 
 pub trait SessionExchange {
     fn new() -> Session;
-    fn from(id: u32) -> Session;
+    fn from_id(id: u32) -> Option<Session>;
+    fn from_or_new(id: u32) -> Session;
 }
 
 impl SessionExchange for Session {
@@ -36,8 +37,27 @@ impl SessionExchange for Session {
         }
     }
 
-    fn from(id: u32) -> Self {
-        
+    fn from_id(id: u32) -> Option<Self> {
+        if let Ok(store) = STORE.lock() {
+            if let Some(val) = store.get(&id) {
+                Some(Session {
+                   id,
+                   store: val.to_owned(),
+                })
+            } else {
+                None
+            }
+        } else {
+            None
+        }
+    }
+
+    fn from_or_new(id: u32) -> Self {
+        if let Some(session) = Session::from_id(id) {
+            session
+        } else {
+            Session::new()
+        }
     }
 }
 
@@ -68,17 +88,13 @@ impl Session {
 }
 
 fn new_id() -> Option<u32> {
-    let next_id = NEXT_ID.clone();
-    let new_id: u32;
-
-    if let Ok(mut id) = next_id.lock() {
+    if let Ok(mut id) = NEXT_ID.lock() {
         *id = *id + 1;
-        new_id = *id;
+        let new_id = *id;
+        return Some(new_id);
     } else {
         return None;
     }
-
-    Some(new_id)
 }
 
 fn save(id: u32, content: &str) -> bool {
