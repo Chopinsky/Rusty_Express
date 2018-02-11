@@ -26,7 +26,7 @@ use config::*;
 use connection::*;
 use router::*;
 use server_states::*;
-use session::*;
+//use session::*;
 use thread_utils::ThreadPool;
 
 //TODO: 1. handle errors with grace...
@@ -137,8 +137,8 @@ fn start_with(listener: &TcpListener, router: &Route, config: &ServerConfig, ser
 
     for stream in listener.incoming() {
         if let Ok(s) = stream {
-            let session = Session::new();
-            println!("Session id: {}", session.get_id());
+            //let session = Session::new();
+            //println!("Session id: {}", session.get_id());
 
             if let Err(e) = s.set_read_timeout(read_timeout) {
                 println!("Unable to set read timeout: {}", e);
