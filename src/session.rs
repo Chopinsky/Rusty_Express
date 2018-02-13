@@ -4,7 +4,7 @@ use std::time::{SystemTime};
 use std::thread;
 
 lazy_static! {
-    static ref STORE: Arc<Mutex<HashMap<u32, String>>> = Arc::new(Mutex::new(HashMap::new()));
+    static ref STORE: Arc<Mutex<HashMap<u32, HashMap<String, String>>>> = Arc::new(Mutex::new(HashMap::new()));
 
     static ref LIFE_MAP: Arc<Mutex<HashMap<u32, SystemTime>>> = Arc::new(Mutex::new(HashMap::new()));
 
@@ -13,13 +13,14 @@ lazy_static! {
 
 pub struct Session {
     id: u32,
-    store: String
+    store: HashMap<String, String>,
 }
 
 pub trait SessionExchange {
     fn new() -> Session;
     fn from_id(id: u32) -> Option<Session>;
     fn from_or_new(id: u32) -> Session;
+    fn release(id: u32);
 }
 
 impl SessionExchange for Session {
@@ -27,12 +28,12 @@ impl SessionExchange for Session {
         if let Some(new_id) = new_id() {
             Session {
                 id: new_id,
-                store: String::new(),
+                store: HashMap::new(),
             }
         } else {
             Session {
                 id: 0,
-                store: String::new(),
+                store: HashMap::new(),
             }
         }
     }
@@ -59,31 +60,40 @@ impl SessionExchange for Session {
             Session::new()
         }
     }
+
+    fn release(id: u32) {
+        release(id);
+    }
 }
 
-impl Session {
-    pub fn get_id(&self) -> u32 {
+pub trait SessionHandler {
+    fn get_id(&self) -> u32;
+    fn get_value(&self, key: &str) -> Option<String>;
+    fn set_value(&mut self, key: &str, val: &str) -> Option<String>;
+    fn save(&self);
+}
+
+impl SessionHandler for Session {
+    fn get_id(&self) -> u32 {
         self.id
     }
 
-    pub fn get_store(&self) -> String {
-        self.store.to_owned()
-    }
-
-    pub fn set_store(&mut self, new_store: String, replace: bool) {
-        if replace {
-            self.store = new_store.to_owned();
+    fn get_value(&self, key: &str) -> Option<String> {
+        if let Some(val) = self.store.get(key) {
+            Some(val.to_owned())
         } else {
-            self.store.push_str(&new_store);
+            None
         }
     }
 
-    pub fn save(&self) {
-        if self.store.is_empty() {
+    // Set new session key-value pair, returns the old value if the key
+    // already exists
+    fn set_value(&mut self, key: &str, val: &str) -> Option<String> {
+        self.store.insert(key.to_owned(), val.to_owned())
+    }
 
-        } else {
-            save(self.id, &self.store[..]);
-        }
+    fn save(&self) {
+        save(self.id, self.store.to_owned());
     }
 }
 
@@ -97,37 +107,43 @@ fn new_id() -> Option<u32> {
     }
 }
 
-fn save(id: u32, content: &str) -> bool {
+fn save(id: u32, content: HashMap<String, String>) -> bool {
     if let Ok(mut store) = STORE.lock() {
-        if store.contains_key(&id) {
-            if let Some(session) = store.get_mut(&id) {
-                *session = content.to_owned();
-            } else {
-                return false;
-            }
-        } else {
-            store.insert(id, content.to_owned());
-        }
+        store.insert(id, content);
+
+        thread::spawn(move || {
+            update_last_access(id, false);
+        });
+
     } else {
         return false;
     }
 
-    thread::spawn(move || {
-        update_last_access(id);
-    });
+    true
+}
+
+fn release(id: u32) -> bool {
+    if let Ok(mut store) = STORE.lock() {
+        store.remove(&id);
+
+        thread::spawn(move || {
+            update_last_access(id, true);
+        });
+
+    } else {
+        return false;
+    }
 
     true
 }
 
-fn update_last_access(id: u32) {
-    let now = SystemTime::now();
+fn update_last_access(id: u32, to_remove: bool) {
     if let Ok(mut map) = LIFE_MAP.lock() {
-        if map.contains_key(&id) {
-            if let Some(session) = map.get_mut(&id) {
-                *session = now;
-            }
-        } else {
+        if !to_remove {
+            let now = SystemTime::now();
             map.insert(id, now);
+        } else {
+            map.remove(&id);
         }
     }
 }

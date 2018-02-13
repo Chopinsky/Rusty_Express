@@ -71,9 +71,9 @@ impl HttpServer {
         println!("Shutting down...");
     }
 
-    pub fn terminate(&mut self) {
+    pub fn try_to_terminate(&mut self) {
         println!("Requested to shutdown...");
-        self.states.set_to_terminate();
+        self.states.ack_to_terminate();
     }
 }
 

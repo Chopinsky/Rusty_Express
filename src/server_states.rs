@@ -13,7 +13,7 @@ impl ServerStates {
         self.going_to_shutdown
     }
 
-    pub fn set_to_terminate(&mut self) {
+    pub fn ack_to_terminate(&mut self) {
         self.going_to_shutdown = true;
     }
 }

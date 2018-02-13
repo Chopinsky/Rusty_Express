@@ -165,8 +165,8 @@ impl Response {
         }
 
         if !self.header.contains_key("date") {
-            let dt = Local::now();
-            header_misc.push_str(&format!("Date: {}\r\n", dt.to_rfc2822()));
+            let dt = Utc::now();
+            header_misc.push_str(&format!("Date: {}\r\n", dt.format("%a, %e %b %Y %T GMT").to_string()));
         }
 
         if !self.header.contains_key("content-length") {
