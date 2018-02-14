@@ -1,14 +1,15 @@
+extern crate rand;
+
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::{SystemTime};
 use std::thread;
+use rand::Rng;
 
 lazy_static! {
     static ref STORE: Arc<Mutex<HashMap<u32, HashMap<String, String>>>> = Arc::new(Mutex::new(HashMap::new()));
 
     static ref LIFE_MAP: Arc<Mutex<HashMap<u32, SystemTime>>> = Arc::new(Mutex::new(HashMap::new()));
-
-    static ref NEXT_ID: Arc<Mutex<u32>> = Arc::new(Mutex::new(1));
 }
 
 pub struct Session {
@@ -98,10 +99,21 @@ impl SessionHandler for Session {
 }
 
 fn new_id() -> Option<u32> {
-    if let Ok(mut id) = NEXT_ID.lock() {
-        *id = *id + 1;
-        let new_id = *id;
-        return Some(new_id);
+    if let Ok(mut store) = STORE.lock() {
+        let mut rng = rand::thread_rng();
+        let mut next_id = rng.gen::<u32>();
+
+        loop {
+            if !store.contains_key(&next_id) { break; }
+            next_id = rng.gen::<u32>();
+        }
+
+        store.insert(next_id, HashMap::new());
+        thread::spawn(move || {
+            update_last_access(next_id, false);
+        });
+
+        Some(next_id)
     } else {
         return None;
     }
@@ -109,7 +121,8 @@ fn new_id() -> Option<u32> {
 
 fn save(id: u32, content: HashMap<String, String>) -> bool {
     if let Ok(mut store) = STORE.lock() {
-        store.insert(id, content);
+        let old_store = store.insert(id, content);
+        drop(old_store);
 
         thread::spawn(move || {
             update_last_access(id, false);
