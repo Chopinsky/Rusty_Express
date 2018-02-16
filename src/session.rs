@@ -5,6 +5,7 @@ use std::cmp::Ordering;
 use std::ops::*;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime};
+use std::thread;
 use rand::Rng;
 
 lazy_static! {
@@ -45,6 +46,9 @@ pub trait SessionExchange {
     fn from_or_new(id: u32) -> Option<Session>;
     fn release(id: u32);
     fn set_default_session_lifetime(lifetime: Duration);
+    fn clean();
+    fn clean_up_to(lifetime: SystemTime);
+    fn store_size() -> Option<usize>;
 }
 
 impl SessionExchange for Session {
@@ -61,7 +65,10 @@ impl SessionExchange for Session {
 
                 } else {
                     //expired, remove it from the store
-                    release(id);
+                    thread::spawn(move || {
+                        release(id);
+                    });
+
                     return None;
 
                 }
@@ -80,12 +87,44 @@ impl SessionExchange for Session {
     }
 
     fn release(id: u32) {
-        release(id);
+        thread::spawn(move || {
+            release(id);
+        });
     }
 
     fn set_default_session_lifetime(lifetime: Duration) {
-        if let Ok(mut default_lifetime) = DEFAULT_LIFETIME.lock() {
-            *default_lifetime = lifetime;
+        thread::spawn(move || {
+            if let Ok(mut default_lifetime) = DEFAULT_LIFETIME.lock() {
+                *default_lifetime = lifetime;
+            }
+        });
+    }
+
+    fn clean() {
+        thread::spawn(move || {
+            clean_up_to(SystemTime::now());
+        });
+    }
+
+    fn clean_up_to(lifetime: SystemTime) {
+        let now = SystemTime::now();
+        let time =
+            if lifetime.cmp(&now) != Ordering::Greater {
+                now
+            } else {
+                lifetime
+            };
+
+        thread::spawn(move || {
+            clean_up_to(time);
+        });
+    }
+
+    fn store_size() -> Option<usize> {
+        if let Ok(store) = STORE.lock() {
+            Some(store.keys().len())
+        } else {
+            None
         }
     }
 }
@@ -122,6 +161,8 @@ impl SessionHandler for Session {
         self.auto_renew = auto_renew;
     }
 
+    // Set the expires system time. This will turn off auto session life time
+    // renew if it's set.
     fn expires_at(&mut self, expires_time: SystemTime) {
         if self.auto_renew {
             self.auto_renew = false;
@@ -131,7 +172,12 @@ impl SessionHandler for Session {
     }
 
     fn save(&mut self) {
-        save(self.id, self);
+        let id = self.id;
+        let session = self.clone();
+
+        thread::spawn(move || {
+            save(id, &mut session.to_owned());
+        });
     }
 }
 
@@ -201,4 +247,19 @@ fn release(id: u32) -> bool {
     }
 
     true
+}
+
+fn clean_up_to(time: SystemTime) {
+    let mut stale_sessions: Vec<u32> = Vec::new();
+    if let Ok(mut store) = STORE.lock() {
+        for session in store.values() {
+            if session.expires_at.cmp(&time) != Ordering::Greater {
+                stale_sessions.push(session.id);
+            }
+        }
+
+        for id in stale_sessions {
+            store.remove(&id);
+        }
+    }
 }
