@@ -32,21 +32,11 @@ use thread_utils::ThreadPool;
 
 //TODO: 1. handle errors with grace...
 //TODO: 2. Impl middlewear
-//TODO: 3. Use lazy_static to create session control
 
 pub struct HttpServer {
     router: Route,
     config: ServerConfig,
     states: ServerStates,
-}
-
-pub trait ServerDef {
-    fn def_router(&mut self, router: Route);
-    fn set_pool_size(&mut self, size: usize);
-    fn set_read_timeout(&mut self, timeout: u8);
-    fn set_write_timeout(&mut self, timeout: u8);
-    fn def_default_response_header(&mut self, header: HashMap<String, String>);
-    fn set_default_response_header(&mut self, field: String, value: String);
 }
 
 impl HttpServer {
@@ -58,12 +48,20 @@ impl HttpServer {
         }
     }
 
-    pub fn listen(&self, port: u16) {
+    pub fn new_with_config(config: ServerConfig) -> Self {
+        HttpServer {
+            router: Route::new(),
+            config,
+            states: ServerStates::new(),
+        }
+    }
+
+    pub fn listen(&mut self, port: u16) {
         let server_address = SocketAddr::from(([127, 0, 0, 1], port));
         if let Ok(listener) = TcpListener::bind(server_address) {
             println!("Listening for connections on port {}", port);
 
-            start_with(&listener, &self.router, &self.config, &self.states);
+            start_with(&listener, &self.router, &self.config, &mut self.states);
             drop(listener);
         } else {
             panic!("Unable to start the http server...");
@@ -75,6 +73,10 @@ impl HttpServer {
     pub fn try_to_terminate(&mut self) {
         println!("Requested to shutdown...");
         self.states.ack_to_terminate();
+    }
+
+    pub fn drop_session_auto_clean(&mut self) {
+        self.states.drop_session_auto_clean();
     }
 }
 
@@ -104,6 +106,17 @@ impl Router for HttpServer {
     }
 }
 
+pub trait ServerDef {
+    fn def_router(&mut self, router: Route);
+    fn set_pool_size(&mut self, size: usize);
+    fn set_read_timeout(&mut self, timeout: u8);
+    fn set_write_timeout(&mut self, timeout: u8);
+    fn def_default_response_header(&mut self, header: HashMap<String, String>);
+    fn set_default_response_header(&mut self, field: String, value: String);
+    fn enable_session_auto_clean(&mut self, auto_clean_period: Duration);
+    fn disable_session_auto_clean(&mut self);
+}
+
 impl ServerDef for HttpServer {
     fn def_router(&mut self, router: Route) {
         self.router = router;
@@ -128,19 +141,36 @@ impl ServerDef for HttpServer {
     fn set_default_response_header(&mut self, field: String, value: String) {
         self.config.default_header(field, value, true);
     }
+
+    fn enable_session_auto_clean(&mut self, auto_clean_period: Duration) {
+        self.config.enable_session_auto_clean(auto_clean_period);
+    }
+
+    fn disable_session_auto_clean(&mut self) {
+        self.config.disable_session_auto_clean();
+    }
 }
 
-fn start_with(listener: &TcpListener, router: &Route, config: &ServerConfig, server_states: &ServerStates) {
+fn start_with(listener: &TcpListener, router: &Route, config: &ServerConfig, server_states: &mut ServerStates) {
 
     let pool = ThreadPool::new(config.pool_size);
     let read_timeout = Some(Duration::new(config.read_timeout as u64, 0));
     let write_timeout = Some(Duration::new(config.write_timeout as u64, 0));
 
-    for stream in listener.incoming() {
-        if let Ok(s) = stream {
-//            let session = Session::new();
-//            println!("Session id: {}", session.get_id());
+    if let Some(duration) = config.get_session_auto_clean_period() {
+        let handler = Session::start_auto_clean_queue(duration);
+        server_states.set_session_handler(&handler);
+    }
 
+    for stream in listener.incoming() {
+
+//        if let Some(mut session) = Session::new() {
+//            session.expires_at(SystemTime::now().add(Duration::new(5, 0)));
+//            session.save();
+//            println!("New session: {}", session.get_id());
+//        }
+
+        if let Ok(s) = stream {
             if let Err(e) = s.set_read_timeout(read_timeout) {
                 println!("Unable to set read timeout: {}", e);
                 continue;

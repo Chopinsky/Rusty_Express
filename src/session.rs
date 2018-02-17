@@ -6,6 +6,7 @@ use std::ops::*;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime};
 use std::thread;
+use std::thread::*;
 use rand::Rng;
 
 lazy_static! {
@@ -49,6 +50,7 @@ pub trait SessionExchange {
     fn clean();
     fn clean_up_to(lifetime: SystemTime);
     fn store_size() -> Option<usize>;
+    fn start_auto_clean_queue(period: Duration) -> Thread;
 }
 
 impl SessionExchange for Session {
@@ -127,6 +129,24 @@ impl SessionExchange for Session {
             None
         }
     }
+
+    fn start_auto_clean_queue(period: Duration) -> Thread {
+        let sleep_period =
+            if period.cmp(&Duration::new(60, 0)) == Ordering::Less {
+                Duration::new(60, 0)
+            } else {
+                period
+            };
+
+        let handler: JoinHandle<_> = thread::spawn(move || {
+            loop {
+                thread::sleep(sleep_period);
+                clean_up_to(SystemTime::now());
+            }
+        }, );
+
+        handler.thread().to_owned()
+    }
 }
 
 pub trait SessionHandler {
@@ -172,12 +192,7 @@ impl SessionHandler for Session {
     }
 
     fn save(&mut self) {
-        let id = self.id;
-        let session = self.clone();
-
-        thread::spawn(move || {
-            save(id, &mut session.to_owned());
-        });
+        save(self.id, self);
     }
 }
 
@@ -201,7 +216,7 @@ fn new_session() -> Option<Session> {
 
         let session = Session {
             id: next_id,
-            expires_at: get_expires_lifetime(),
+            expires_at: get_next_expiration(),
             auto_renew: true,
             store: HashMap::new(),
         };
@@ -218,20 +233,18 @@ fn new_session() -> Option<Session> {
 fn save(id: u32, session: &mut Session) -> bool {
     if let Ok(mut store) = STORE.lock() {
         if session.auto_renew {
-            session.expires_at = get_expires_lifetime();
+            session.expires_at = get_next_expiration();
         }
 
-        let old_store = store.insert(id, session.to_owned());
-        drop(old_store);
-
+        let old_session = store.insert(id, session.to_owned());
+        drop(old_session);
+        true
     } else {
-        return false;
+        false
     }
-
-    true
 }
 
-fn get_expires_lifetime() -> SystemTime {
+fn get_next_expiration() -> SystemTime {
     if let Ok(default_lifetime) = DEFAULT_LIFETIME.lock() {
         SystemTime::now().add(*default_lifetime)
     } else {
@@ -258,8 +271,12 @@ fn clean_up_to(time: SystemTime) {
             }
         }
 
+        println!("Cleaned: {}", stale_sessions.len());
+
         for id in stale_sessions {
             store.remove(&id);
         }
     }
+
+    println!("Session clean done!");
 }
