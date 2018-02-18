@@ -283,7 +283,15 @@ impl ResponseWriter for Response {
             if !contents.is_empty() { self.body.push_str(&contents); }
 
             if self.status == 200 && self.content_type.is_empty() {
-                self.set_content_type(default_content_type_on_ext(&file_path));
+                let mime_type =
+                    if let Some(ext) = file_path.extension() {
+                        let file_extension = ext.to_string_lossy().into_owned();
+                        default_mime_type_with_ext(&file_extension[..])
+                    } else {
+                        String::from("text/plain")
+                    };
+
+                self.set_content_type(mime_type);
             }
         }
     }
@@ -464,28 +472,60 @@ fn get_status(status: u16) -> String {
     return format!("HTTP/1.1 {}\r\n", status_base);
 }
 
-fn default_content_type_on_ext(path: &Path) -> String {
-    if let Some(ext) = path.extension() {
-        match ext.to_str() {
-            Some("css") | Some("scss") | Some("sass") | Some("less") => String::from("text/css"),
-            Some("js") | Some("ts") | Some("jsx") => String::from("application/javascript"),
-            Some("html") => String::from("text/html"),
-            Some("jpeg") | Some("gif") | Some("png") | Some("bmp") | Some("webp") => {
-                format!("image/{}", ext.to_string_lossy())
-            },
-            Some("midi") | Some("mp3") => {
-                format!("audio/{}", ext.to_string_lossy())
-            },
-            Some("webm") | Some("mp4") | Some("ogg") | Some("wav") => {
-                format!("video/{}", ext.to_string_lossy())
-            },
-            Some("xml") | Some("xhtml") | Some("pdf") => {
-                format!("application/{}", ext.to_string_lossy())
-            },
-            _ => String::from("text/plain"),
-        }
-    } else {
-        String::from("text/plain")
+fn default_mime_type_with_ext(ext: &str) -> String {
+    match ext {
+        "abw" => String::from("application/x-abiword"),
+        "arc" | "bin" => String::from("application/octet-stream"),
+        "avi" => String::from("video/x-msvideo"),
+        "azw" => String::from("application/vnd.amazon.ebook"),
+        "bz" => String::from("application/x-bzip"),
+        "bz2" => String::from("application/x-bzip2"),
+        "css" | "scss" | "sass" | "less" => String::from("text/css"),
+        "doc" => String::from("application/msword"),
+        "docx" => String::from("application/vnd.openxmlformats-officedocument.wordprocessingml.document"),
+        "eot" => String::from("application/vnd.ms-fontobject"),
+        "epub" => String::from("application/epub+zip"),
+        "js" | "jsx" => String::from("application/javascript"),
+        "ts" => String::from("application/typescript"),
+        "ico" => String::from("image/x-icon"),
+        "ics" => String::from("text/calendar"),
+        "jar" => String::from("application/java-archive"),
+        "mpkg" => String::from("application/vnd.apple.installer+xml"),
+        "odp" => String::from("application/vnd.oasis.opendocument.presentation"),
+        "ods" => String::from("application/vnd.oasis.opendocument.spreadsheet"),
+        "odt" => String::from("application/vnd.oasis.opendocument.text"),
+        "ppt" => String::from("application/vnd.ms-powerpoint"),
+        "pptx" => String::from("application/vnd.openxmlformats-officedocument.presentationml.presentation"),
+        "rar" => String::from("application/x-rar-compressed"),
+        "swf" => String::from("application/x-shockwave-flash"),
+        "vsd" => String::from("application/vnd.visio"),
+        "weba" => String::from("audio/webm"),
+        "xhtml" => String::from("application/xhtml+xml"),
+        "xul" => String::from("application/vnd.mozilla.xul+xml"),
+        "7z" => String::from("application/x-7z-compressed"),
+        "svg" => String::from("image/svg+xml"),
+        "csh" | "sh" | "tar" | "wav" => {
+            format!("application/x-{}", ext.to_owned())
+        },
+        "csv" | "html" | "htm" => {
+            format!("text/{}", ext.to_owned())
+        },
+        "jpeg" | "jpg" | "gif" | "png" | "bmp" | "webp" | "tiff" | "tif" => {
+            format!("image/{}", ext.to_owned())
+        },
+        "otf" | "ttf" | "woff" | "woff2" => {
+            format!("font/{}", ext.to_owned())
+        },
+        "midi" | "mp3" | "aac" | "mid" | "oga"  => {
+            format!("audio/{}", ext.to_owned())
+        },
+        "webm" | "mp4" | "ogg" | "mpeg" | "ogv" => {
+            format!("video/{}", ext.to_owned())
+        },
+        "xml" | "pdf" | "json" | "ogx" | "rtf" | "zip" => {
+            format!("application/{}", ext.to_owned())
+        },
+        _ => String::from("text/plain"),
     }
 }
 

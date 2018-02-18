@@ -4,6 +4,7 @@ use std::net::{TcpStream, Shutdown};
 use std::sync::mpsc;
 use std::thread;
 use std::time::Duration;
+use config::ConnMetadata;
 use http::*;
 use router::*;
 
@@ -23,8 +24,7 @@ struct RequestBase {
 pub fn handle_connection(
         stream: TcpStream,
         router: &Route,
-        header: &HashMap<String, String>,
-        default_pages: &HashMap<u16, String>
+        conn_handler: &ConnMetadata
     ) -> Option<u8> {
 
     let request: Request;
@@ -39,11 +39,15 @@ pub fn handle_connection(
         },
         Err(ParseError::EmptyRequestErr) => {
             println!("Error on parsing request");
-            return write_to_stream(stream, build_default_response(&default_pages), false);
+            return write_to_stream(stream,
+                                   build_default_response(&conn_handler.get_default_pages()),
+                                   false);
         },
     }
 
-    match handle_request_with_fallback(&request, &router, &header, &default_pages) {
+    match handle_request_with_fallback(&request, &router,
+                                       &conn_handler.get_default_header(),
+                                       &conn_handler.get_default_pages()) {
         Ok(response) => {
             let ignore_body =
                 if request.method.eq(&REST::OTHER(String::from("head"))) {
@@ -56,7 +60,9 @@ pub fn handle_connection(
         },
         Err(e) => {
             println!("Error on generating response -- {}", e);
-            return write_to_stream(stream, build_default_response(&default_pages), false);
+            return write_to_stream(stream,
+                                   build_default_response(&conn_handler.get_default_pages()),
+                                   false);
         },
     }
 }
