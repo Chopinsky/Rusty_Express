@@ -88,26 +88,6 @@ pub struct Response {
     redirect: String,
 }
 
-pub trait ResponseWriter {
-    fn status(&mut self, status: u16);
-    fn header(&mut self, field: &str, value: &str, replace: bool);
-    fn send(&mut self, content: &str);
-    fn send_file(&mut self, file_path: &str);
-    fn set_cookies(&mut self, cookie: HashMap<String, String>);
-    fn set_content_type(&mut self, content_type: String);
-    fn check_and_update(&mut self, fallback: &HashMap<u16, String>);
-    fn close_connection(&mut self, is_bad_request: bool);
-    fn redirect(&mut self, path: &str);
-}
-
-pub trait ResponseStates {
-    fn to_close_connection(&self) -> bool;
-    fn get_redirect_path(&self) -> String;
-    fn status_is_set(&self) -> bool;
-    fn has_contents(&self) -> bool;
-    fn serialize(&self, ignore_body: bool) -> String;
-}
-
 impl Response {
     pub fn new() -> Self {
         Response {
@@ -161,6 +141,9 @@ impl Response {
         }
 
         if !self.cookie.is_empty() {
+
+            //TODO: encrypt the cookie if required
+
             header_misc.push_str(&format!("Set-Cookie: {}\r\n", self.cookie));
         }
 
@@ -199,6 +182,14 @@ impl Response {
     }
 }
 
+pub trait ResponseStates {
+    fn to_close_connection(&self) -> bool;
+    fn get_redirect_path(&self) -> String;
+    fn status_is_set(&self) -> bool;
+    fn has_contents(&self) -> bool;
+    fn serialize(&self, ignore_body: bool) -> String;
+}
+
 impl ResponseStates for Response {
     fn to_close_connection(&self) -> bool {
         self.to_close
@@ -209,7 +200,10 @@ impl ResponseStates for Response {
     }
 
     fn status_is_set(&self) -> bool {
-        (self.status == 0)
+        match self.status {
+            0 => false,
+            _ => true,
+        }
     }
 
     fn has_contents(&self) -> bool {
@@ -241,6 +235,19 @@ impl ResponseStates for Response {
     }
 }
 
+pub trait ResponseWriter {
+    fn status(&mut self, status: u16);
+    fn header(&mut self, field: &str, value: &str, replace: bool);
+    fn send(&mut self, content: &str);
+    fn send_file(&mut self, file_path: &str);
+    fn set_cookies(&mut self, cookie: HashMap<String, String>);
+    fn clear_cookies(&mut self);
+    fn set_content_type(&mut self, content_type: String);
+    fn check_and_update(&mut self, fallback: &HashMap<u16, String>);
+    fn close_connection(&mut self, is_bad_request: bool);
+    fn redirect(&mut self, path: &str);
+}
+
 impl ResponseWriter for Response {
     fn status(&mut self, status: u16) {
         self.status =
@@ -270,6 +277,9 @@ impl ResponseWriter for Response {
             println!("Undefined file path to retrieve data from...");
             return;
         }
+
+        //TODO - 1: use meta path
+        //TODO - 2: use 'view engine' to generate final markups
 
         let file_path = Path::new(path);
         if !file_path.is_file() {
@@ -316,6 +326,10 @@ impl ResponseWriter for Response {
         }
     }
 
+    fn clear_cookies(&mut self) {
+        self.cookie.clear();
+    }
+
     fn set_content_type(&mut self, content_type: String) {
         if !content_type.is_empty() {
             self.content_type = content_type;
@@ -351,8 +365,8 @@ impl ResponseWriter for Response {
         self.to_close = true;
     }
 
-    //Can only redirect to internal path, no outsource path, sorry for the hackers (FYI, you can
-    //  still hack the redirection link via Javascript)!
+    /// Can only redirect to internal path, no outsource path, sorry for the hackers (FYI, you can
+    /// still hack the redirection link via Javascript)!
     fn redirect(&mut self, path: &str) {
         self.redirect = path.to_owned();
     }
