@@ -8,8 +8,8 @@ use std::io::prelude::*;
 use std::path::Path;
 use std::sync::mpsc;
 use std::thread;
-use std::time::Duration;
 use chrono::prelude::*;
+use cookie::*;
 use router::REST;
 
 static FOUR_OH_FOUR: &'static str = include_str!("./default/404.html");
@@ -82,7 +82,7 @@ pub struct Response {
     status: u16,
     to_close: bool,
     content_type: String,
-    cookie: String,
+    cookie: HashMap<String, Cookie>,
     header: HashMap<String, String>,
     body: String,
     redirect: String,
@@ -94,7 +94,7 @@ impl Response {
             status: 0,
             to_close: false,
             content_type: String::new(),
-            cookie: String::new(),
+            cookie: HashMap::new(),
             header: HashMap::new(),
             body: String::new(),
             redirect: String::new(),
@@ -106,45 +106,48 @@ impl Response {
             status: 0,
             to_close: false,
             content_type: String::new(),
-            cookie: String::new(),
+            cookie: HashMap::new(),
             header: default_header.clone(),
             body: String::new(),
             redirect: String::new(),
         }
     }
 
+    //TODO: impl get_header public for consumers use
+
     fn get_header(&self, ignore_body: bool) -> String {
 
         let mut header = String::new();
         let mut header_misc = String::new();
+        let (tx, rx) = mpsc::channel();
 
-        let (tx_core, rx_core) = mpsc::channel();
-        let status = self.status.clone();
-        let has_contents = self.has_contents().clone();
+        let status = self.status.to_owned();
+        let has_contents = self.has_contents().to_owned();
+        let tx_core = mpsc::Sender::clone(&tx);
 
         thread::spawn(move || {
             // tx_core has been moved in, no need to drop specifically
-            write_status(status, has_contents, tx_core);
+            write_header_status(status, has_contents, tx_core);
         });
 
         //other header field-value pairs
-        let (tx_header, rx_header) = mpsc::channel();
         let header_set = self.header.clone();
+        let tx_header = mpsc::Sender::clone(&tx);
 
         thread::spawn(move || {
             // tx_header has been moved in, no need to drop specifically
             write_headers(header_set, tx_header);
         });
 
-        if !self.content_type.is_empty() && !self.header.contains_key("content-type") {
-            header_misc.push_str(&format!("Content-Type: {}\r\n", self.content_type));
+        let cookie = self.cookie.clone();
+        if !self.cookie.is_empty() {
+            thread::spawn(move || {
+               write_header_cookie(cookie, tx);
+            });
         }
 
-        if !self.cookie.is_empty() {
-
-            //TODO: encrypt the cookie if required
-
-            header_misc.push_str(&format!("Set-Cookie: {}\r\n", self.cookie));
+        if !self.content_type.is_empty() && !self.header.contains_key("content-type") {
+            header_misc.push_str(&format!("Content-Type: {}\r\n", self.content_type));
         }
 
         if !self.header.contains_key("date") {
@@ -160,15 +163,9 @@ impl Response {
             }
         }
 
-        if let Ok(val) = rx_core.recv_timeout(Duration::from_millis(200)) {
-            if !val.is_empty() {
-                header.push_str(&val);
-            }
-        }
-
-        if let Ok(val) = rx_header.recv_timeout(Duration::from_millis(200)) {
-            if !val.is_empty() {
-                header.push_str(&val);
+        for received in rx {
+            if !received.is_empty() {
+                header.push_str(&received);
             }
         }
 
@@ -240,7 +237,8 @@ pub trait ResponseWriter {
     fn header(&mut self, field: &str, value: &str, replace: bool);
     fn send(&mut self, content: &str);
     fn send_file(&mut self, file_path: &str);
-    fn set_cookies(&mut self, cookie: HashMap<String, String>);
+    fn set_cookie(&mut self, cookie: Cookie);
+    fn set_cookies(&mut self, cookie: HashMap<String, Cookie>);
     fn clear_cookies(&mut self);
     fn set_content_type(&mut self, content_type: String);
     fn check_and_update(&mut self, fallback: &HashMap<u16, String>);
@@ -306,24 +304,20 @@ impl ResponseWriter for Response {
         }
     }
 
-    fn set_cookies(&mut self, cookie: HashMap<String, String>) {
-        if !cookie.is_empty() {
-            // pair data structure: (key, value)
-            for (key, val) in cookie.iter() {
-                //if key is empty, skip
-                if key.is_empty() { continue; }
-                //if multiple cookies, set delimiter ";"
-                if !self.cookie.is_empty() { self.cookie.push_str(&"; "); }
+    fn set_cookie(&mut self, cookie: Cookie) {
+        if !cookie.is_valid() { return; }
 
-                if val.is_empty() {
-                    //if no value, then only set the key
-                    self.cookie.push_str(key);
-                } else {
-                    //if a key-value pair, then set the pair
-                    self.cookie.push_str(&format!("{}={}", key, val));
-                }
-            }
+        let key = cookie.get_cookie_key();
+        if let Some(val) = self.cookie.get_mut(&key) {
+            *val = cookie;
+            return;
         }
+
+        self.cookie.insert(key, cookie);
+    }
+
+    fn set_cookies(&mut self, cookie: HashMap<String, Cookie>) {
+        self.cookie = cookie;
     }
 
     fn clear_cookies(&mut self) {
@@ -543,7 +537,7 @@ fn default_mime_type_with_ext(ext: &str) -> String {
     }
 }
 
-fn write_status(status: u16, has_contents: bool, tx: mpsc::Sender<String>) {
+fn write_header_status(status: u16, has_contents: bool, tx: mpsc::Sender<String>) {
     let header: String;
     match status {
         404 | 500 => {
@@ -586,6 +580,19 @@ fn write_headers(header: HashMap<String, String>, tx: mpsc::Sender<String>) {
     }
 
     match tx.send(headers) {
+        _ => { drop(tx); }
+    }
+}
+
+fn write_header_cookie(cookie: HashMap<String, Cookie>, tx: mpsc::Sender<String>) {
+    let mut set_cookie = String::new();
+    for (_, cookie) in cookie.into_iter() {
+        if cookie.is_valid() {
+            set_cookie.push_str(&format!("Set-Cookie: {}\r\n", &cookie.to_string()));
+        }
+    }
+
+    match tx.send(set_cookie) {
         _ => { drop(tx); }
     }
 }

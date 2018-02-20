@@ -6,6 +6,7 @@ extern crate rand;
 
 pub mod config;
 pub mod connection;
+pub mod cookie;
 pub mod http;
 pub mod router;
 pub mod server_states;
@@ -15,6 +16,8 @@ pub mod thread_utils;
 pub mod prelude {
     pub use {HttpServer, ServerDef};
     pub use config::*;
+    pub use cookie::*;
+    pub use session::*;
     pub use http::{Request, Response, ResponseWriter};
     pub use router::{REST, Route, Router, RequestPath};
 }
