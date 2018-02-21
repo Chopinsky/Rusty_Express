@@ -2,6 +2,7 @@
 name = "rusty_express"
 description = "A simple server written in Rust and provide Express-alike APIs. Many things are changing and I'm working on completing more features. Please visit the project repository to submit issues or feature requests."
 readme = "README.md"
+documentation = "https://docs.rs/rusty_express/"
 repository = "https://github.com/Chopinsky/Rusty_Express.git"
 version = "0.2.8"
 authors = ["Jacob Zuo <chopinsky@live.com>"]

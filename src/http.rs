@@ -8,6 +8,7 @@ use std::io::prelude::*;
 use std::path::Path;
 use std::sync::mpsc;
 use std::thread;
+use std::time::Duration;
 use chrono::prelude::*;
 use cookie::*;
 use router::REST;
@@ -115,38 +116,41 @@ impl Response {
 
     //TODO: impl get_header public for consumers use
 
-    fn get_header(&self, ignore_body: bool) -> String {
+    fn resp_header(&self, ignore_body: bool) -> String {
 
         let mut header = String::new();
         let mut header_misc = String::new();
-        let (tx, rx) = mpsc::channel();
 
         let status = self.status.to_owned();
         let has_contents = self.has_contents().to_owned();
-        let tx_core = mpsc::Sender::clone(&tx);
+        let (tx_status, rx_status) = mpsc::channel();
 
         thread::spawn(move || {
             // tx_core has been moved in, no need to drop specifically
-            write_header_status(status, has_contents, tx_core);
+            write_header_status(status, has_contents, tx_status);
         });
 
-        //other header field-value pairs
-        let header_set = self.header.clone();
-        let tx_header = mpsc::Sender::clone(&tx);
+        // shared tx+rx for cookie + generic headers
+        let (tx, rx) = mpsc::channel();
 
-        thread::spawn(move || {
-            // tx_header has been moved in, no need to drop specifically
-            write_headers(header_set, tx_header);
-        });
-
-        let cookie = self.cookie.clone();
+        // other header field-value pairs
         if !self.cookie.is_empty() {
+            let cookie = self.cookie.to_owned();
+            let tx_cookie = mpsc::Sender::clone(&tx);
+
             thread::spawn(move || {
-               write_header_cookie(cookie, tx);
+                write_header_cookie(cookie, tx_cookie);
             });
         }
 
-        if !self.content_type.is_empty() && !self.header.contains_key("content-type") {
+        // other header field-value pairs
+        let header_set = self.header.clone();
+        thread::spawn(move || {
+            // tx_header has been moved in, no need to drop specifically
+            write_headers(header_set, tx);
+        });
+
+        if !self.content_type.is_empty() {
             header_misc.push_str(&format!("Content-Type: {}\r\n", self.content_type));
         }
 
@@ -163,6 +167,18 @@ impl Response {
             }
         }
 
+        let mut status_ok = false;
+        if let Ok(status) = rx_status.recv_timeout(Duration::from_millis(200)) {
+            if !status.is_empty() {
+                header.push_str(&status);
+                status_ok = true;
+            }
+        }
+
+        if !status_ok {
+            return String::from("500 Internal Server Error\r\n\r\n");
+        }
+
         for received in rx {
             if !received.is_empty() {
                 header.push_str(&received);
@@ -173,7 +189,7 @@ impl Response {
             header.push_str(&header_misc);
         }
 
-        //write an empty line to end the header
+        // write an empty line to end the header
         header.push_str("\r\n");
         header
     }
@@ -184,7 +200,8 @@ pub trait ResponseStates {
     fn get_redirect_path(&self) -> String;
     fn status_is_set(&self) -> bool;
     fn has_contents(&self) -> bool;
-    fn serialize(&self, ignore_body: bool) -> String;
+    fn serialize_header(&self, ignore_body: bool) -> String;
+    fn serialize_body(&self) -> String;
 }
 
 impl ResponseStates for Response {
@@ -207,28 +224,23 @@ impl ResponseStates for Response {
         (!self.body.is_empty() && self.body.len() > 0)
     }
 
-    fn serialize(&self, ignore_body: bool) -> String {
-        let mut result= String::new();
+    fn serialize_header(&self, ignore_body: bool) -> String {
+        self.resp_header(ignore_body)
+    }
 
-        result.push_str(&self.get_header(ignore_body));
-
-        if ignore_body {
-            //no need to return body
-            return result;
-        }
-
+    fn serialize_body(&self) -> String {
         if self.has_contents() {
             //content has been explicitly set, use them
-            result.push_str(&self.body);
+            self.body.to_owned()
         } else if self.status == 404 || self.status == 500 {
             //explicit error status
-            result.push_str(&get_default_page(self.status));
+            get_default_page(self.status)
         } else if self.status == 0 {
             //implicit error status
-            result.push_str(&get_default_page(404));
+            get_default_page(404)
+        } else {
+            String::new()
         }
-
-        result
     }
 }
 
@@ -238,7 +250,7 @@ pub trait ResponseWriter {
     fn send(&mut self, content: &str);
     fn send_file(&mut self, file_path: &str);
     fn set_cookie(&mut self, cookie: Cookie);
-    fn set_cookies(&mut self, cookie: HashMap<String, Cookie>);
+    fn set_cookies(&mut self, cookie: &[Cookie]);
     fn clear_cookies(&mut self);
     fn set_content_type(&mut self, content_type: String);
     fn check_and_update(&mut self, fallback: &HashMap<u16, String>);
@@ -261,7 +273,14 @@ impl ResponseWriter for Response {
     }
 
     fn header(&mut self, field: &str, value: &str, replace: bool) {
-        set_header(&mut self.header, field.to_owned(), value.to_owned(), replace);
+        if field.is_empty() || value.is_empty() { return; }
+
+        match &field.to_lowercase()[..] {
+            "content-type" => {
+                self.content_type = value.to_owned();
+            },
+            _ => set_header(&mut self.header, field.to_owned(), value.to_owned(), replace),
+        }
     }
 
     fn send(&mut self, content: &str) {
@@ -285,10 +304,9 @@ impl ResponseWriter for Response {
             println!("Can't locate requested file");
             self.status(404);
         } else {
-            let (status, contents) = read_from_file(&file_path);
-
+            //TODO: use buffer writer and/or Box<String> instead
+            let status = read_from_file(&file_path, &mut self.body);
             if !self.status_is_set() { self.status(status); }
-            if !contents.is_empty() { self.body.push_str(&contents); }
 
             if self.status == 200 && self.content_type.is_empty() {
                 let mime_type =
@@ -316,8 +334,10 @@ impl ResponseWriter for Response {
         self.cookie.insert(key, cookie);
     }
 
-    fn set_cookies(&mut self, cookie: HashMap<String, Cookie>) {
-        self.cookie = cookie;
+    fn set_cookies(&mut self, cookies: &[Cookie]) {
+        for cookie in cookies {
+            self.set_cookie(cookie.to_owned());
+        }
     }
 
     fn clear_cookies(&mut self) {
@@ -336,15 +356,13 @@ impl ResponseWriter for Response {
 
         if self.status == 0 || self.status == 404 {
             if let Some(file_path) = fallback.get(&404) {
-                let (_, content) = read_from_file(Path::new(file_path));
-                if !content.is_empty() { self.body.push_str(&content); }
+                read_from_file(Path::new(file_path), &mut self.body);
             } else {
                 self.body.push_str(FOUR_OH_FOUR);
             }
         } else {
             if let Some(file_path) = fallback.get(&500) {
-                let (_, content) = read_from_file(Path::new(file_path));
-                if !content.is_empty() { self.body.push_str(&content); }
+                read_from_file(Path::new(file_path), &mut self.body);
             } else {
                 self.body.push_str(FIVE_HUNDRED);
             }
@@ -353,7 +371,7 @@ impl ResponseWriter for Response {
 
     fn close_connection(&mut self, is_bad_request: bool) {
         if is_bad_request {
-            self.status(400);
+            self.status(500);
         }
 
         self.to_close = true;
@@ -400,29 +418,27 @@ fn get_default_page(status: u16) -> String {
     }
 }
 
-fn read_from_file(file_path: &Path) -> (u16, String) {
+fn read_from_file(file_path: &Path, buf: &mut String) -> u16 {
     // try open the file
     if let Ok(file) = File::open(file_path) {
         let mut buf_reader = BufReader::new(file);
-        let mut contents: String = String::new();
-
-        return match buf_reader.read_to_string(&mut contents) {
+        return match buf_reader.read_to_string(buf) {
             Err(e) => {
                 println!("Unable to read file: {}", e);
-                (500, String::new())
+                500
             },
-            Ok(_) if contents.len() > 0 => {
+            Ok(size) if size > 0 => {
                 //things are truly ok now
-                (200, contents)
+                200
             },
             _ => {
                 println!("File stream finds nothing...");
-                (404, String::new())
+                404
             }
         };
     } else {
         println!("Unable to open requested file for path");
-        (404, String::new())
+        404
     }
 }
 
@@ -585,12 +601,16 @@ fn write_headers(header: HashMap<String, String>, tx: mpsc::Sender<String>) {
 }
 
 fn write_header_cookie(cookie: HashMap<String, Cookie>, tx: mpsc::Sender<String>) {
+    println!("cookie parse");
+
     let mut set_cookie = String::new();
     for (_, cookie) in cookie.into_iter() {
         if cookie.is_valid() {
             set_cookie.push_str(&format!("Set-Cookie: {}\r\n", &cookie.to_string()));
         }
     }
+
+    println!("cookie sent");
 
     match tx.send(set_cookie) {
         _ => { drop(tx); }

@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::io::prelude::*;
+use std::io::BufWriter;
 use std::net::{TcpStream, Shutdown};
 use std::sync::mpsc;
 use std::thread;
@@ -67,23 +68,36 @@ pub fn handle_connection(
     }
 }
 
-fn write_to_stream(mut stream: TcpStream, response: Response, ignore_body: bool) -> Option<u8> {
+fn write_to_stream(stream: TcpStream, response: Response, ignore_body: bool) -> Option<u8> {
+    let mut buffer = BufWriter::new(stream);
+    if let Err(e) = buffer.write(response.serialize_header(ignore_body).as_bytes()) {
+        println!("An error has taken place when writing the response header to the stream: {}", e);
+        return Some(1);
+    }
 
-    if let Ok(_) = stream.write(response.serialize(ignore_body).as_bytes()) {
-        if let Ok(_) = stream.flush() {
-            if response.to_close_connection() {
-                if let Ok(_) = stream.shutdown(Shutdown::Both) {
-                    return Some(0);
-                } else {
-                    return Some(1);
-                }
-            }
-
-            return Some(0);
+    if !ignore_body {
+        if let Err(e) = buffer.write(response.serialize_body().as_bytes()) {
+            println!("An error has taken place when writing the response body to the stream: {}", e);
+            return Some(1);
         }
     }
 
-    None
+    if let Err(e) = buffer.flush() {
+        println!("An error has taken place when flushing the response to the stream: {}", e);
+        return Some(1);
+    }
+
+    if !response.to_close_connection() {
+        return Some(0);
+    } else {
+        if let Ok(s) = buffer.into_inner() {
+            if let Ok(_) = s.shutdown(Shutdown::Both) {
+                return Some(0);
+            }
+        }
+    }
+
+    return Some(1);
 }
 
 fn read_request(mut stream: &TcpStream) -> Result<Request, ParseError> {

@@ -3,6 +3,7 @@ extern crate rand;
 use std::collections::HashMap;
 use std::cmp::Ordering;
 use std::ops::*;
+use std::path::Path;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime};
 use std::thread;
@@ -193,6 +194,21 @@ impl SessionHandler for Session {
 
     fn save(&mut self) {
         save(self.id, self);
+    }
+}
+
+pub trait PersistHandler {
+    fn from_file(path: &Path);
+    fn to_file(&self, path: &Path);
+}
+
+impl PersistHandler for Session {
+    fn from_file(path: &Path) {
+        //TODO: from file
+    }
+
+    fn to_file(&self, path: &Path) {
+        //TODO: to file
     }
 }
 
