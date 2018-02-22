@@ -17,7 +17,7 @@ static FOUR_OH_FOUR: &'static str = include_str!("./default/404.html");
 static FIVE_HUNDRED: &'static str = include_str!("./default/500.html");
 
 pub struct Request {
-    pub method: REST,
+    pub method: Option<REST>,
     pub uri: String,
     scheme: HashMap<String, Vec<String>>,
     cookie: HashMap<String, String>,
@@ -27,7 +27,7 @@ pub struct Request {
 
 impl Request {
     pub fn build_from(
-        method: REST,
+        method: Option<REST>,
         uri: String,
         scheme: HashMap<String, Vec<String>>,
         cookie: HashMap<String, String>,

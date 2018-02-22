@@ -16,7 +16,7 @@ enum ParseError {
 }
 
 struct RequestBase {
-    method: REST,
+    method: Option<REST>,
     uri: String,
     http_version: String,
     scheme: HashMap<String, Vec<String>>,
@@ -51,10 +51,9 @@ pub fn handle_connection(
                                        &conn_handler.get_default_pages()) {
         Ok(response) => {
             let ignore_body =
-                if request.method.eq(&REST::OTHER(String::from("head"))) {
-                    true
-                } else {
-                    false
+                match request.method {
+                    Some(REST::OTHER(other_method)) => other_method.eq("head"),
+                    _ => false,
                 };
 
             return write_to_stream(stream, response, ignore_body);
@@ -128,7 +127,7 @@ fn parse_request(request: &str) -> Option<Request> {
 
     //println!("{}", request);
 
-    let mut method = REST::NONE;
+    let mut method = None;
     let mut uri = String::new();
     let mut scheme = HashMap::new();
 
@@ -207,7 +206,7 @@ fn parse_request(request: &str) -> Option<Request> {
 }
 
 fn parse_request_base(line: String, tx: mpsc::Sender<RequestBase>) {
-    let mut method = REST::NONE;
+    let mut method = None;
     let mut uri = String::new();
     let mut http_version = String::new();
     let mut scheme = HashMap::new();
@@ -217,18 +216,18 @@ fn parse_request_base(line: String, tx: mpsc::Sender<RequestBase>) {
         match num {
             0 => {
                 method = match &info[..] {
-                    "GET" => REST::GET,
-                    "PUT" => REST::PUT,
-                    "POST" => REST::POST,
-                    "DELETE" => REST::DELETE,
-                    "OPTIONS" => REST::OPTIONS,
-                    "" => REST::NONE,
-                    _ => REST::OTHER(request_info[0].to_lowercase().to_owned()),
+                    "GET" => Some(REST::GET),
+                    "PUT" => Some(REST::PUT),
+                    "POST" => Some(REST::POST),
+                    "DELETE" => Some(REST::DELETE),
+                    "OPTIONS" => Some(REST::OPTIONS),
+                    "" => None,
+                    _ => Some(REST::OTHER(request_info[0].to_lowercase().to_owned())),
                 };
             },
             1 => {
                 let (req_uri, req_scheme) = split_path(info);
-                uri.push_str(&req_uri[..]);
+                uri = req_uri.to_owned();
 
                 if !req_scheme.is_empty() {
                     scheme_parser(&req_scheme[..], &mut scheme);
@@ -266,7 +265,7 @@ fn handle_request_with_fallback(
         };
 
     match request_info.method {
-        REST::NONE => {
+        None => {
             return Err(String::from("Invalid request method"));
         },
         _ => {
