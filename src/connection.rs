@@ -240,13 +240,13 @@ fn parse_request_base(line: String, tx: mpsc::Sender<RequestBase>) {
         };
     }
 
-    match tx.send(RequestBase {
+    if let Err(e) = tx.send(RequestBase {
         method,
         uri,
         http_version,
         scheme,
     }) {
-        _ => { drop(tx); }
+        println!("Unable to parse base request: {}", e);
     }
 }
 
@@ -278,7 +278,12 @@ fn handle_request_with_fallback(
 }
 
 fn split_path(full_uri: &str) -> (String, String) {
-    let mut uri_parts: Vec<&str> = full_uri.trim().rsplitn(2, "/").collect();
+    let uri = full_uri.trim();
+    if uri.is_empty() {
+        return (String::from("/"), String::new());
+    }
+
+    let mut uri_parts: Vec<&str> = uri.trim().rsplitn(2, "/").collect();
 
     if let Some(pos) = uri_parts[0].find("?") {
         let (last_uri_pc, scheme) = uri_parts[0].split_at(pos);
@@ -293,7 +298,15 @@ fn split_path(full_uri: &str) -> (String, String) {
 
         (real_uri, scheme.trim().to_owned())
     } else {
-        (full_uri.trim().to_owned(), String::new())
+        let uri_len = uri.len();
+        let result_uri =
+            if uri_len > 1 && uri.ends_with("/") {
+                uri[..uri_len-1].to_owned()
+            } else {
+                uri.to_owned()
+            };
+
+        (result_uri, String::new())
     }
 }
 
@@ -317,8 +330,8 @@ fn cookie_parser(cookie_body: String, tx: mpsc::Sender<HashMap<String, String>>)
         }
     }
 
-    match tx.send(cookie) {
-        _ => { drop(tx); }
+    if let Err(e) = tx.send(cookie) {
+        println!("Unable to parse base request cookies: {}", e);
     }
 }
 

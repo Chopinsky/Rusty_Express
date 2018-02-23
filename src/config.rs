@@ -15,8 +15,8 @@ impl ServerConfig {
     pub fn new() -> Self {
         ServerConfig {
             pool_size: 4,
-            read_timeout: 4,
-            write_timeout: 4,
+            read_timeout: 8,
+            write_timeout: 8,
             session_auto_clean_period: Some(Duration::new(3600, 0)),
             header: HashMap::new(),
             default_pages: HashMap::new(),

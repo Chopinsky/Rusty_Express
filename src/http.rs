@@ -85,7 +85,7 @@ pub struct Response {
     content_type: String,
     cookie: HashMap<String, Cookie>,
     header: HashMap<String, String>,
-    body: String,
+    body: Box<String>,
     redirect: String,
 }
 
@@ -97,7 +97,7 @@ impl Response {
             content_type: String::new(),
             cookie: HashMap::new(),
             header: HashMap::new(),
-            body: String::new(),
+            body: Box::new(String::new()),
             redirect: String::new(),
         }
     }
@@ -109,16 +109,16 @@ impl Response {
             content_type: String::new(),
             cookie: HashMap::new(),
             header: default_header.clone(),
-            body: String::new(),
+            body: Box::new(String::new()),
             redirect: String::new(),
         }
     }
 
     //TODO: impl get_header public for consumers use
 
-    fn resp_header(&self, ignore_body: bool) -> String {
+    fn resp_header(&self, ignore_body: bool) -> Box<String> {
 
-        let mut header = String::new();
+        let mut header = Box::new(String::new());
         let mut header_misc = String::new();
 
         let status = self.status.to_owned();
@@ -176,7 +176,7 @@ impl Response {
         }
 
         if !status_ok {
-            return String::from("500 Internal Server Error\r\n\r\n");
+            return Box::new(String::from("500 Internal Server Error\r\n\r\n"));
         }
 
         for received in rx {
@@ -200,8 +200,8 @@ pub trait ResponseStates {
     fn get_redirect_path(&self) -> String;
     fn status_is_set(&self) -> bool;
     fn has_contents(&self) -> bool;
-    fn serialize_header(&self, ignore_body: bool) -> String;
-    fn serialize_body(&self) -> String;
+    fn serialize_header(&self, ignore_body: bool) -> Box<String>;
+    fn serialize_body(&self) -> Box<String>;
 }
 
 impl ResponseStates for Response {
@@ -224,22 +224,22 @@ impl ResponseStates for Response {
         (!self.body.is_empty() && self.body.len() > 0)
     }
 
-    fn serialize_header(&self, ignore_body: bool) -> String {
+    fn serialize_header(&self, ignore_body: bool) -> Box<String> {
         self.resp_header(ignore_body)
     }
 
-    fn serialize_body(&self) -> String {
+    fn serialize_body(&self) -> Box<String> {
         if self.has_contents() {
             //content has been explicitly set, use them
             self.body.to_owned()
         } else if self.status == 404 || self.status == 500 {
             //explicit error status
-            get_default_page(self.status)
+            Box::new(get_default_page(self.status))
         } else if self.status == 0 {
             //implicit error status
-            get_default_page(404)
+            Box::new(get_default_page(404))
         } else {
-            String::new()
+            Box::new(String::new())
         }
     }
 }
@@ -289,22 +289,21 @@ impl ResponseWriter for Response {
         }
     }
 
-    fn send_file(&mut self, path: &str) {
-        if path.is_empty() {
+    fn send_file(&mut self, file_loc: &str) {
+        if file_loc.is_empty() {
             println!("Undefined file path to retrieve data from...");
             return;
         }
 
         //TODO - 1: use meta path
-        //TODO - 2: use 'view engine' to generate final markups
+        //TODO - 2: use 'view engine' to generate final markups --> use a different API for this
 
-        let file_path = Path::new(path);
+        let file_path = Path::new(file_loc);
         if !file_path.is_file() {
             // if doesn't exist or not a file, fail now
             println!("Can't locate requested file");
             self.status(404);
         } else {
-            //TODO: use buffer writer and/or Box<String> instead
             let status = read_from_file(&file_path, &mut self.body);
             if !self.status_is_set() { self.status(status); }
 
@@ -418,7 +417,7 @@ fn get_default_page(status: u16) -> String {
     }
 }
 
-fn read_from_file(file_path: &Path, buf: &mut String) -> u16 {
+fn read_from_file(file_path: &Path, buf: &mut Box<String>) -> u16 {
     // try open the file
     if let Ok(file) = File::open(file_path) {
         let mut buf_reader = BufReader::new(file);
@@ -573,8 +572,8 @@ fn write_header_status(status: u16, has_contents: bool, tx: mpsc::Sender<String>
         },
     }
 
-    match tx.send(header) {
-        _ => { drop(tx); }
+    if let Err(e) = tx.send(header) {
+        println!("Unable to write header status: {}", e);
     }
 }
 
@@ -595,8 +594,8 @@ fn write_headers(header: HashMap<String, String>, tx: mpsc::Sender<String>) {
         headers.push_str(&format!("{}: {}\r\n", field, value));
     }
 
-    match tx.send(headers) {
-        _ => { drop(tx); }
+    if let Err(e) = tx.send(headers) {
+        println!("Unable to write main response header: {}", e);
     }
 }
 
@@ -612,8 +611,8 @@ fn write_header_cookie(cookie: HashMap<String, Cookie>, tx: mpsc::Sender<String>
 
     println!("cookie sent");
 
-    match tx.send(set_cookie) {
-        _ => { drop(tx); }
+    if let Err(e) = tx.send(set_cookie) {
+        println!("Unable to write response cookies: {}", e);
     }
 }
 

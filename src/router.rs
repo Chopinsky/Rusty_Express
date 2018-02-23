@@ -28,17 +28,43 @@ pub enum RequestPath {
 
 pub type Callback = fn(&Request, &mut Response);
 
+struct RegexRoute {
+    pub regex: Regex,
+    pub handler: Callback,
+    pub params: Vec<String>,
+}
+
+impl RegexRoute {
+    pub fn new(re: Regex, handler: Callback) -> Self {
+        RegexRoute {
+            regex: re,
+            handler,
+            params: Vec::new(),
+        }
+    }
+}
+
+impl Clone for RegexRoute {
+    fn clone(&self) -> Self {
+        RegexRoute {
+            regex: self.regex.clone(),
+            handler: self.handler,
+            params: self.params.clone(),
+        }
+    }
+}
+
 pub struct RouteMap {
     explicit: HashMap<String, Callback>,
-    explicit_with_params: Vec<(Vec<&'static str>, Callback)>,
-    wildcard: HashMap<String, Callback>,
+    explicit_with_params: HashMap<String, RegexRoute>,
+    wildcard: HashMap<String, RegexRoute>,
 }
 
 impl RouteMap {
     pub fn new() -> Self {
         RouteMap {
             explicit: HashMap::new(),
-            explicit_with_params: Vec::new(),
+            explicit_with_params: HashMap::new(),
             wildcard: HashMap::new(),
         }
     }
@@ -47,35 +73,29 @@ impl RouteMap {
         match uri {
             RequestPath::Explicit(req_uri) => {
                 if req_uri.is_empty() || !req_uri.starts_with("/") {
-                    panic!("Request path must have contents and start with '/'.");
+                    panic!("Request path must have valid contents and start with '/'.");
                 }
 
                 self.explicit.entry(req_uri.to_owned()).or_insert(callback);
             },
             RequestPath::WildCard(req_uri) => {
-                if req_uri.is_empty() || !req_uri.starts_with("/") {
-                    panic!("Request path must have contents and start with '/'.");
+                if req_uri.is_empty() {
+                    panic!("Request path must have valid contents.");
                 }
 
-                self.wildcard.entry(req_uri.to_owned()).or_insert(callback);
+                if let Ok(re) = Regex::new(req_uri) {
+                    let route = RegexRoute::new(re, callback);
+                    self.wildcard.entry(req_uri.to_owned()).or_insert(route);
+                }
             },
             RequestPath::ExplicitWithParams(req_uri) => {
-                let raw_path: Vec<&str> = req_uri.split("/").collect();
-                if raw_path.is_empty() {
-                    panic!("Request path must have contents and start with '/'.");
+                let path: Vec<&str> = req_uri.trim_matches('/').split('/').collect();
+                if !req_uri.starts_with('/') && path.is_empty() {
+                    panic!("Request path must have valid contents.");
                 }
 
-                let mut path = Vec::with_capacity(raw_path.len());
-                for node in raw_path.into_iter() {
-                    if !node.is_empty() { path.push(node); }
-                }
-
-                if path.is_empty() {
-                    panic!("Request path must have valid contents and start with '/'.");
-                }
-
-                //TODO: make it a trie? better for run-time search
-                self.explicit_with_params.push((path, callback));
+                //TODO: recompile to set params and the regex
+                //self.explicit_with_params.push((path, callback));
             },
         }
     }
@@ -227,8 +247,6 @@ fn handle_request_worker(routes: &RouteMap, req: &Request, resp: &mut Response, 
             resp.redirect("");
             if !redirect.starts_with("/") { redirect.insert(0, '/'); }
 
-            //println!("{}", redirect);
-
             handle_request_worker(&routes, &req, resp, redirect.clone());
 
             resp.header("Location", &redirect, true);
@@ -239,32 +257,38 @@ fn handle_request_worker(routes: &RouteMap, req: &Request, resp: &mut Response, 
     }
 }
 
-fn search_wildcard_router(router: &HashMap<String, Callback>, uri: String, tx: mpsc::Sender<Option<Callback>>) {
+fn search_wildcard_router(router: &HashMap<String, RegexRoute>, uri: String, tx: mpsc::Sender<Option<Callback>>) {
     let mut result = None;
-    for (req_path, callback) in router.iter() {
-        if let Ok(re) = Regex::new(req_path) {
-            if re.is_match(&uri) {
-                result = Some(*callback);
-                break;
-            }
+    for (_, route) in router.iter() {
+        if route.regex.is_match(&uri) {
+            result = Some(route.handler);
+            break;
         }
     }
 
     match tx.send(result) { _ => { drop(tx); }}
 }
 
-fn search_params_router(router: &Vec<(Vec<&str>, Callback)>, uri: String, tx: mpsc::Sender<Option<Callback>>) {
-    let raw_path: Vec<&str> = uri.split("/").collect();
-    if raw_path.is_empty() {
-        match tx.send(None) { _ => { drop(tx); }}
-        return;
-    }
+struct RouteMatchWithParam {
+    handler: Callback,
+    params: HashMap<String, String>,
+}
 
-    let mut path = Vec::with_capacity(raw_path.len());
-    for node in raw_path.into_iter() {
-        if !node.is_empty() { path.push(node); }
+impl RouteMatchWithParam {
+    pub fn new(handler: Callback, params: HashMap<String, String>) -> Self {
+        RouteMatchWithParam {
+            handler,
+            params,
+        }
     }
+}
 
+fn search_params_router(router: &HashMap<String, RegexRoute>, uri: String, tx: mpsc::Sender<Option<Callback>>) {
+
+}
+
+fn search_params_router2(router: &Vec<(Vec<&str>, Callback)>, uri: String, tx: mpsc::Sender<Option<Callback>>) {
+    let path: Vec<&str> = uri.trim_matches('/').split('/').collect();
     if path.is_empty() {
         match tx.send(None) { _ => { drop(tx); }}
         return;
@@ -273,6 +297,7 @@ fn search_params_router(router: &Vec<(Vec<&str>, Callback)>, uri: String, tx: mp
     let path_len = path.len();
     for &ref pair in router.iter() {
         //TODO: clear up the params HashMap always, or later?
+
         if pair.0.len() != path_len { continue; }
 
         let mut found = false;
@@ -283,6 +308,7 @@ fn search_params_router(router: &Vec<(Vec<&str>, Callback)>, uri: String, tx: mp
             if let Some(val) = path.get(index-1) {
                 if (*node).starts_with("{") && (*node).ends_with("}") {
                     //TODO: add to the params HashMap
+
                 } else if (*node).cmp(val) == Ordering::Equal {
                     if index == path_len {
                         found = true;

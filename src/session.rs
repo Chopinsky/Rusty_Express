@@ -1,3 +1,4 @@
+#![allow(unused_variables)]
 extern crate rand;
 
 use std::collections::HashMap;
