@@ -136,19 +136,13 @@ impl Clone for RouteMap {
 }
 
 pub struct Route {
-    store: HashMap<REST, RouteMap>,
+    store: Box<HashMap<REST, RouteMap>>,
 }
 
 impl Route {
     pub fn new() -> Self {
         Route {
-            store: HashMap::new(),
-        }
-    }
-
-    pub fn from(source: &Route) -> Self {
-        Route {
-            store: source.store.clone(),
+            store: Box::from(HashMap::new()),
         }
     }
 
@@ -164,6 +158,14 @@ impl Route {
         route.insert(uri, callback);
 
         self.store.insert(method, route);
+    }
+}
+
+impl Clone for Route {
+    fn clone(&self) -> Self {
+        Route {
+            store: self.store.clone(),
+        }
     }
 }
 

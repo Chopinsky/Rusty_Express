@@ -5,15 +5,15 @@ use std::collections::HashMap;
 use std::cmp::Ordering;
 use std::ops::*;
 use std::path::Path;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, RwLock};
 use std::time::{Duration, SystemTime};
 use std::thread;
 use std::thread::*;
 use rand::Rng;
 
 lazy_static! {
-    static ref STORE: Arc<Mutex<HashMap<u32, Session>>> = Arc::new(Mutex::new(HashMap::new()));
-    static ref DEFAULT_LIFETIME: Arc<Mutex<Duration>> = Arc::new(Mutex::new(Duration::new(172800, 0)));
+    static ref STORE: Arc<RwLock<HashMap<u32, Session>>> = Arc::new(RwLock::new(HashMap::new()));
+    static ref DEFAULT_LIFETIME: Arc<RwLock<Duration>> = Arc::new(RwLock::new(Duration::new(172800, 0)));
 }
 
 pub struct Session {
@@ -61,7 +61,7 @@ impl SessionExchange for Session {
     }
 
     fn from_id(id: u32) -> Option<Self> {
-        if let Ok(store) = STORE.lock() {
+        if let Ok(store) = STORE.read() {
             if let Some(val) = store.get(&id) {
                 if val.expires_at.cmp(&SystemTime::now()) != Ordering::Less {
                     //found the session, return now
@@ -74,7 +74,6 @@ impl SessionExchange for Session {
                     });
 
                     return None;
-
                 }
             }
         }
@@ -98,7 +97,7 @@ impl SessionExchange for Session {
 
     fn set_default_session_lifetime(lifetime: Duration) {
         thread::spawn(move || {
-            if let Ok(mut default_lifetime) = DEFAULT_LIFETIME.lock() {
+            if let Ok(mut default_lifetime) = DEFAULT_LIFETIME.write() {
                 *default_lifetime = lifetime;
             }
         });
@@ -125,7 +124,7 @@ impl SessionExchange for Session {
     }
 
     fn store_size() -> Option<usize> {
-        if let Ok(store) = STORE.lock() {
+        if let Ok(store) = STORE.read() {
             Some(store.keys().len())
         } else {
             None
@@ -214,7 +213,7 @@ impl PersistHandler for Session {
 }
 
 fn new_session() -> Option<Session> {
-    if let Ok(mut store) = STORE.lock() {
+    if let Ok(mut store) = STORE.write() {
         let now = SystemTime::now();
         let mut rng = rand::thread_rng();
         let mut next_id = rng.gen::<u32>();
@@ -243,18 +242,18 @@ fn new_session() -> Option<Session> {
 
     } else {
         None
-
     }
 }
 
 fn save(id: u32, session: &mut Session) -> bool {
-    if let Ok(mut store) = STORE.lock() {
+    if let Ok(mut store) = STORE.write() {
         if session.auto_renew {
             session.expires_at = get_next_expiration();
         }
 
         let old_session = store.insert(id, session.to_owned());
         drop(old_session);
+
         true
     } else {
         false
@@ -262,7 +261,7 @@ fn save(id: u32, session: &mut Session) -> bool {
 }
 
 fn get_next_expiration() -> SystemTime {
-    if let Ok(default_lifetime) = DEFAULT_LIFETIME.lock() {
+    if let Ok(default_lifetime) = DEFAULT_LIFETIME.read() {
         SystemTime::now().add(*default_lifetime)
     } else {
         SystemTime::now().add(Duration::new(172800, 0))
@@ -270,7 +269,7 @@ fn get_next_expiration() -> SystemTime {
 }
 
 fn release(id: u32) -> bool {
-    if let Ok(mut store) = STORE.lock() {
+    if let Ok(mut store) = STORE.write() {
         store.remove(&id);
     } else {
         return false;
@@ -281,7 +280,7 @@ fn release(id: u32) -> bool {
 
 fn clean_up_to(time: SystemTime) {
     let mut stale_sessions: Vec<u32> = Vec::new();
-    if let Ok(mut store) = STORE.lock() {
+    if let Ok(mut store) = STORE.write() {
         for session in store.values() {
             if session.expires_at.cmp(&time) != Ordering::Greater {
                 stale_sessions.push(session.id);

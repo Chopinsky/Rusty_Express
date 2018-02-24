@@ -15,6 +15,7 @@ use router::REST;
 
 static FOUR_OH_FOUR: &'static str = include_str!("./default/404.html");
 static FIVE_HUNDRED: &'static str = include_str!("./default/500.html");
+static VERSION: &'static str = "0.2.8";
 
 pub struct Request {
     pub method: Option<REST>,
@@ -149,6 +150,8 @@ impl Response {
             // tx_header has been moved in, no need to drop specifically
             write_headers(header_set, tx);
         });
+
+        header_misc.push_str(&format!("Server: Rusty-Express/{}\r\n", VERSION));
 
         if !self.content_type.is_empty() {
             header_misc.push_str(&format!("Content-Type: {}\r\n", self.content_type));

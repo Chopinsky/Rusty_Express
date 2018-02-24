@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::io::prelude::*;
 use std::io::BufWriter;
 use std::net::{TcpStream, Shutdown};
-use std::sync::mpsc;
+use std::sync::{Arc, mpsc};
 use std::thread;
 use std::time::Duration;
 use config::ConnMetadata;
@@ -24,8 +24,8 @@ struct RequestBase {
 
 pub fn handle_connection(
         stream: TcpStream,
-        router: &Route,
-        conn_handler: &ConnMetadata
+        router: Arc<Route>,
+        conn_handler: Arc<ConnMetadata>
     ) -> Option<u8> {
 
     let request: Request;

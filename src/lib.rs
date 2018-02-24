@@ -24,6 +24,7 @@ pub mod prelude {
 
 use std::collections::HashMap;
 use std::net::{SocketAddr, TcpListener};
+use std::sync::Arc;
 use std::time::{Duration};
 
 use config::*;
@@ -64,7 +65,6 @@ impl HttpServer {
         if let Ok(listener) = TcpListener::bind(server_address) {
             println!("Listening for connections on port {}", port);
             start_with(&listener, &self.router, &self.config, &mut self.states);
-            drop(listener);
         } else {
             panic!("Unable to start the http server...");
         }
@@ -141,7 +141,7 @@ impl ServerDef for HttpServer {
     }
 
     fn set_default_response_header(&mut self, field: String, value: String) {
-        self.config.default_header(field, value, true);
+        self.config.set_default_header(field, value, true);
     }
 
     fn enable_session_auto_clean(&mut self, auto_clean_period: Duration) {
@@ -153,15 +153,23 @@ impl ServerDef for HttpServer {
     }
 }
 
-fn start_with(listener: &TcpListener, router: &Route, config: &ServerConfig, server_states: &mut ServerStates) {
+fn start_with(listener: &TcpListener,
+              router: &Route,
+              config: &ServerConfig,
+              server_states: &mut ServerStates) {
 
     let pool = ThreadPool::new(config.pool_size);
     let read_timeout = Some(Duration::new(config.read_timeout as u64, 0));
     let write_timeout = Some(Duration::new(config.write_timeout as u64, 0));
 
-    if let Some(duration) = config.get_session_auto_clean_period() {
-        let handler = Session::start_auto_clean_queue(duration);
-        server_states.set_session_handler(&handler);
+    let meta_data = Arc::new(config.get_meta_data());
+    let router = Arc::new(router.to_owned());
+
+    if config.use_session {
+        if let Some(duration) = config.get_session_auto_clean_period() {
+            let handler = Session::start_auto_clean_queue(duration);
+            server_states.set_session_handler(&handler);
+        }
     }
 
     for stream in listener.incoming() {
@@ -173,30 +181,25 @@ fn start_with(listener: &TcpListener, router: &Route, config: &ServerConfig, ser
 //        }
 
         if let Ok(s) = stream {
-            if let Err(e) = s.set_read_timeout(read_timeout) {
-                println!("Unable to set read timeout: {}", e);
-                continue;
-            }
-
-            if let Err(e) = s.set_write_timeout(write_timeout) {
-                println!("Unable to set write timeout: {}", e);
-                continue;
-            }
-
-            // clone the router so it can out live the closure.
-            let router = Route::from(&router);
-            let conn_meta_handler = ConnMetadata::from(&config);
+            // clone Arc-pointers
+            let stream_router = Arc::clone(&router);
+            let conn_handler = Arc::clone(&meta_data);
 
             pool.execute(move || {
-                handle_connection(s, &router, &conn_meta_handler);
+                if let Err(e) = s.set_read_timeout(read_timeout) {
+                    println!("Unable to set read timeout: {}", e);
+                }
+
+                if let Err(e) = s.set_write_timeout(write_timeout) {
+                    println!("Unable to set write timeout: {}", e);
+                }
+
+                handle_connection(s, stream_router, conn_handler);
             });
         }
 
         if server_states.is_terminating() {
-            break;
+            return;
         }
     }
-
-    //close the listener with grace
-    drop(pool);
 }
