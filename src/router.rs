@@ -1,5 +1,5 @@
 #![allow(dead_code)]
-#![allow(unused_mut)]
+#![allow(unused_variables)]
 
 use std::collections::HashMap;
 use std::cmp::Ordering;
@@ -93,6 +93,23 @@ impl RouteMap {
                 if !req_uri.starts_with('/') && path.is_empty() {
                     panic!("Request path must have valid contents.");
                 }
+
+                let mut raw_regex = String::new();
+                let mut params: Vec<String> = Vec::new();
+
+                for node in path {
+                    let n = node.trim();
+
+                    if n.is_empty() { continue; }
+                    if n.starts_with(":") && n.len() > 1 {
+                        params.push((&n[1..]).to_owned());
+                        raw_regex.push_str(r"/\w+");
+                    } else {
+                        raw_regex.push_str(&format!("/{}", node));
+                    }
+                }
+
+                let regex = format!(r"^{}/?$", raw_regex);
 
                 //TODO: recompile to set params and the regex
                 //self.explicit_with_params.push((path, callback));
