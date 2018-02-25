@@ -5,9 +5,9 @@ use std::net::{TcpStream, Shutdown};
 use std::sync::{Arc, mpsc};
 use std::thread;
 use std::time::Duration;
-use config::ConnMetadata;
-use http::*;
-use router::*;
+use core::config::ConnMetadata;
+use core::http::*;
+use core::router::*;
 
 #[derive(PartialEq, Eq, Clone, Copy)]
 enum ParseError {

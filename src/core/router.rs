@@ -7,7 +7,7 @@ use std::sync::mpsc;
 use std::thread;
 use std::time::Duration;
 use regex::Regex;
-use http::*;
+use core::http::*;
 
 #[derive(PartialEq, Eq, Hash, Clone)]
 pub enum REST {

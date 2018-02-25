@@ -10,11 +10,11 @@ use std::sync::mpsc;
 use std::thread;
 use std::time::Duration;
 use chrono::prelude::*;
-use cookie::*;
-use router::REST;
+use core::cookie::*;
+use core::router::REST;
 
-static FOUR_OH_FOUR: &'static str = include_str!("./default/404.html");
-static FIVE_HUNDRED: &'static str = include_str!("./default/500.html");
+static FOUR_OH_FOUR: &'static str = include_str!("../default/404.html");
+static FIVE_HUNDRED: &'static str = include_str!("../default/500.html");
 static VERSION: &'static str = "0.2.8";
 
 pub struct Request {

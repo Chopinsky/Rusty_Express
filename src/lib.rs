@@ -4,35 +4,29 @@ extern crate regex;
 extern crate chrono;
 extern crate rand;
 
-pub mod config;
-pub mod connection;
-pub mod cookie;
-pub mod http;
-pub mod router;
-pub mod server_states;
-pub mod session;
-pub mod thread_utils;
+mod core;
+mod utils;
 
 pub mod prelude {
     pub use {HttpServer, ServerDef};
-    pub use config::*;
-    pub use cookie::*;
-    pub use session::*;
-    pub use http::{Request, Response, ResponseWriter};
-    pub use router::{REST, Route, Router, RequestPath};
+    pub use core::config::*;
+    pub use core::cookie::*;
+    pub use core::session::*;
+    pub use core::http::{Request, Response, ResponseWriter};
+    pub use core::router::{REST, Route, Router, RequestPath};
 }
 
 use std::collections::HashMap;
 use std::net::{SocketAddr, TcpListener};
 use std::sync::Arc;
-use std::time::{Duration};
+use std::time::Duration;
 
-use config::*;
-use connection::*;
-use router::*;
-use server_states::*;
-use session::*;
-use thread_utils::ThreadPool;
+use core::config::*;
+use core::connection::*;
+use core::session::*;
+use core::server_states::*;
+use core::router::*;
+use utils::ThreadPool;
 
 //TODO: 1. handle errors with grace...
 //TODO: 2. Impl middlewear

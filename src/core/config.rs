@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use std::time::Duration;
-use http::*;
+use core::http::*;
 
 pub struct ServerConfig {
     pub pool_size: usize,
