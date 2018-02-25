@@ -5,9 +5,10 @@ use std::net::{TcpStream, Shutdown};
 use std::sync::{Arc, mpsc};
 use std::thread;
 use std::time::Duration;
-use config::ConnMetadata;
-use http::*;
-use router::*;
+
+use core::config::ConnMetadata;
+use core::http::{Request, Response, ResponseWriter, ResponseStates};
+use core::router::{REST, Route, RouteHandler};
 
 #[derive(PartialEq, Eq, Clone, Copy)]
 enum ParseError {
@@ -130,9 +131,9 @@ fn parse_request(request: &str) -> Option<Request> {
     let mut method = None;
     let mut uri = String::new();
     let mut scheme = HashMap::new();
-
     let mut cookie = HashMap::new();
     let mut header = HashMap::new();
+
     let mut body = Vec::new();
     let mut is_body = false;
 
@@ -159,7 +160,7 @@ fn parse_request(request: &str) -> Option<Request> {
 
             if !is_body {
                 let val = line.to_owned();
-                let header_info: Vec<&str> = val.splitn(2, ':').collect();
+                let header_info: Vec<&str> = val.trim().splitn(2, ':').collect();
 
                 if header_info.len() == 2 {
                     if header_info[0].trim().to_lowercase().eq("cookie") {
@@ -211,9 +212,8 @@ fn parse_request_base(line: String, tx: mpsc::Sender<RequestBase>) {
     let mut http_version = String::new();
     let mut scheme = HashMap::new();
 
-    let request_info: Vec<&str> = line.split_whitespace().collect();
-    for (num, info) in request_info.iter().enumerate() {
-        match num {
+    for (index, info) in line.split_whitespace().enumerate() {
+        match index {
             0 => {
                 method = match &info[..] {
                     "GET" => Some(REST::GET),
@@ -222,7 +222,7 @@ fn parse_request_base(line: String, tx: mpsc::Sender<RequestBase>) {
                     "DELETE" => Some(REST::DELETE),
                     "OPTIONS" => Some(REST::OPTIONS),
                     "" => None,
-                    _ => Some(REST::OTHER(request_info[0].to_lowercase().to_owned())),
+                    _ => Some(REST::OTHER(info.to_lowercase().to_owned())),
                 };
             },
             1 => {
@@ -234,9 +234,9 @@ fn parse_request_base(line: String, tx: mpsc::Sender<RequestBase>) {
                 }
             },
             2 => {
-                http_version.push_str(*info);
+                http_version.push_str(info);
             },
-            _ => { /* Shouldn't happen, do nothing for now */ },
+            _ => { break; },
         };
     }
 
@@ -318,15 +318,14 @@ fn cookie_parser(cookie_body: String, tx: mpsc::Sender<HashMap<String, String>>)
     if cookie_body.is_empty() { return; }
 
     let mut cookie = HashMap::new();
-    let cookie_pairs: Vec<&str> = cookie_body.split(";").collect();
-    let mut pair: Vec<&str>;
-
-    for set in cookie_pairs.into_iter() {
-        pair = set.trim().splitn(2, "=").collect();
+    for set in cookie_body.trim().split(";").into_iter() {
+        let pair: Vec<&str> = set.trim().splitn(2, "=").collect();
         if pair.len() == 2 {
-            cookie.entry(pair[0].trim().to_owned()).or_insert(pair[1].trim().to_owned());
+            cookie.entry(pair[0].trim().to_owned())
+                .or_insert(pair[1].trim().to_owned());
         } else if pair.len() > 0 {
-            cookie.entry(pair[0].trim().to_owned()).or_insert(String::new());
+            cookie.entry(pair[0].trim().to_owned())
+                .or_insert(String::new());
         }
     }
 
@@ -336,9 +335,7 @@ fn cookie_parser(cookie_body: String, tx: mpsc::Sender<HashMap<String, String>>)
 }
 
 fn scheme_parser(scheme: &str, scheme_collection: &mut HashMap<String, Vec<String>>) {
-    let schemes: Vec<&str> = scheme.trim().split("&").collect();
-
-    for kv_pair in schemes.into_iter() {
+    for (_, kv_pair) in scheme.trim().split("&").enumerate() {
         let store: Vec<&str> = kv_pair.trim().splitn(2, "=").collect();
         if store.len() > 0 {
             let key = store[0].trim();

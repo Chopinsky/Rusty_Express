@@ -7,7 +7,7 @@ use std::sync::mpsc;
 use std::thread;
 use std::time::Duration;
 use regex::Regex;
-use http::*;
+use core::http::{Request, Response, ResponseWriter, ResponseStates};
 
 #[derive(PartialEq, Eq, Hash, Clone)]
 pub enum REST {
@@ -72,7 +72,7 @@ impl RouteMap {
     pub fn insert(&mut self, uri: RequestPath, callback: Callback) {
         match uri {
             RequestPath::Explicit(req_uri) => {
-                if req_uri.is_empty() || !req_uri.starts_with("/") {
+                if req_uri.is_empty() || !req_uri.starts_with('/') {
                     panic!("Request path must have valid contents and start with '/'.");
                 }
 
@@ -83,36 +83,41 @@ impl RouteMap {
                     panic!("Request path must have valid contents.");
                 }
 
+                if self.wildcard.contains_key(req_uri) { return; }
+
                 if let Ok(re) = Regex::new(req_uri) {
                     let route = RegexRoute::new(re, callback);
                     self.wildcard.entry(req_uri.to_owned()).or_insert(route);
                 }
             },
             RequestPath::ExplicitWithParams(req_uri) => {
-                let path: Vec<&str> = req_uri.trim_matches('/').split('/').collect();
-                if !req_uri.starts_with('/') && path.is_empty() {
-                    panic!("Request path must have valid contents.");
+                if req_uri.starts_with('/') && req_uri.len() == 1 {
+                    self.explicit.entry(req_uri.to_owned()).or_insert(callback);
+                    return;
                 }
 
                 let mut raw_regex = String::new();
                 let mut params: Vec<String> = Vec::new();
 
-                for node in path {
-                    let n = node.trim();
+                for segment in req_uri.trim_left_matches('/').split('/').into_iter() {
+                    let seg_lean: &str = segment.trim();
+                    if seg_lean.is_empty() { continue; }
 
-                    if n.is_empty() { continue; }
-                    if n.starts_with(":") && n.len() > 1 {
-                        params.push((&n[1..]).to_owned());
+                    if seg_lean.starts_with(':') && seg_lean.len() > 1 {
+                        params.push((&seg_lean[1..]).to_owned());
                         raw_regex.push_str(r"/\w+");
                     } else {
-                        raw_regex.push_str(&format!("/{}", node));
+                        raw_regex.push_str(&format!("/{}", seg_lean));
                     }
                 }
 
-                let regex = format!(r"^{}/?$", raw_regex);
+                let reg_uri = format!(r"^{}$", raw_regex);
+                if self.explicit_with_params.contains_key(&reg_uri) { return; }
 
-                //TODO: recompile to set params and the regex
-                //self.explicit_with_params.push((path, callback));
+                if let Ok(re) = Regex::new(&reg_uri) {
+                    let route = RegexRoute::new(re, callback);
+                    self.explicit_with_params.entry(reg_uri.to_owned()).or_insert(route);
+                }
             },
         }
     }
@@ -121,6 +126,8 @@ impl RouteMap {
         if let Some(callback) = self.explicit.get(&uri) {
             return Some(*callback);
         }
+
+
 
         let (tx, rx) = mpsc::channel();
 
@@ -264,7 +271,7 @@ fn handle_request_worker(routes: &RouteMap, req: &Request, resp: &mut Response, 
         let mut redirect = resp.get_redirect_path();
         if !redirect.is_empty() {
             resp.redirect("");
-            if !redirect.starts_with("/") { redirect.insert(0, '/'); }
+            if !redirect.starts_with('/') { redirect.insert(0, '/'); }
 
             handle_request_worker(&routes, &req, resp, redirect.clone());
 
