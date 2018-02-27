@@ -9,15 +9,15 @@ use std::sync::{Arc, RwLock};
 use std::time::{Duration, SystemTime};
 use std::thread;
 use std::thread::*;
-use rand::Rng;
+use rand::{thread_rng, Rng};
 
 lazy_static! {
-    static ref STORE: Arc<RwLock<HashMap<u32, Session>>> = Arc::new(RwLock::new(HashMap::new()));
+    static ref STORE: Arc<RwLock<HashMap<String, Session>>> = Arc::new(RwLock::new(HashMap::new()));
     static ref DEFAULT_LIFETIME: Arc<RwLock<Duration>> = Arc::new(RwLock::new(Duration::new(172800, 0)));
 }
 
 pub struct Session {
-    id: u32,
+    id: String,
     expires_at: SystemTime,
     auto_renew: bool,
     store: HashMap<String, String>,
@@ -26,7 +26,7 @@ pub struct Session {
 impl Session {
     pub fn clone(&self) -> Self {
         Session {
-            id: self.id,
+            id: self.id.to_owned(),
             expires_at: self.expires_at.clone(),
             auto_renew: self.auto_renew,
             store: self.store.clone(),
@@ -35,7 +35,7 @@ impl Session {
 
     pub fn to_owned(&self) -> Self {
         Session {
-            id: self.id,
+            id: self.id.to_owned(),
             expires_at: self.expires_at.to_owned(),
             auto_renew: self.auto_renew,
             store: self.store.to_owned(),
@@ -44,10 +44,11 @@ impl Session {
 }
 
 pub trait SessionExchange {
-    fn new() -> Option<Session>;
-    fn from_id(id: u32) -> Option<Session>;
-    fn from_or_new(id: u32) -> Option<Session>;
-    fn release(id: u32);
+    fn initialize_new() -> Option<Session>;
+    fn initialize_new_with_id(id: &str) -> Option<Session>;
+    fn from_id(id: String) -> Option<Session>;
+    fn from_or_new(id: String) -> Option<Session>;
+    fn release(id: String);
     fn set_default_session_lifetime(lifetime: Duration);
     fn clean();
     fn clean_up_to(lifetime: SystemTime);
@@ -56,11 +57,15 @@ pub trait SessionExchange {
 }
 
 impl SessionExchange for Session {
-    fn new() -> Option<Self> {
-        new_session()
+    fn initialize_new() -> Option<Self> {
+        new_session("")
     }
 
-    fn from_id(id: u32) -> Option<Self> {
+    fn initialize_new_with_id(id: &str) -> Option<Self> {
+        new_session(id)
+    }
+
+    fn from_id(id: String) -> Option<Self> {
         if let Ok(store) = STORE.read() {
             if let Some(val) = store.get(&id) {
                 if val.expires_at.cmp(&SystemTime::now()) != Ordering::Less {
@@ -81,15 +86,15 @@ impl SessionExchange for Session {
         None
     }
 
-    fn from_or_new(id: u32) -> Option<Self> {
+    fn from_or_new(id: String) -> Option<Self> {
         if let Some(session) = Session::from_id(id) {
             Some(session)
         } else {
-            Session::new()
+            Session::initialize_new()
         }
     }
 
-    fn release(id: u32) {
+    fn release(id: String) {
         thread::spawn(move || {
             release(id);
         });
@@ -151,7 +156,7 @@ impl SessionExchange for Session {
 }
 
 pub trait SessionHandler {
-    fn get_id(&self) -> u32;
+    fn get_id(&self) -> String;
     fn get_value(&self, key: &str) -> Option<String>;
     fn set_value(&mut self, key: &str, val: &str) -> Option<String>;
     fn auto_lifetime_renew(&mut self, auto_renew: bool);
@@ -160,8 +165,8 @@ pub trait SessionHandler {
 }
 
 impl SessionHandler for Session {
-    fn get_id(&self) -> u32 {
-        self.id
+    fn get_id(&self) -> String {
+        self.id.to_owned()
     }
 
     fn get_value(&self, key: &str) -> Option<String> {
@@ -193,7 +198,7 @@ impl SessionHandler for Session {
     }
 
     fn save(&mut self) {
-        save(self.id, self);
+        save(self.id.to_owned(), self);
     }
 }
 
@@ -212,40 +217,73 @@ impl PersistHandler for Session {
     }
 }
 
-fn new_session() -> Option<Session> {
-    if let Ok(mut store) = STORE.write() {
-        let now = SystemTime::now();
-        let mut rng = rand::thread_rng();
-        let mut next_id = rng.gen::<u32>();
-
-        loop {
-            if !store.contains_key(&next_id) { break; }
-
-            if let Ok(elapsed) = now.elapsed() {
-                // 1 sec for get a good guess is already too expansive...
-                if elapsed.as_secs() > 1 { return None; }
-            }
-
-            // now take the next guess
-            next_id = rng.gen::<u32>();
-        }
-
-        let session = Session {
-            id: next_id,
-            expires_at: get_next_expiration(),
-            auto_renew: true,
-            store: HashMap::new(),
+fn new_session(id: &str) -> Option<Session> {
+    let next_id: String;
+    if id.is_empty() {
+        next_id = match gen_session_id(16) {
+            Some(val) => val,
+            None => String::new(),
         };
 
-        store.insert(next_id, session.to_owned());
-        Some(session)
+        if next_id.is_empty() { return None; }
+    } else {
+        next_id = id.to_owned();
+    }
 
+    let session = Session {
+        id: next_id,
+        expires_at: get_next_expiration(),
+        auto_renew: true,
+        store: HashMap::new(),
+    };
+
+    if let Ok(mut store) = STORE.write() {
+        //if key already exists, override to protect session scanning
+        store.insert(session.id.to_owned(), session.to_owned());
+        Some(session)
     } else {
         None
     }
 }
 
-fn save(id: u32, session: &mut Session) -> bool {
+fn gen_session_id(id_size: usize) -> Option<String> {
+    let size =
+        if id_size < 16 {
+            16
+        } else {
+            id_size
+        };
+
+    let mut next_id: String =
+        thread_rng().gen_ascii_chars().take(size).collect();
+
+    if let Ok(store) = STORE.read() {
+        let now = SystemTime::now();
+        let mut count = 1;
+
+        loop {
+            if !store.contains_key(&next_id) {
+                return Some(next_id);
+            }
+
+            if count % 32 == 0 {
+                count = 1;
+                if now.elapsed().unwrap() > Duration::from_millis(256) {
+                    // 256 milli-sec for get a good guess is already too expansive...
+                    return None;
+                }
+            }
+
+            // now take the next guess
+            next_id = thread_rng().gen_ascii_chars().take(32).collect();
+            count += 1;
+        }
+    }
+
+    None
+}
+
+fn save(id: String, session: &mut Session) -> bool {
     if let Ok(mut store) = STORE.write() {
         if session.auto_renew {
             session.expires_at = get_next_expiration();
@@ -268,7 +306,7 @@ fn get_next_expiration() -> SystemTime {
     }
 }
 
-fn release(id: u32) -> bool {
+fn release(id: String) -> bool {
     if let Ok(mut store) = STORE.write() {
         store.remove(&id);
     } else {
@@ -279,11 +317,11 @@ fn release(id: u32) -> bool {
 }
 
 fn clean_up_to(time: SystemTime) {
-    let mut stale_sessions: Vec<u32> = Vec::new();
+    let mut stale_sessions: Vec<String> = Vec::new();
     if let Ok(mut store) = STORE.write() {
         for session in store.values() {
             if session.expires_at.cmp(&time) != Ordering::Greater {
-                stale_sessions.push(session.id);
+                stale_sessions.push(session.id.to_owned());
             }
         }
 

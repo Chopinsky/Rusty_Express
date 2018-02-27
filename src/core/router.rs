@@ -1,4 +1,4 @@
-#![allow(dead_code)]
+#![allow(unused_imports)]
 #![allow(unused_variables)]
 
 use std::collections::HashMap;
@@ -8,6 +8,7 @@ use std::thread;
 use std::time::Duration;
 use regex::Regex;
 use core::http::{Request, Response, ResponseWriter, ResponseStates};
+use utils::RouteTrie;
 
 #[derive(PartialEq, Eq, Hash, Clone)]
 pub enum REST {
@@ -295,6 +296,7 @@ fn search_wildcard_router(router: &HashMap<String, RegexRoute>, uri: String, tx:
     match tx.send(result) { _ => { drop(tx); }}
 }
 
+/*
 struct RouteMatchWithParam {
     handler: Callback,
     params: HashMap<String, String>,
@@ -353,3 +355,4 @@ fn search_params_router2(router: &Vec<(Vec<&str>, Callback)>, uri: String, tx: m
 
     match tx.send(None) { _ => { drop(tx); }}
 }
+*/

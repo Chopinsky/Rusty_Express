@@ -65,10 +65,13 @@ pub struct RouteTrie {
 }
 
 impl RouteTrie {
-    #[inline]
     pub fn initialize() -> Self {
         RouteTrie {
             root: TrieNode::new("/", None, false),
         }
+    }
+
+    pub fn add(&mut self, segments: Vec<String>, callback: Callback) {
+        self.root.insert(segments, callback);
     }
 }
