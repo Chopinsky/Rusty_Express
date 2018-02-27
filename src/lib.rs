@@ -24,7 +24,7 @@ use std::time::Duration;
 use core::config::*;
 use core::connection::*;
 use core::session::*;
-use core::server_states::*;
+use core::states::*;
 use core::router::*;
 use utils::ThreadPool;
 
