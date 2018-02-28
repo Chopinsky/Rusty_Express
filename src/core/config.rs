@@ -1,6 +1,7 @@
 use std::collections::HashMap;
-use std::time::Duration;
+//use std::time::Duration;
 use core::helper::*;
+use chrono::Duration;
 
 pub struct ServerConfig {
     pub pool_size: usize,
@@ -18,7 +19,7 @@ impl ServerConfig {
             read_timeout: 8,
             write_timeout: 8,
             use_session: false,
-            session_auto_clean_period: Some(Duration::new(3600, 0)),
+            session_auto_clean_period: Some(Duration::seconds(3600)),
             meta_data: ConnMetadata::new(),
         }
     }

@@ -1,25 +1,37 @@
 #![allow(unused_variables)]
+#![allow(unused_mut)]
+#![allow(dead_code)]
+
 extern crate rand;
 
 use std::collections::HashMap;
 use std::cmp::Ordering;
+use std::fs::{File};
 use std::ops::*;
 use std::path::Path;
 use std::sync::{Arc, RwLock};
-use std::time::{Duration, SystemTime};
+use std::time;
 use std::thread;
 use std::thread::*;
+
+use chrono::prelude::*;
+use chrono::Duration;
 use rand::{thread_rng, Rng};
+
+static DELEM_LV_1: char = '\u{0005}';
+static DELEM_LV_2: char = '\u{0006}';
+static DELEM_LV_3: char = '\u{0007}';
+static DELEM_LV_4: char = '\u{0008}';
 
 lazy_static! {
     static ref STORE: Arc<RwLock<HashMap<String, Session>>> = Arc::new(RwLock::new(HashMap::new()));
-    static ref DEFAULT_LIFETIME: Arc<RwLock<Duration>> = Arc::new(RwLock::new(Duration::new(172800, 0)));
+    static ref DEFAULT_LIFETIME: Arc<RwLock<Duration>> = Arc::new(RwLock::new(Duration::seconds(172800)));
 }
 
 pub struct Session {
     id: String,
-    expires_at: SystemTime,
-    auto_renew: bool,
+    expires_at: DateTime<Utc>,
+    auto_renewal: bool,
     store: HashMap<String, String>,
 }
 
@@ -28,7 +40,7 @@ impl Session {
         Session {
             id: self.id.to_owned(),
             expires_at: self.expires_at.clone(),
-            auto_renew: self.auto_renew,
+            auto_renewal: self.auto_renewal,
             store: self.store.clone(),
         }
     }
@@ -37,9 +49,59 @@ impl Session {
         Session {
             id: self.id.to_owned(),
             expires_at: self.expires_at.to_owned(),
-            auto_renew: self.auto_renew,
+            auto_renewal: self.auto_renewal,
             store: self.store.to_owned(),
         }
+    }
+
+    fn serialize(&self) -> String {
+        let mut result = String::new();
+        if self.id.is_empty() { return result; }
+
+        let expires_at = self.expires_at.to_rfc3339();
+        result.push_str(&format!("{}{}", self.id.to_owned(), DELEM_LV_2));
+        result.push_str(&format!("{}{}", expires_at, DELEM_LV_2));
+        result.push_str(&format!("{}{}", self.auto_renewal.to_string(), DELEM_LV_2));
+
+        for (key, val) in self.store.iter() {
+            let entry = format!("{}{}{}", *key, DELEM_LV_4, *val);
+            result.push_str(&format!("{}{}", entry, DELEM_LV_3));
+        }
+
+        result
+    }
+
+    fn deserialize(raw: &str, default_expires: DateTime<Utc>) -> Option<Session> {
+        //TODO: if expired, skip
+        let mut id = String::new();
+        let mut expires_at = default_expires.clone();
+        let mut auto_renewal = false;
+        let mut store = HashMap::new();
+
+        for (index, field) in raw.trim().split(DELEM_LV_2).enumerate() {
+            match index {
+                0 => id = field.to_owned(),
+                1 => {
+                    if let Ok(parsed_expiration) = field.parse::<DateTime<Utc>>() {
+                        expires_at = parsed_expiration;
+                    }
+                },
+                2 => if field.eq("true") { auto_renewal = true; },
+                3 => parse_session_store(store.to_owned(), field),
+                _ => { break; },
+            }
+        }
+
+        if !id.is_empty() {
+            return Some(Session {
+                id,
+                expires_at,
+                auto_renewal,
+                store,
+            });
+        }
+
+        None
     }
 }
 
@@ -51,7 +113,7 @@ pub trait SessionExchange {
     fn release(id: String);
     fn set_default_session_lifetime(lifetime: Duration);
     fn clean();
-    fn clean_up_to(lifetime: SystemTime);
+    fn clean_up_to(lifetime: DateTime<Utc>);
     fn store_size() -> Option<usize>;
     fn start_auto_clean_queue(period: Duration) -> Thread;
 }
@@ -68,7 +130,7 @@ impl SessionExchange for Session {
     fn from_id(id: String) -> Option<Self> {
         if let Ok(store) = STORE.read() {
             if let Some(val) = store.get(&id) {
-                if val.expires_at.cmp(&SystemTime::now()) != Ordering::Less {
+                if val.expires_at.cmp(&Utc::now()) != Ordering::Less {
                     //found the session, return now
                     return Some(val.to_owned());
 
@@ -110,12 +172,12 @@ impl SessionExchange for Session {
 
     fn clean() {
         thread::spawn(move || {
-            clean_up_to(SystemTime::now());
+            clean_up_to(Utc::now());
         });
     }
 
-    fn clean_up_to(lifetime: SystemTime) {
-        let now = SystemTime::now();
+    fn clean_up_to(lifetime: DateTime<Utc>) {
+        let now = Utc::now();
         let time =
             if lifetime.cmp(&now) != Ordering::Greater {
                 now
@@ -138,16 +200,16 @@ impl SessionExchange for Session {
 
     fn start_auto_clean_queue(period: Duration) -> Thread {
         let sleep_period =
-            if period.cmp(&Duration::new(60, 0)) == Ordering::Less {
-                Duration::new(60, 0)
+            if period.cmp(&Duration::seconds(60)) == Ordering::Less {
+                time::Duration::from_secs(60)
             } else {
-                period
+                time::Duration::from_millis(period.num_milliseconds() as u64)
             };
 
         let handler: JoinHandle<_> = thread::spawn(move || {
             loop {
                 thread::sleep(sleep_period);
-                clean_up_to(SystemTime::now());
+                clean_up_to(Utc::now());
             }
         }, );
 
@@ -159,8 +221,8 @@ pub trait SessionHandler {
     fn get_id(&self) -> String;
     fn get_value(&self, key: &str) -> Option<String>;
     fn set_value(&mut self, key: &str, val: &str) -> Option<String>;
-    fn auto_lifetime_renew(&mut self, auto_renew: bool);
-    fn expires_at(&mut self, expires_at: SystemTime);
+    fn auto_lifetime_renew(&mut self, auto_renewal: bool);
+    fn expires_at(&mut self, expires_at: DateTime<Utc>);
     fn save(&mut self);
 }
 
@@ -183,15 +245,15 @@ impl SessionHandler for Session {
         self.store.insert(key.to_owned(), val.to_owned())
     }
 
-    fn auto_lifetime_renew(&mut self, auto_renew: bool) {
-        self.auto_renew = auto_renew;
+    fn auto_lifetime_renew(&mut self, auto_renewal: bool) {
+        self.auto_renewal = auto_renewal;
     }
 
     // Set the expires system time. This will turn off auto session life time
     // renew if it's set.
-    fn expires_at(&mut self, expires_time: SystemTime) {
-        if self.auto_renew {
-            self.auto_renew = false;
+    fn expires_at(&mut self, expires_time: DateTime<Utc>) {
+        if self.auto_renewal {
+            self.auto_renewal = false;
         }
 
         self.expires_at = expires_time;
@@ -214,6 +276,25 @@ impl PersistHandler for Session {
 
     fn to_file(&self, path: &Path) {
         //TODO: to file
+        let save_path = path.to_owned();
+        thread::spawn(move || {
+            let mut file: File =
+                if let Ok(dest_file) = File::create(&save_path) {
+                    dest_file
+                } else {
+                    // can't create file, abort saving
+                    return;
+                };
+
+            if let Ok(store) = STORE.read() {
+                let mut session: Vec<u8> = Vec::new();
+                for (_, val) in store.iter() {
+
+                }
+
+                //match file.write_all() {}
+            }
+        });
     }
 }
 
@@ -233,7 +314,7 @@ fn new_session(id: &str) -> Option<Session> {
     let session = Session {
         id: next_id,
         expires_at: get_next_expiration(),
-        auto_renew: true,
+        auto_renewal: true,
         store: HashMap::new(),
     };
 
@@ -258,7 +339,7 @@ fn gen_session_id(id_size: usize) -> Option<String> {
         thread_rng().gen_ascii_chars().take(size).collect();
 
     if let Ok(store) = STORE.read() {
-        let now = SystemTime::now();
+        let begin = Utc::now();
         let mut count = 1;
 
         loop {
@@ -268,7 +349,7 @@ fn gen_session_id(id_size: usize) -> Option<String> {
 
             if count % 32 == 0 {
                 count = 1;
-                if now.elapsed().unwrap() > Duration::from_millis(256) {
+                if Utc::now().signed_duration_since(begin).cmp(&Duration::milliseconds(256)) == Ordering::Greater {
                     // 256 milli-sec for get a good guess is already too expansive...
                     return None;
                 }
@@ -285,7 +366,7 @@ fn gen_session_id(id_size: usize) -> Option<String> {
 
 fn save(id: String, session: &mut Session) -> bool {
     if let Ok(mut store) = STORE.write() {
-        if session.auto_renew {
+        if session.auto_renewal {
             session.expires_at = get_next_expiration();
         }
 
@@ -298,11 +379,11 @@ fn save(id: String, session: &mut Session) -> bool {
     }
 }
 
-fn get_next_expiration() -> SystemTime {
+fn get_next_expiration() -> DateTime<Utc> {
     if let Ok(default_lifetime) = DEFAULT_LIFETIME.read() {
-        SystemTime::now().add(*default_lifetime)
+        Utc::now().add(*default_lifetime)
     } else {
-        SystemTime::now().add(Duration::new(172800, 0))
+        Utc::now().add(Duration::seconds(172800))
     }
 }
 
@@ -316,7 +397,7 @@ fn release(id: String) -> bool {
     true
 }
 
-fn clean_up_to(time: SystemTime) {
+fn clean_up_to(time: DateTime<Utc>) {
     let mut stale_sessions: Vec<String> = Vec::new();
     if let Ok(mut store) = STORE.write() {
         for session in store.values() {
@@ -333,4 +414,17 @@ fn clean_up_to(time: SystemTime) {
     }
 
     println!("Session clean done!");
+}
+
+fn parse_session_store(mut store: HashMap<String, String>, field: &str) {
+    if field.is_empty() { return; }
+
+    for (_, entry) in field.trim().split(DELEM_LV_3).enumerate() {
+        if let Some(pos) = entry.find(DELEM_LV_4) {
+            let (key, value): (&str, &str) = entry.split_at(pos);
+            if !key.is_empty() {
+                store.entry(key.to_owned()).or_insert(value.to_owned());
+            }
+        }
+    }
 }

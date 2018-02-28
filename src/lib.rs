@@ -5,15 +5,15 @@ extern crate chrono;
 extern crate rand;
 
 mod core;
-mod utils;
+mod support;
 
 pub mod prelude {
     pub use {HttpServer, ServerDef};
     pub use core::config::*;
     pub use core::cookie::*;
-    pub use core::session::*;
     pub use core::http::{Request, Response, ResponseStates, ResponseWriter};
     pub use core::router::{REST, Route, Router, RequestPath};
+    pub use support::session::*;
 }
 
 use std::collections::HashMap;
@@ -23,10 +23,10 @@ use std::time::Duration;
 
 use core::config::*;
 use core::connection::*;
-use core::session::*;
-use core::states::*;
 use core::router::*;
-use utils::ThreadPool;
+use core::states::*;
+use support::session::*;
+use support::ThreadPool;
 
 //TODO: 1. handle errors with grace...
 //TODO: 2. Impl middlewear
@@ -109,7 +109,7 @@ pub trait ServerDef {
     fn set_write_timeout(&mut self, timeout: u8);
     fn def_default_response_header(&mut self, header: HashMap<String, String>);
     fn set_default_response_header(&mut self, field: String, value: String);
-    fn enable_session_auto_clean(&mut self, auto_clean_period: Duration);
+    fn enable_session_auto_clean(&mut self, auto_clean_period: chrono::Duration);
     fn disable_session_auto_clean(&mut self);
 }
 
@@ -138,7 +138,7 @@ impl ServerDef for HttpServer {
         self.config.set_default_header(field, value, true);
     }
 
-    fn enable_session_auto_clean(&mut self, auto_clean_period: Duration) {
+    fn enable_session_auto_clean(&mut self, auto_clean_period: chrono::Duration) {
         self.config.enable_session_auto_clean(auto_clean_period);
     }
 

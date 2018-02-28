@@ -7,7 +7,7 @@ use std::thread;
 use std::time::Duration;
 
 use core::config::ConnMetadata;
-use core::http::{Request, Response, ResponseWriter, ResponseStates};
+use core::http::{Request, Response, ResponseStates, ResponseWriter};
 use core::router::{REST, Route, RouteHandler};
 
 #[derive(PartialEq, Eq, Clone, Copy)]

@@ -6,9 +6,10 @@ use std::cmp::Ordering;
 use std::sync::mpsc;
 use std::thread;
 use std::time::Duration;
+
+use core::http::{Request, Response, ResponseStates, ResponseWriter};
 use regex::Regex;
-use core::http::{Request, Response, ResponseWriter, ResponseStates};
-use utils::RouteTrie;
+use support::RouteTrie;
 
 #[derive(PartialEq, Eq, Hash, Clone)]
 pub enum REST {
