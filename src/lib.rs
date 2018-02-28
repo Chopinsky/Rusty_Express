@@ -109,7 +109,7 @@ pub trait ServerDef {
     fn set_write_timeout(&mut self, timeout: u8);
     fn def_default_response_header(&mut self, header: HashMap<String, String>);
     fn set_default_response_header(&mut self, field: String, value: String);
-    fn enable_session_auto_clean(&mut self, auto_clean_period: chrono::Duration);
+    fn enable_session_auto_clean(&mut self, auto_clean_period: Duration);
     fn disable_session_auto_clean(&mut self);
 }
 
@@ -138,7 +138,7 @@ impl ServerDef for HttpServer {
         self.config.set_default_header(field, value, true);
     }
 
-    fn enable_session_auto_clean(&mut self, auto_clean_period: chrono::Duration) {
+    fn enable_session_auto_clean(&mut self, auto_clean_period: Duration) {
         self.config.enable_session_auto_clean(auto_clean_period);
     }
 

@@ -1,14 +1,16 @@
 use std::collections::HashMap;
-//use std::time::Duration;
+use std::time::Duration;
+
+use chrono;
 use core::helper::*;
-use chrono::Duration;
+use support::helper::*;
 
 pub struct ServerConfig {
     pub pool_size: usize,
     pub read_timeout: u8,
     pub write_timeout: u8,
     pub use_session: bool,
-    session_auto_clean_period: Option<Duration>,
+    session_auto_clean_period: Option<chrono::Duration>,
     meta_data: ConnMetadata,
 }
 
@@ -19,7 +21,7 @@ impl ServerConfig {
             read_timeout: 8,
             write_timeout: 8,
             use_session: false,
-            session_auto_clean_period: Some(Duration::seconds(3600)),
+            session_auto_clean_period: Some(chrono::Duration::seconds(3600)),
             meta_data: ConnMetadata::new(),
         }
     }
@@ -37,7 +39,7 @@ impl ServerConfig {
     }
 
     pub fn enable_session_auto_clean(&mut self, auto_clean_period: Duration) {
-        self.session_auto_clean_period = Some(auto_clean_period);
+        self.session_auto_clean_period = from_std_duration(auto_clean_period);
     }
 
     pub fn disable_session_auto_clean(&mut self) {
@@ -45,7 +47,10 @@ impl ServerConfig {
     }
 
     pub fn get_session_auto_clean_period(&self) -> Option<Duration> {
-        self.session_auto_clean_period
+        match self.session_auto_clean_period {
+            Some(period) => to_std_duration(period),
+            _ => None,
+        }
     }
 }
 

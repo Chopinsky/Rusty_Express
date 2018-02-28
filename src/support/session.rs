@@ -10,12 +10,12 @@ use std::fs::{File};
 use std::ops::*;
 use std::path::Path;
 use std::sync::{Arc, RwLock};
-use std::time;
+use std::time::{Duration, SystemTime};
 use std::thread;
 use std::thread::*;
 
 use chrono::prelude::*;
-use chrono::Duration;
+use chrono;
 use rand::{thread_rng, Rng};
 
 static DELEM_LV_1: char = '\u{0005}';
@@ -25,12 +25,12 @@ static DELEM_LV_4: char = '\u{0008}';
 
 lazy_static! {
     static ref STORE: Arc<RwLock<HashMap<String, Session>>> = Arc::new(RwLock::new(HashMap::new()));
-    static ref DEFAULT_LIFETIME: Arc<RwLock<Duration>> = Arc::new(RwLock::new(Duration::seconds(172800)));
+    static ref DEFAULT_LIFETIME: Arc<RwLock<Duration>> = Arc::new(RwLock::new(Duration::from_secs(172800)));
 }
 
 pub struct Session {
     id: String,
-    expires_at: DateTime<Utc>,
+    expires_at: chrono::DateTime<Utc>,
     auto_renewal: bool,
     store: HashMap<String, String>,
 }
@@ -71,8 +71,7 @@ impl Session {
         result
     }
 
-    fn deserialize(raw: &str, default_expires: DateTime<Utc>) -> Option<Session> {
-        //TODO: if expired, skip
+    fn deserialize(raw: &str, default_expires: DateTime<Utc>, now: chrono::DateTime<Utc>) -> Option<Session> {
         let mut id = String::new();
         let mut expires_at = default_expires.clone();
         let mut auto_renewal = false;
@@ -80,10 +79,17 @@ impl Session {
 
         for (index, field) in raw.trim().split(DELEM_LV_2).enumerate() {
             match index {
-                0 => id = field.to_owned(),
+                0 => {
+                    id = field.to_owned();
+                    if id.is_empty() { return None; }
+                },
                 1 => {
                     if let Ok(parsed_expiration) = field.parse::<DateTime<Utc>>() {
                         expires_at = parsed_expiration;
+                        if expires_at.cmp(&now) == Ordering::Less {
+                            //already expired, return null
+                            return None;
+                        }
                     }
                 },
                 2 => if field.eq("true") { auto_renewal = true; },
@@ -92,16 +98,12 @@ impl Session {
             }
         }
 
-        if !id.is_empty() {
-            return Some(Session {
-                id,
-                expires_at,
-                auto_renewal,
-                store,
-            });
-        }
-
-        None
+        return Some(Session {
+            id,
+            expires_at,
+            auto_renewal,
+            store,
+        });
     }
 }
 
@@ -200,10 +202,10 @@ impl SessionExchange for Session {
 
     fn start_auto_clean_queue(period: Duration) -> Thread {
         let sleep_period =
-            if period.cmp(&Duration::seconds(60)) == Ordering::Less {
-                time::Duration::from_secs(60)
+            if period.cmp(&Duration::from_secs(60)) == Ordering::Less {
+                Duration::from_secs(60)
             } else {
-                time::Duration::from_millis(period.num_milliseconds() as u64)
+                period
             };
 
         let handler: JoinHandle<_> = thread::spawn(move || {
@@ -339,7 +341,7 @@ fn gen_session_id(id_size: usize) -> Option<String> {
         thread_rng().gen_ascii_chars().take(size).collect();
 
     if let Ok(store) = STORE.read() {
-        let begin = Utc::now();
+        let begin = SystemTime::now();
         let mut count = 1;
 
         loop {
@@ -349,7 +351,7 @@ fn gen_session_id(id_size: usize) -> Option<String> {
 
             if count % 32 == 0 {
                 count = 1;
-                if Utc::now().signed_duration_since(begin).cmp(&Duration::milliseconds(256)) == Ordering::Greater {
+                if SystemTime::now().sub(Duration::from_millis(256)) > begin {
                     // 256 milli-sec for get a good guess is already too expansive...
                     return None;
                 }
@@ -379,12 +381,14 @@ fn save(id: String, session: &mut Session) -> bool {
     }
 }
 
-fn get_next_expiration() -> DateTime<Utc> {
+fn get_next_expiration() -> chrono::DateTime<Utc> {
     if let Ok(default_lifetime) = DEFAULT_LIFETIME.read() {
-        Utc::now().add(*default_lifetime)
-    } else {
-        Utc::now().add(Duration::seconds(172800))
+        if let Ok(life_time) = chrono::Duration::from_std(*default_lifetime) {
+            return Utc::now().add(life_time);
+        }
     }
+
+    Utc::now().add(chrono::Duration::seconds(172800))
 }
 
 fn release(id: String) -> bool {
@@ -426,5 +430,17 @@ fn parse_session_store(mut store: HashMap<String, String>, field: &str) {
                 store.entry(key.to_owned()).or_insert(value.to_owned());
             }
         }
+    }
+}
+
+pub fn to_std_duration(duration: chrono::Duration) -> Option<Duration> {
+    Some(Duration::from_millis(duration.num_milliseconds() as u64))
+}
+
+pub fn from_std_duration(duration: Duration) -> Option<chrono::Duration> {
+    if let Ok(period) = chrono::Duration::from_std(duration) {
+        Some(period)
+    } else {
+        None
     }
 }
