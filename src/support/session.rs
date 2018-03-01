@@ -1,22 +1,21 @@
 #![allow(unused_variables)]
-#![allow(unused_mut)]
 #![allow(dead_code)]
-
-extern crate rand;
 
 use std::collections::HashMap;
 use std::cmp::Ordering;
 use std::fs::{File};
+use std::io::{Read, Write};
 use std::ops::*;
 use std::path::Path;
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, RwLock, mpsc};
 use std::time::{Duration, SystemTime};
 use std::thread;
 use std::thread::*;
 
-use chrono::prelude::*;
 use chrono;
+use chrono::prelude::*;
 use rand::{thread_rng, Rng};
+use support::ThreadPool;
 
 static DELEM_LV_1: char = '\u{0005}';
 static DELEM_LV_2: char = '\u{0006}';
@@ -72,6 +71,8 @@ impl Session {
     }
 
     fn deserialize(raw: &str, default_expires: DateTime<Utc>, now: chrono::DateTime<Utc>) -> Option<Session> {
+        if raw.is_empty() { return None; }
+
         let mut id = String::new();
         let mut expires_at = default_expires.clone();
         let mut auto_renewal = false;
@@ -93,7 +94,7 @@ impl Session {
                     }
                 },
                 2 => if field.eq("true") { auto_renewal = true; },
-                3 => parse_session_store(store.to_owned(), field),
+                3 => parse_session_store(&mut store, field),
                 _ => { break; },
             }
         }
@@ -267,20 +268,64 @@ impl SessionHandler for Session {
 }
 
 pub trait PersistHandler {
-    fn from_file(path: &Path);
-    fn to_file(&self, path: &Path);
+    fn init_from_file(path: &Path) -> bool;
+    fn save_to_file(path: &Path);
 }
 
 impl PersistHandler for Session {
-    fn from_file(path: &Path) {
-        //TODO: from file
+    //TODO:allow decreptor
+    fn init_from_file(path: &Path) -> bool {
+        let mut file =
+            if let Ok(dest_file) = File::open(&path) {
+                dest_file
+            } else {
+                // can't read the file, abort saving
+                eprintln!("Unable to open the session store file, please check if the file exists.");
+                return false;
+            };
+
+        let mut raw_sessions = String::new();
+        if let Err(e) = file.read_to_string(&mut raw_sessions) {
+            eprintln!("Unable to read from the session store file, please check if file data are still valid.");
+            return false;
+        }
+
+        let pool = ThreadPool::new(8);
+        let (tx, rx): (mpsc::Sender<Option<Session>>, mpsc::Receiver<Option<Session>>) = mpsc::channel();
+
+        let now = Utc::now();
+        let default_expires = get_next_expiration();
+
+        for session in raw_sessions.trim().split(DELEM_LV_1).into_iter() {
+            if session.is_empty() { continue; }
+
+            let tx_clone = mpsc::Sender::clone(&tx);
+            let s: String = session.to_owned();
+
+            pool.execute(move || {
+                recreate_session_from_raw(s, &now, &default_expires, tx_clone);
+            });
+        }
+
+        drop(tx);
+
+        if let Ok(mut store) = STORE.write() {
+            for received in rx {
+                if let Some(session) = received {
+                    let id: String = session.id.to_owned();
+                    store.entry(id).or_insert(session);  //if a key collision, always keep the early entry.
+                }
+            }
+        }
+
+        true
     }
 
-    fn to_file(&self, path: &Path) {
-        //TODO: to file
+    //TODO:allow encryptor
+    fn save_to_file(path: &Path) {
         let save_path = path.to_owned();
         thread::spawn(move || {
-            let mut file: File =
+            let mut file =
                 if let Ok(dest_file) = File::create(&save_path) {
                     dest_file
                 } else {
@@ -290,11 +335,27 @@ impl PersistHandler for Session {
 
             if let Ok(store) = STORE.read() {
                 let mut session: Vec<u8> = Vec::new();
-                for (_, val) in store.iter() {
+                let mut count: u8 = 0;
 
+                for (_, val) in store.iter() {
+                    let s = format!("{}{}", val.serialize(), DELEM_LV_1);
+
+                    if s.is_empty() { continue; }
+                    if let Err(_) = file.write(s.as_bytes()) { continue; }
+
+                    count += 1;
+                    if count % 32 == 0 {
+                        if let Err(_) = file.flush() {
+                            eprintln!("Failed to flush the session store to the file store!");
+                        }
+
+                        count = 0;
+                    }
                 }
 
-                //match file.write_all() {}
+                if let Err(e) = file.sync_all() {
+                    eprintln!("Unable to sync all session data to the file store.");
+                }
             }
         });
     }
@@ -420,7 +481,7 @@ fn clean_up_to(time: DateTime<Utc>) {
     println!("Session clean done!");
 }
 
-fn parse_session_store(mut store: HashMap<String, String>, field: &str) {
+fn parse_session_store(store: &mut HashMap<String, String>, field: &str) {
     if field.is_empty() { return; }
 
     for (_, entry) in field.trim().split(DELEM_LV_3).enumerate() {
@@ -433,14 +494,11 @@ fn parse_session_store(mut store: HashMap<String, String>, field: &str) {
     }
 }
 
-pub fn to_std_duration(duration: chrono::Duration) -> Option<Duration> {
-    Some(Duration::from_millis(duration.num_milliseconds() as u64))
-}
+fn recreate_session_from_raw(raw: String, now: &DateTime<Utc>, expires_at: &DateTime<Utc>, tx: mpsc::Sender<Option<Session>>) {
+    let result =
+        Session::deserialize(&raw[..], expires_at.to_owned(), now.to_owned());
 
-pub fn from_std_duration(duration: Duration) -> Option<chrono::Duration> {
-    if let Ok(period) = chrono::Duration::from_std(duration) {
-        Some(period)
-    } else {
-        None
+    if let Err(e) = tx.send(result) {
+        println!("Unable to parse base request: {:?}", e);
     }
 }

@@ -5,6 +5,6 @@ pub mod http;
 pub mod router;
 pub mod states;
 
-mod helper {
+mod common {
     pub use core::http::set_header;
 }

@@ -21,7 +21,7 @@ use std::net::{SocketAddr, TcpListener};
 use std::sync::Arc;
 use std::time::Duration;
 
-use core::config::*;
+use core::config::ServerConfig;
 use core::connection::*;
 use core::router::*;
 use core::states::*;
