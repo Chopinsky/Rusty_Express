@@ -9,7 +9,7 @@ pub struct ServerConfig {
     pub pool_size: usize,
     pub read_timeout: u8,
     pub write_timeout: u8,
-    pub use_session: bool,
+    pub use_session_autoclean: bool,
     session_auto_clean_period: Option<chrono::Duration>,
     meta_data: ConnMetadata,
 }
@@ -20,7 +20,7 @@ impl ServerConfig {
             pool_size: 8,
             read_timeout: 8,
             write_timeout: 8,
-            use_session: false,
+            use_session_autoclean: false,
             session_auto_clean_period: Some(chrono::Duration::seconds(3600)),
             meta_data: ConnMetadata::new(),
         }
@@ -38,17 +38,17 @@ impl ServerConfig {
         set_header(&mut self.meta_data.header, field, value, replace);
     }
 
-    pub fn enable_session_auto_clean(&mut self, auto_clean_period: Duration) {
-        self.session_auto_clean_period = from_std_duration(auto_clean_period);
+    pub fn set_session_auto_clean(&mut self, auto_clean_period: Duration) {
+        self.session_auto_clean_period = std_to_chrono(auto_clean_period);
     }
 
-    pub fn disable_session_auto_clean(&mut self) {
+    pub fn reset_session_auto_clean(&mut self) {
         self.session_auto_clean_period = None;
     }
 
     pub fn get_session_auto_clean_period(&self) -> Option<Duration> {
         match self.session_auto_clean_period {
-            Some(period) => to_std_duration(period),
+            Some(period) => chrono_to_std(period),
             _ => None,
         }
     }

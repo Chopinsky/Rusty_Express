@@ -139,11 +139,11 @@ impl ServerDef for HttpServer {
     }
 
     fn enable_session_auto_clean(&mut self, auto_clean_period: Duration) {
-        self.config.enable_session_auto_clean(auto_clean_period);
+        self.config.set_session_auto_clean(auto_clean_period);
     }
 
     fn disable_session_auto_clean(&mut self) {
-        self.config.disable_session_auto_clean();
+        self.config.reset_session_auto_clean();
     }
 }
 
@@ -159,9 +159,9 @@ fn start_with(listener: &TcpListener,
     let meta_data = Arc::new(config.get_meta_data());
     let router = Arc::new(router.to_owned());
 
-    if config.use_session {
+    if config.use_session_autoclean && !Session::auto_clean_is_running() {
         if let Some(duration) = config.get_session_auto_clean_period() {
-            let handler = Session::start_auto_clean_queue(duration);
+            let handler = Session::auto_clean_start(duration);
             server_states.set_session_handler(&handler);
         }
     }

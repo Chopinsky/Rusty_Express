@@ -1,10 +1,8 @@
-#![allow(unused_variables)]
-#![allow(dead_code)]
 
 use std::collections::HashMap;
 use std::cmp::Ordering;
-use std::fs::{File};
-use std::io::{Read, Write};
+use std::fs::File;
+use std::io::{BufRead, BufReader, Write};
 use std::ops::*;
 use std::path::Path;
 use std::sync::{Arc, RwLock, mpsc};
@@ -25,6 +23,7 @@ static DELEM_LV_4: char = '\u{0008}';
 lazy_static! {
     static ref STORE: Arc<RwLock<HashMap<String, Session>>> = Arc::new(RwLock::new(HashMap::new()));
     static ref DEFAULT_LIFETIME: Arc<RwLock<Duration>> = Arc::new(RwLock::new(Duration::from_secs(172800)));
+    static ref AUTO_CLEARN: Arc<RwLock<bool>> = Arc::new(RwLock::new(false));
 }
 
 pub struct Session {
@@ -118,7 +117,9 @@ pub trait SessionExchange {
     fn clean();
     fn clean_up_to(lifetime: DateTime<Utc>);
     fn store_size() -> Option<usize>;
-    fn start_auto_clean_queue(period: Duration) -> Thread;
+    fn auto_clean_start(period: Duration) -> Thread;
+    fn auto_clean_has_stopped();
+    fn auto_clean_is_running() -> bool;
 }
 
 impl SessionExchange for Session {
@@ -201,7 +202,7 @@ impl SessionExchange for Session {
         }
     }
 
-    fn start_auto_clean_queue(period: Duration) -> Thread {
+    fn auto_clean_start(period: Duration) -> Thread {
         let sleep_period =
             if period.cmp(&Duration::from_secs(60)) == Ordering::Less {
                 Duration::from_secs(60)
@@ -210,13 +211,34 @@ impl SessionExchange for Session {
             };
 
         let handler: JoinHandle<_> = thread::spawn(move || {
+            if let Ok(mut auto_clean) = AUTO_CLEARN.write() {
+                *auto_clean = true;
+            }
+
             loop {
                 thread::sleep(sleep_period);
                 clean_up_to(Utc::now());
             }
-        }, );
+        });
 
         handler.thread().to_owned()
+    }
+
+    fn auto_clean_has_stopped() {
+        thread::spawn(move || {
+            if let Ok(mut auto_clean) = AUTO_CLEARN.write() {
+                *auto_clean = false;
+            }
+        });
+    }
+
+    fn auto_clean_is_running() -> bool {
+        if let Ok(auto_clean) = AUTO_CLEARN.read() {
+            return *auto_clean;
+        }
+
+        return false;
+
     }
 }
 
@@ -273,22 +295,17 @@ pub trait PersistHandler {
 }
 
 impl PersistHandler for Session {
+
     //TODO:allow decreptor
     fn init_from_file(path: &Path) -> bool {
-        let mut file =
+        let mut buf_reader =
             if let Ok(dest_file) = File::open(&path) {
-                dest_file
+                BufReader::new(dest_file)
             } else {
                 // can't read the file, abort saving
                 eprintln!("Unable to open the session store file, please check if the file exists.");
                 return false;
             };
-
-        let mut raw_sessions = String::new();
-        if let Err(e) = file.read_to_string(&mut raw_sessions) {
-            eprintln!("Unable to read from the session store file, please check if file data are still valid.");
-            return false;
-        }
 
         let pool = ThreadPool::new(8);
         let (tx, rx): (mpsc::Sender<Option<Session>>, mpsc::Receiver<Option<Session>>) = mpsc::channel();
@@ -296,15 +313,27 @@ impl PersistHandler for Session {
         let now = Utc::now();
         let default_expires = get_next_expiration();
 
-        for session in raw_sessions.trim().split(DELEM_LV_1).into_iter() {
-            if session.is_empty() { continue; }
+        let mut failures: u8 = 0;
+        loop {
+            let mut buf: Vec<u8> = Vec::new();
+            if let Ok(size) = buf_reader.read_until(DELEM_LV_1 as u8, &mut buf) {
+                if size == 0 { break; }
 
-            let tx_clone = mpsc::Sender::clone(&tx);
-            let s: String = session.to_owned();
+                buf.pop();
+                if let Ok(session) = String::from_utf8(buf) {
+                    if session.is_empty() { continue; }
 
-            pool.execute(move || {
-                recreate_session_from_raw(s, &now, &default_expires, tx_clone);
-            });
+                    let tx_clone = mpsc::Sender::clone(&tx);
+                    pool.execute(move || {
+                        recreate_session_from_raw(session, &now, &default_expires, tx_clone);
+                    });
+                }
+            } else {
+                failures += 1;
+                if failures > 5 {
+                    break;
+                }
+            }
         }
 
         drop(tx);
@@ -324,7 +353,7 @@ impl PersistHandler for Session {
     //TODO:allow encryptor
     fn save_to_file(path: &Path) {
         let save_path = path.to_owned();
-        thread::spawn(move || {
+        let handler = thread::spawn(move || {
             let mut file =
                 if let Ok(dest_file) = File::create(&save_path) {
                     dest_file
@@ -334,9 +363,7 @@ impl PersistHandler for Session {
                 };
 
             if let Ok(store) = STORE.read() {
-                let mut session: Vec<u8> = Vec::new();
                 let mut count: u8 = 0;
-
                 for (_, val) in store.iter() {
                     let s = format!("{}{}", val.serialize(), DELEM_LV_1);
 
@@ -345,8 +372,8 @@ impl PersistHandler for Session {
 
                     count += 1;
                     if count % 32 == 0 {
-                        if let Err(_) = file.flush() {
-                            eprintln!("Failed to flush the session store to the file store!");
+                        if let Err(e) = file.flush() {
+                            eprintln!("Failed to flush the session store to the file store: {}", e);
                         }
 
                         count = 0;
@@ -354,10 +381,13 @@ impl PersistHandler for Session {
                 }
 
                 if let Err(e) = file.sync_all() {
-                    eprintln!("Unable to sync all session data to the file store.");
+                    eprintln!("Unable to sync all session data to the file store: {}", e);
                 }
             }
         });
+
+        //make sure saving is finished
+        handler.join().unwrap();
     }
 }
 
