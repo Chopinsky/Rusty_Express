@@ -12,6 +12,8 @@ use std::time::Duration;
 use chrono::prelude::*;
 use core::cookie::*;
 use core::router::REST;
+use std::io::BufWriter;
+use std::net::{TcpStream};
 
 static FOUR_OH_FOUR: &'static str = include_str!("../default/404.html");
 static FIVE_HUNDRED: &'static str = include_str!("../default/500.html");
@@ -118,10 +120,6 @@ impl Response {
     //TODO: impl get_header public for consumers use
 
     fn resp_header(&self, ignore_body: bool) -> Box<String> {
-
-        let mut header = Box::new(String::new());
-        let mut header_misc = String::new();
-
         let status = self.status.to_owned();
         let has_contents = self.has_contents().to_owned();
         let (tx_status, rx_status) = mpsc::channel();
@@ -145,13 +143,13 @@ impl Response {
         }
 
         // other header field-value pairs
-        let header_set = self.header.clone();
+        let header_set = self.header.to_owned();
         thread::spawn(move || {
             // tx_header has been moved in, no need to drop specifically
             write_headers(header_set, tx);
         });
 
-        header_misc.push_str(&format!("Server: Rusty-Express/{}\r\n", VERSION));
+        let mut header_misc = format!("Server: Rusty-Express/{}\r\n", VERSION);
 
         if !self.content_type.is_empty() {
             header_misc.push_str(&format!("Content-Type: {}\r\n", self.content_type));
@@ -170,16 +168,13 @@ impl Response {
             }
         }
 
-        let mut status_ok = false;
+        let mut header = Box::new(String::new());
         if let Ok(status) = rx_status.recv_timeout(Duration::from_millis(200)) {
             if !status.is_empty() {
                 header.push_str(&status);
-                status_ok = true;
+            } else {
+                return Box::new(String::from("500 Internal Server Error\r\n\r\n"));
             }
-        }
-
-        if !status_ok {
-            return Box::new(String::from("500 Internal Server Error\r\n\r\n"));
         }
 
         for received in rx {
@@ -203,8 +198,8 @@ pub trait ResponseStates {
     fn get_redirect_path(&self) -> String;
     fn status_is_set(&self) -> bool;
     fn has_contents(&self) -> bool;
-    fn serialize_header(&self, ignore_body: bool) -> Box<String>;
-    fn serialize_body(&self) -> Box<String>;
+    fn serialize_header(&self, buffer: &mut BufWriter<TcpStream>, ignore_body: bool);
+    fn serialize_body(&self, buffer: &mut BufWriter<TcpStream>);
 }
 
 impl ResponseStates for Response {
@@ -227,22 +222,29 @@ impl ResponseStates for Response {
         (!self.body.is_empty() && self.body.len() > 0)
     }
 
-    fn serialize_header(&self, ignore_body: bool) -> Box<String> {
-        self.resp_header(ignore_body)
+    fn serialize_header(&self, buffer: &mut BufWriter<TcpStream>, ignore_body: bool) {
+        if let Err(e) = buffer.write(self.resp_header(ignore_body).as_bytes()) {
+            eprintln!("An error has taken place when writing the response header to the stream: {}", e);
+        }
     }
 
-    fn serialize_body(&self) -> Box<String> {
+    fn serialize_body(&self, buffer: &mut BufWriter<TcpStream>) {
         if self.has_contents() {
             //content has been explicitly set, use them
-            self.body.to_owned()
-        } else if self.status == 404 || self.status == 500 {
-            //explicit error status
-            Box::new(get_default_page(self.status))
-        } else if self.status == 0 {
-            //implicit error status
-            Box::new(get_default_page(404))
+            if let Err(e) = buffer.write(self.body.as_bytes()) {
+                eprintln!("An error has taken place when writing the response header to the stream: {}", e);
+            }
         } else {
-            Box::new(String::new())
+            match self.status {
+                //explicit error status
+                0 | 404 => get_default_page(buffer, 404),
+                500 => get_default_page(buffer, 500),
+                _ => { /* Nothing */ },
+            };
+
+//            if let Err(e) = buffer.write(default.as_bytes()) {
+//                eprintln!("An error has taken place when writing the response header to the stream: {}", e);
+//            }
         }
     }
 }
@@ -360,13 +362,13 @@ impl ResponseWriter for Response {
             if let Some(file_path) = fallback.get(&404) {
                 read_from_file(Path::new(file_path), &mut self.body);
             } else {
-                self.body.push_str(FOUR_OH_FOUR);
+                self.body = Box::new(FOUR_OH_FOUR.to_owned());
             }
         } else {
             if let Some(file_path) = fallback.get(&500) {
                 read_from_file(Path::new(file_path), &mut self.body);
             } else {
-                self.body.push_str(FIVE_HUNDRED);
+                self.body = Box::new(FIVE_HUNDRED.to_owned());
             }
         }
     }
@@ -403,20 +405,20 @@ pub fn set_header(header: &mut HashMap<String, String>, field: String, value: St
     }
 }
 
-fn get_default_page(status: u16) -> String {
+fn get_default_page(buffer: &mut BufWriter<TcpStream>, status: u16) {
     match status {
         500 => {
             /* return default 500 page */
-            String::from(FIVE_HUNDRED)
-        },
-        404 => {
-            /* return default/override 404 page */
-            String::from(FOUR_OH_FOUR)
+            if let Err(e) = buffer.write(FIVE_HUNDRED.as_bytes()) {
+                eprintln!("An error has taken place when writing the response body to the stream: {}", e);
+            }
         },
         _ => {
-            /* return 404 page for now */
-            String::from(FOUR_OH_FOUR)
-        }
+            /* return default/override 404 page */
+            if let Err(e) = buffer.write(FOUR_OH_FOUR.as_bytes()) {
+                eprintln!("An error has taken place when writing the response body to the stream: {}", e);
+            }
+        },
     }
 }
 

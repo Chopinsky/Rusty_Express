@@ -70,17 +70,9 @@ pub fn handle_connection(
 
 fn write_to_stream(stream: TcpStream, response: Response, ignore_body: bool) -> Option<u8> {
     let mut buffer = BufWriter::new(stream);
-    if let Err(e) = buffer.write(response.serialize_header(ignore_body).as_bytes()) {
-        println!("An error has taken place when writing the response header to the stream: {}", e);
-        return Some(1);
-    }
 
-    if !ignore_body {
-        if let Err(e) = buffer.write(response.serialize_body().as_bytes()) {
-            println!("An error has taken place when writing the response body to the stream: {}", e);
-            return Some(1);
-        }
-    }
+    response.serialize_header(&mut buffer, ignore_body);
+    if !ignore_body { response.serialize_body(&mut buffer); }
 
     if let Err(e) = buffer.flush() {
         println!("An error has taken place when flushing the response to the stream: {}", e);
