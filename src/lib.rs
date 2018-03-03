@@ -11,14 +11,14 @@ pub mod prelude {
     pub use {HttpServer, ServerDef};
     pub use core::config::*;
     pub use core::cookie::*;
-    pub use core::http::{Request, Response, ResponseStates, ResponseWriter};
+    pub use core::http::{Request, RequestWriter, Response, ResponseStates, ResponseWriter};
     pub use core::router::{REST, Route, Router, RequestPath};
     pub use core::states::{StatesProvider, StatesInteraction};
     pub use support::session::*;
 }
 
 use std::collections::HashMap;
-use std::net::{SocketAddr, TcpListener};
+use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -165,26 +165,12 @@ fn start_with<T: Send + Sync + Clone + StatesProvider + 'static>(
             if has_states_to_manage {
                 let states_ptr = Arc::clone(&states_arc);
                 pool.execute(move || {
-                    if let Err(e) = s.set_read_timeout(read_timeout) {
-                        eprintln!("Unable to set read timeout: {}", e);
-                    }
-
-                    if let Err(e) = s.set_write_timeout(write_timeout) {
-                        eprintln!("Unable to set write timeout: {}", e);
-                    }
-
+                    set_timeout(&s, read_timeout, write_timeout);
                     handle_connection_with_states(s, stream_router, conn_handler, states_ptr);
                 });
             } else {
                 pool.execute(move || {
-                    if let Err(e) = s.set_read_timeout(read_timeout) {
-                        eprintln!("Unable to set read timeout: {}", e);
-                    }
-
-                    if let Err(e) = s.set_write_timeout(write_timeout) {
-                        eprintln!("Unable to set write timeout: {}", e);
-                    }
-
+                    set_timeout(&s, read_timeout, write_timeout);
                     handle_connection(s, stream_router, conn_handler);
                 });
             }
@@ -193,6 +179,16 @@ fn start_with<T: Send + Sync + Clone + StatesProvider + 'static>(
         if server_states.is_terminating() {
             return;
         }
+    }
+}
+
+fn set_timeout(stream: &TcpStream, read: Option<Duration>, write: Option<Duration>) {
+    if let Err(e) = stream.set_read_timeout(read) {
+        eprintln!("Unable to set read timeout: {}", e);
+    }
+
+    if let Err(e) = stream.set_write_timeout(write) {
+        eprintln!("Unable to set write timeout: {}", e);
     }
 }
 

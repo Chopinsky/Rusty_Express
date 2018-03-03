@@ -22,14 +22,14 @@ static VERSION: &'static str = "0.2.8";
 pub struct Request {
     pub method: Option<REST>,
     pub uri: String,
-    scheme: HashMap<String, Vec<String>>,
     cookie: HashMap<String, String>,
+    scheme: HashMap<String, Vec<String>>,
     header: HashMap<String, String>,
     body: Vec<String>,
 }
 
 impl Request {
-    pub fn build_from(
+    pub fn build(
         method: Option<REST>,
         uri: String,
         scheme: HashMap<String, Vec<String>>,
@@ -44,6 +44,17 @@ impl Request {
             scheme,
             header,
             body,
+        }
+    }
+
+    pub fn new() -> Self {
+        Request {
+            method: None,
+            uri: String::new(),
+            cookie: HashMap::new(),
+            scheme: HashMap::new(),
+            header: HashMap::new(),
+            body: Vec::new(),
         }
     }
 
@@ -79,6 +90,41 @@ impl Request {
             Some(value) => Some(value.to_owned()),
             None => None,
         }
+    }
+}
+
+pub trait RequestWriter {
+    fn write_header(&mut self, key: &str, val: &str, allow_override: bool);
+    fn write_scheme(&mut self, key: &str, val: Vec<String>, allow_override: bool);
+    fn create_scheme(&mut self, scheme: HashMap<String, Vec<String>>);
+    fn set_cookie(&mut self, key: &str, val: &str, allow_override: bool);
+    fn create_cookie(&mut self, cookie: HashMap<String, String>);
+    fn extend_body(&mut self, content: &str);
+}
+
+impl RequestWriter for Request {
+    fn write_header(&mut self, key: &str, val: &str, allow_override: bool) {
+        set_header(&mut self.header, key.to_owned(), val.to_owned(), allow_override);
+    }
+
+    fn write_scheme(&mut self, key: &str, val: Vec<String>, allow_override: bool) {
+        set_header(&mut self.scheme, key.to_owned(), val.to_owned(), allow_override);
+    }
+
+    fn create_scheme(&mut self, scheme: HashMap<String, Vec<String>>) {
+        self.scheme = scheme;
+    }
+
+    fn set_cookie(&mut self, key: &str, val: &str, allow_override: bool) {
+        set_header(&mut self.cookie, key.to_owned(), val.to_owned(), allow_override);
+    }
+
+    fn create_cookie(&mut self, cookie: HashMap<String, String>) {
+        self.cookie = cookie;
+    }
+
+    fn extend_body(&mut self, content: &str) {
+        self.body.push(content.to_owned());
     }
 }
 
@@ -284,8 +330,10 @@ impl ResponseWriter for Response {
             "content-type" => {
                 self.content_type = value.to_owned();
             },
-            _ => set_header(&mut self.header, field.to_owned(), value.to_owned(), replace),
-        }
+            _ => {
+                set_header(&mut self.header, field.to_owned(), value.to_owned(), replace);
+            },
+        };
     }
 
     fn send(&mut self, content: &str) {
@@ -388,20 +436,17 @@ impl ResponseWriter for Response {
     }
 }
 
-pub fn set_header(header: &mut HashMap<String, String>, field: String, value: String, replace: bool) {
-    if field.is_empty() || value.is_empty() { return; }
+pub fn set_header<T>(header: &mut HashMap<String, T>, field: String, value: T, allow_override: bool) -> Option<T> {
+    if field.is_empty() { return None; }
 
     let f = field.to_lowercase();
-    if !header.contains_key(&f) {
+    if allow_override {
         //new field, insert
-        header.insert(f, value);
-    } else if let Some(store) = header.get_mut(&f) {
+        header.insert(f, value)
+    } else {
         //existing field, replace existing value or append depending on the parameter
-        if replace {
-            *store = value;
-        } else {
-            *store = format!("{}; {}", store, value);
-        }
+        header.entry(f).or_insert(value);
+        None
     }
 }
 

@@ -71,8 +71,8 @@ impl ConnMetadata {
         self.header.to_owned()
     }
 
-    pub fn get_default_pages(&self) -> HashMap<u16, String> {
-        self.default_pages.to_owned()
+    pub fn get_default_pages(&self) -> &HashMap<u16, String> {
+        &self.default_pages
     }
 }
 

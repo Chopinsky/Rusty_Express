@@ -10,13 +10,14 @@ use std::time::Duration;
 
 use core::config::ConnMetadata;
 use core::states::StatesProvider;
-use core::http::{Request, Response, ResponseStates, ResponseWriter};
+use core::http::{Request, RequestWriter, Response, ResponseStates, ResponseWriter};
 use core::router::{REST, Route, RouteHandler};
 
 #[derive(PartialEq, Eq, Clone, Copy)]
 enum ParseError {
     EmptyRequestErr,
     ReadStreamErr,
+    WriteStreamErr,
 }
 
 struct RequestBase {
@@ -30,72 +31,32 @@ pub fn handle_connection_with_states<T: Send + Sync + Clone + StatesProvider>(
         stream: TcpStream,
         router: Arc<Route>,
         conn_handler: Arc<ConnMetadata>,
-        states: Arc<Mutex<T>>
-    ) -> Option<u8> {
+        states: Arc<Mutex<T>>) -> Option<u8> {
 
-    let request: Request;
-    match read_request(&stream) {
-        Ok(req) => {
-            request = req;
-        },
-        Err(ParseError::ReadStreamErr) => {
-            //can't read from the stream, no need to write back...
-            stream.shutdown(Shutdown::Both).unwrap();
-            return None;
-        },
-        Err(ParseError::EmptyRequestErr) => {
-            println!("Error on parsing request");
-            return write_to_stream(stream,
-                                   build_default_response(&conn_handler.get_default_pages()),
-                                   false);
-        },
+    let mut request = Request::new();
+    if let Some(err) = request_handler(&stream, &mut request) {
+        eprintln!("Error on parsing request");
+        return write_to_stream(stream, build_err_response(&err,conn_handler.get_default_pages()), false);
     }
 
-    match handle_request_with_fallback(&request, &router,
-                                       &conn_handler.get_default_header(),
-                                       &conn_handler.get_default_pages()) {
-        Ok(response) => {
-            let ignore_body =
-                match request.method {
-                    Some(REST::OTHER(other_method)) => other_method.eq("head"),
-                    _ => false,
-                };
-
-            return write_to_stream(stream, response, ignore_body);
-        },
-        Err(e) => {
-            println!("Error on generating response -- {}", e);
-            return write_to_stream(stream,
-                                   build_default_response(&conn_handler.get_default_pages()),
-                                   false);
-        },
-    }
+    response_handler(stream, request, router, conn_handler)
 }
 
 pub fn handle_connection(
     stream: TcpStream,
     router: Arc<Route>,
-    conn_handler: Arc<ConnMetadata>
-) -> Option<u8> {
+    conn_handler: Arc<ConnMetadata>) -> Option<u8> {
 
-    let request: Request;
-    match read_request(&stream) {
-        Ok(req) => {
-            request = req;
-        },
-        Err(ParseError::ReadStreamErr) => {
-            //can't read from the stream, no need to write back...
-            stream.shutdown(Shutdown::Both).unwrap();
-            return None;
-        },
-        Err(ParseError::EmptyRequestErr) => {
-            println!("Error on parsing request");
-            return write_to_stream(stream,
-                                   build_default_response(&conn_handler.get_default_pages()),
-                                   false);
-        },
+    let mut request= Request::new();
+    if let Some(err) = request_handler(&stream, &mut request) {
+        eprintln!("Error on parsing request");
+        return write_to_stream(stream, build_err_response(&err,conn_handler.get_default_pages()), false);
     }
 
+    response_handler(stream, request, router, conn_handler)
+}
+
+fn response_handler(stream: TcpStream, request: Request, router: Arc<Route>, conn_handler: Arc<ConnMetadata>) -> Option<u8> {
     match handle_request_with_fallback(&request, &router,
                                        &conn_handler.get_default_header(),
                                        &conn_handler.get_default_pages()) {
@@ -111,7 +72,7 @@ pub fn handle_connection(
         Err(e) => {
             println!("Error on generating response -- {}", e);
             return write_to_stream(stream,
-                                   build_default_response(&conn_handler.get_default_pages()),
+                                   build_err_response(&ParseError::WriteStreamErr, conn_handler.get_default_pages()),
                                    false);
         },
     }
@@ -141,46 +102,36 @@ fn write_to_stream(stream: TcpStream, response: Response, ignore_body: bool) -> 
     return Some(1);
 }
 
-fn read_request(mut stream: &TcpStream) -> Result<Request, ParseError> {
+fn request_handler(mut stream: &TcpStream, request: &mut Request) -> Option<ParseError> {
     let mut buffer = [0; 512];
-    let result: Result<Request, ParseError>;
 
     if let Ok(_) = stream.read(&mut buffer) {
-        let request = String::from_utf8_lossy(&buffer[..]);
-        if request.is_empty() {
-            return Err(ParseError::EmptyRequestErr);
+        let request_raw = String::from_utf8_lossy(&buffer[..]);
+        if request_raw.is_empty() {
+            return Some(ParseError::EmptyRequestErr);
         }
 
-        result = match parse_request(&request) {
-            Some(request_info) => Ok(request_info),
-            None => Err(ParseError::EmptyRequestErr),
-        };
+        if !parse_request(&request_raw, request) {
+            Some(ParseError::EmptyRequestErr)
+        } else {
+            None
+        }
     } else {
-        result = Err(ParseError::ReadStreamErr);
+        Some(ParseError::ReadStreamErr)
     }
-
-    result
 }
 
-fn parse_request(request: &str) -> Option<Request> {
+fn parse_request(request: &str, store: &mut Request) -> bool {
     if request.is_empty() {
-        return None;
+        return false;
     }
 
     //println!("{}", request);
 
-    let mut method = None;
-    let mut uri = String::new();
-    let mut scheme = HashMap::new();
-    let mut cookie = HashMap::new();
-    let mut header = HashMap::new();
-
-    let mut body = Vec::new();
-    let mut is_body = false;
-
     let (tx_base, rx_base) = mpsc::channel();
     let (tx_cookie, rx_cookie) = mpsc::channel();
 
+    let mut is_body = false;
     for (num, line) in request.trim().lines().enumerate() {
         if num == 0 {
             if line.is_empty() { continue; }
@@ -213,15 +164,15 @@ fn parse_request(request: &str) -> Option<Request> {
                         });
 
                     } else {
-                        header.insert(
-                            String::from(header_info[0].trim().to_lowercase()),
-                            String::from(header_info[1].trim())
+                        store.write_header(
+                            &header_info[0].trim().to_lowercase(),
+                            header_info[1].trim(),
+                            true
                         );
                     }
                 }
             } else {
-                body.push(line.to_owned());
-                body.push(String::from("\r\n"));  //keep the line break
+                store.extend_body(line);
             }
         }
     }
@@ -234,17 +185,18 @@ fn parse_request(request: &str) -> Option<Request> {
     drop(tx_cookie);
 
     if let Ok(base) = rx_base.recv_timeout(Duration::from_millis(200)) {
-        method = base.method;
-        uri = base.uri;
-        scheme = base.scheme;
-        header.entry(String::from("http_version")).or_insert(base.http_version);
+        store.method = base.method;
+        store.uri = base.uri;
+        store.create_scheme(base.scheme);
+        store.write_header("http_version", &base.http_version, true);
     }
 
     if let Ok(cookie_set) = rx_cookie.recv_timeout(Duration::from_millis(200)) {
-        cookie = cookie_set;
+        store.create_cookie(cookie_set);
     }
 
-    Some(Request::build_from(method, uri, scheme, cookie, header, body))
+    //Some(Request::build_from(method, uri, scheme, cookie, header, body))
+    true
 }
 
 fn parse_request_base(line: String, tx: mpsc::Sender<RequestBase>) {
@@ -398,10 +350,14 @@ fn scheme_parser(scheme: &str, scheme_collection: &mut HashMap<String, Vec<Strin
     }
 }
 
-fn build_default_response(default_pages: &HashMap<u16, String>) -> Response {
+fn build_err_response(err: &ParseError, default_pages: &HashMap<u16, String>) -> Response {
     let mut resp = Response::new();
+    let status: u16 = match err {
+        &ParseError::WriteStreamErr | &ParseError::ReadStreamErr => 500,
+        _ => 404,
+    };
 
-    resp.status(500);
+    resp.status(status);
     resp.check_and_update(&default_pages);
 
     resp

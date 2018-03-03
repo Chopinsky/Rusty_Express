@@ -17,21 +17,22 @@ fn main() {
     router.get(RequestPath::Explicit("/index"), Model::simple_index);
 
     server.def_router(router);
+
     //server.listen(8080);
     server.listen_and_manage(8080, model);
 }
 
 struct Model {
-    pub data: i32
+    pub count: i32
 }
 
 impl Model  {
     pub fn new(d: i32) -> Self {
-        Model { data: d }
+        Model { count: d }
     }
 
     pub fn set_data(&mut self, val: i32) {
-        self.data = val;
+        self.count = val;
     }
 
     pub fn simple_response(_req: &Request, resp: &mut Response) {
@@ -47,7 +48,7 @@ impl Model  {
 impl Clone for Model {
     fn clone(&self) -> Self {
         Model {
-            data: self.data.clone(),
+            count: self.count.clone(),
         }
     }
 }
