@@ -4,13 +4,13 @@ use std::collections::HashMap;
 use std::io::prelude::*;
 use std::io::BufWriter;
 use std::net::{TcpStream, Shutdown};
-use std::sync::{Arc, Mutex, mpsc};
+use std::sync::{Arc, RwLock, mpsc};
 use std::thread;
 use std::time::Duration;
 
 use core::config::ConnMetadata;
 use core::states::StatesProvider;
-use core::http::{Request, RequestWriter, Response, ResponseStates, ResponseWriter};
+use core::http::{Request, RequestWriter, Response, ResponseStates, ResponseWriter, ResponseStreamer};
 use core::router::{REST, Route, RouteHandler};
 
 #[derive(PartialEq, Eq, Clone, Copy)]
@@ -30,36 +30,40 @@ struct RequestBase {
 pub fn handle_connection_with_states<T: Send + Sync + Clone + StatesProvider>(
         stream: TcpStream,
         router: Arc<Route>,
-        conn_handler: Arc<ConnMetadata>,
-        states: Arc<Mutex<T>>) -> Option<u8> {
+        metadata: Arc<ConnMetadata>,
+        states: Arc<RwLock<T>>) -> Option<u8> {
 
     let mut request = Request::new();
-    if let Some(err) = request_handler(&stream, &mut request) {
+    if let Some(err) = handle_request(&stream, &mut request) {
         eprintln!("Error on parsing request");
-        return write_to_stream(stream, build_err_response(&err,conn_handler.get_default_pages()), false);
+        return write_to_stream(stream,
+                               build_err_response(&err,metadata.get_default_pages()),
+                               false);
     }
 
-    response_handler(stream, request, router, conn_handler)
+    handle_response(stream, request, router, metadata)
 }
 
 pub fn handle_connection(
-    stream: TcpStream,
-    router: Arc<Route>,
-    conn_handler: Arc<ConnMetadata>) -> Option<u8> {
+        stream: TcpStream,
+        router: Arc<Route>,
+        conn_handler: Arc<ConnMetadata>) -> Option<u8> {
 
     let mut request= Request::new();
-    if let Some(err) = request_handler(&stream, &mut request) {
+    if let Some(err) = handle_request(&stream, &mut request) {
         eprintln!("Error on parsing request");
-        return write_to_stream(stream, build_err_response(&err,conn_handler.get_default_pages()), false);
+        return write_to_stream(stream,
+                               build_err_response(&err,conn_handler.get_default_pages()),
+                               false);
     }
 
-    response_handler(stream, request, router, conn_handler)
+    handle_response(stream, request, router, conn_handler)
 }
 
-fn response_handler(stream: TcpStream, request: Request, router: Arc<Route>, conn_handler: Arc<ConnMetadata>) -> Option<u8> {
-    match handle_request_with_fallback(&request, &router,
-                                       &conn_handler.get_default_header(),
-                                       &conn_handler.get_default_pages()) {
+fn handle_response(stream: TcpStream, request: Request, router: Arc<Route>, conn_handler: Arc<ConnMetadata>) -> Option<u8> {
+    match get_response_with_fallback(&request, &router,
+                                     &conn_handler.get_default_header(),
+                                     &conn_handler.get_default_pages()) {
         Ok(response) => {
             let ignore_body =
                 match request.method {
@@ -102,7 +106,7 @@ fn write_to_stream(stream: TcpStream, response: Response, ignore_body: bool) -> 
     return Some(1);
 }
 
-fn request_handler(mut stream: &TcpStream, request: &mut Request) -> Option<ParseError> {
+fn handle_request(mut stream: &TcpStream, request: &mut Request) -> Option<ParseError> {
     let mut buffer = [0; 512];
 
     if let Ok(_) = stream.read(&mut buffer) {
@@ -243,7 +247,7 @@ fn parse_request_base(line: String, tx: mpsc::Sender<RequestBase>) {
     }
 }
 
-fn handle_request_with_fallback(
+fn get_response_with_fallback(
         request_info: &Request,
         router: &Route,
         header: &HashMap<String, String>,
@@ -303,10 +307,10 @@ fn split_path(full_uri: &str) -> (String, String) {
     }
 }
 
-// Cookie parser will parse the request header's cookie field into a hash-map, where the
-// field is the key of the map, which map to a single value of the key from the Cookie
-// header field. Assuming no duplicate cookie keys, or the first cookie key-value pair
-// will be stored.
+/// Cookie parser will parse the request header's cookie field into a hash-map, where the
+/// field is the key of the map, which map to a single value of the key from the Cookie
+/// header field. Assuming no duplicate cookie keys, or the first cookie key-value pair
+/// will be stored.
 fn cookie_parser(cookie_body: String, tx: mpsc::Sender<HashMap<String, String>>) { //cookie: &mut HashMap<String, String>) {
     if cookie_body.is_empty() { return; }
 

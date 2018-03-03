@@ -3,6 +3,7 @@ use std::time::Duration;
 
 use chrono;
 use core::common::*;
+use core::states::StatesInteraction;
 use support::common::*;
 
 pub struct ServerConfig {
@@ -26,8 +27,14 @@ impl ServerConfig {
         }
     }
 
+    #[inline]
     pub fn get_meta_data(&self) -> ConnMetadata {
         self.meta_data.to_owned()
+    }
+
+    #[inline]
+    pub fn set_managed_state_interaction(&mut self, interaction: StatesInteraction) {
+        self.meta_data.set_state_interaction(interaction);
     }
 
     pub fn use_default_header(&mut self, header: &HashMap<String, String>) {
@@ -42,6 +49,7 @@ impl ServerConfig {
         self.session_auto_clean_period = std_to_chrono(auto_clean_period);
     }
 
+    #[inline]
     pub fn reset_session_auto_clean(&mut self) {
         self.session_auto_clean_period = None;
     }
@@ -57,6 +65,7 @@ impl ServerConfig {
 pub struct ConnMetadata {
     header: HashMap<String, String>,
     default_pages: HashMap<u16, String>,
+    state_interaction: StatesInteraction,
 }
 
 impl ConnMetadata {
@@ -64,15 +73,28 @@ impl ConnMetadata {
         ConnMetadata {
             header: HashMap::new(),
             default_pages: HashMap::new(),
+            state_interaction: StatesInteraction::None,
         }
     }
 
+    #[inline]
     pub fn get_default_header(&self) -> HashMap<String, String> {
         self.header.to_owned()
     }
 
+    #[inline]
     pub fn get_default_pages(&self) -> &HashMap<u16, String> {
         &self.default_pages
+    }
+
+    #[inline]
+    pub fn set_state_interaction(&mut self, interaction: StatesInteraction) {
+        self.state_interaction = interaction;
+    }
+
+    #[inline]
+    pub fn get_state_interaction(&self) -> &StatesInteraction {
+        &self.state_interaction
     }
 }
 
@@ -81,6 +103,7 @@ impl Clone for ConnMetadata {
         ConnMetadata {
             header: self.header.clone(),
             default_pages: self.default_pages.clone(),
+            state_interaction: self.state_interaction.clone(),
         }
     }
 }

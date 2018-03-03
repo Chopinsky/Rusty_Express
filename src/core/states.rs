@@ -36,6 +36,7 @@ impl ServerStates {
     }
 }
 
+#[derive(PartialEq, Eq, Clone, Copy)]
 pub enum StatesInteraction {
     WithRequest,
     WithResponse,

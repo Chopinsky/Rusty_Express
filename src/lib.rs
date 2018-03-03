@@ -19,7 +19,7 @@ pub mod prelude {
 
 use std::collections::HashMap;
 use std::net::{SocketAddr, TcpListener, TcpStream};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
 use core::config::ServerConfig;
@@ -137,19 +137,22 @@ fn start_with<T: Send + Sync + Clone + StatesProvider + 'static>(
     let read_timeout = Some(Duration::new(config.read_timeout as u64, 0));
     let write_timeout = Some(Duration::new(config.write_timeout as u64, 0));
 
-    let meta_data = Arc::new(config.get_meta_data());
-    let router = Arc::new(router.to_owned());
-
-    let states_arc = Arc::new(Mutex::new(managed_states.to_owned()));
+    let states_arc = Arc::new(RwLock::new(managed_states.to_owned()));
     let has_states_to_manage =
         match managed_states.interaction_stage() {
             StatesInteraction::None => false,
             _ => true
         };
 
+    let mut meta_data = config.get_meta_data();
+    meta_data.set_state_interaction(managed_states.interaction_stage());
+
+    let meta_arc = Arc::new(meta_data);
+    let router = Arc::new(router.to_owned());
+
     for stream in listener.incoming() {
 
-/*
+/*        Test: generate new Sessions
 //        if let Some(mut session) = Session::new() {
 //            session.expires_at(SystemTime::now().add(Duration::new(5, 0)));
 //            session.save();
@@ -159,19 +162,19 @@ fn start_with<T: Send + Sync + Clone + StatesProvider + 'static>(
 
         if let Ok(s) = stream {
             // clone Arc-pointers
-            let stream_router = Arc::clone(&router);
-            let conn_handler = Arc::clone(&meta_data);
+            let router_ptr = Arc::clone(&router);
+            let meta_ptr = Arc::clone(&meta_arc);
 
             if has_states_to_manage {
                 let states_ptr = Arc::clone(&states_arc);
                 pool.execute(move || {
                     set_timeout(&s, read_timeout, write_timeout);
-                    handle_connection_with_states(s, stream_router, conn_handler, states_ptr);
+                    handle_connection_with_states(s, router_ptr, meta_ptr, states_ptr);
                 });
             } else {
                 pool.execute(move || {
                     set_timeout(&s, read_timeout, write_timeout);
-                    handle_connection(s, stream_router, conn_handler);
+                    handle_connection(s, router_ptr, meta_ptr);
                 });
             }
         }

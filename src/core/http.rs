@@ -3,17 +3,17 @@
 use std::collections::HashMap;
 use std::collections::hash_map::Iter;
 use std::fs::File;
-use std::io::BufReader;
+use std::io::{BufReader, BufWriter};
 use std::io::prelude::*;
+use std::net::{TcpStream};
 use std::path::Path;
 use std::sync::mpsc;
 use std::thread;
 use std::time::Duration;
+
 use chrono::prelude::*;
 use core::cookie::*;
 use core::router::REST;
-use std::io::BufWriter;
-use std::net::{TcpStream};
 
 static FOUR_OH_FOUR: &'static str = include_str!("../default/404.html");
 static FIVE_HUNDRED: &'static str = include_str!("../default/500.html");
@@ -163,8 +163,6 @@ impl Response {
         }
     }
 
-    //TODO: impl get_header public for consumers use
-
     fn resp_header(&self, ignore_body: bool) -> Box<String> {
         let status = self.status.to_owned();
         let has_contents = self.has_contents().to_owned();
@@ -242,19 +240,31 @@ impl Response {
 pub trait ResponseStates {
     fn to_close_connection(&self) -> bool;
     fn get_redirect_path(&self) -> String;
+    fn get_header(&self, key: &str) -> Option<&String>;
+    fn get_cookie(&self, key: &str) -> Option<&Cookie>;
     fn status_is_set(&self) -> bool;
     fn has_contents(&self) -> bool;
-    fn serialize_header(&self, buffer: &mut BufWriter<TcpStream>, ignore_body: bool);
-    fn serialize_body(&self, buffer: &mut BufWriter<TcpStream>);
 }
 
 impl ResponseStates for Response {
+    #[inline]
     fn to_close_connection(&self) -> bool {
         self.to_close
     }
 
+    #[inline]
     fn get_redirect_path(&self) -> String {
         self.redirect.to_owned()
+    }
+
+    #[inline]
+    fn get_header(&self, key: &str) -> Option<&String> {
+        self.header.get(key)
+    }
+
+    #[inline]
+    fn get_cookie(&self, key: &str) -> Option<&Cookie> {
+        self.cookie.get(key)
     }
 
     fn status_is_set(&self) -> bool {
@@ -264,34 +274,9 @@ impl ResponseStates for Response {
         }
     }
 
+    #[inline]
     fn has_contents(&self) -> bool {
         (!self.body.is_empty() && self.body.len() > 0)
-    }
-
-    fn serialize_header(&self, buffer: &mut BufWriter<TcpStream>, ignore_body: bool) {
-        if let Err(e) = buffer.write(self.resp_header(ignore_body).as_bytes()) {
-            eprintln!("An error has taken place when writing the response header to the stream: {}", e);
-        }
-    }
-
-    fn serialize_body(&self, buffer: &mut BufWriter<TcpStream>) {
-        if self.has_contents() {
-            //content has been explicitly set, use them
-            if let Err(e) = buffer.write(self.body.as_bytes()) {
-                eprintln!("An error has taken place when writing the response header to the stream: {}", e);
-            }
-        } else {
-            match self.status {
-                //explicit error status
-                0 | 404 => get_default_page(buffer, 404),
-                500 => get_default_page(buffer, 500),
-                _ => { /* Nothing */ },
-            };
-
-//            if let Err(e) = buffer.write(default.as_bytes()) {
-//                eprintln!("An error has taken place when writing the response header to the stream: {}", e);
-//            }
-        }
     }
 }
 
@@ -433,6 +418,35 @@ impl ResponseWriter for Response {
     /// still hack the redirection link via Javascript)!
     fn redirect(&mut self, path: &str) {
         self.redirect = path.to_owned();
+    }
+}
+
+pub trait ResponseStreamer {
+    fn serialize_header(&self, buffer: &mut BufWriter<TcpStream>, ignore_body: bool);
+    fn serialize_body(&self, buffer: &mut BufWriter<TcpStream>);
+}
+
+impl ResponseStreamer for Response {
+    fn serialize_header(&self, buffer: &mut BufWriter<TcpStream>, ignore_body: bool) {
+        if let Err(e) = buffer.write(self.resp_header(ignore_body).as_bytes()) {
+            eprintln!("An error has taken place when writing the response header to the stream: {}", e);
+        }
+    }
+
+    fn serialize_body(&self, buffer: &mut BufWriter<TcpStream>) {
+        if self.has_contents() {
+            //content has been explicitly set, use them
+            if let Err(e) = buffer.write(self.body.as_bytes()) {
+                eprintln!("An error has taken place when writing the response header to the stream: {}", e);
+            }
+        } else {
+            match self.status {
+                //explicit error status
+                0 | 404 => get_default_page(buffer, 404),
+                500 => get_default_page(buffer, 500),
+                _ => { /* Nothing */ },
+            };
+        }
     }
 }
 
