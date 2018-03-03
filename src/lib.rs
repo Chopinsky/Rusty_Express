@@ -13,6 +13,7 @@ pub mod prelude {
     pub use core::cookie::*;
     pub use core::http::{Request, Response, ResponseStates, ResponseWriter};
     pub use core::router::{REST, Route, Router, RequestPath};
+    pub use core::states::{StatesProvider, StatesInteraction};
     pub use support::session::*;
 }
 
@@ -31,20 +32,18 @@ use support::ThreadPool;
 //TODO: 1. handle errors with grace...
 //TODO: 2. Impl middlewear
 
-pub struct HttpServer<T: Send + Sync + Clone + 'static> {
+pub struct HttpServer {
     router: Route,
     config: ServerConfig,
     states: ServerStates,
-    managed: ManagedStates<T>,
 }
 
-impl<T: Send + Sync + Clone + 'static> HttpServer<T> {
+impl HttpServer {
     pub fn new() -> Self {
         HttpServer {
             router: Route::new(),
             config: ServerConfig::new(),
             states: ServerStates::new(),
-            managed: ManagedStates::new(),
         }
     }
 
@@ -53,15 +52,14 @@ impl<T: Send + Sync + Clone + 'static> HttpServer<T> {
             router: Route::new(),
             config,
             states: ServerStates::new(),
-            managed: ManagedStates::new(),
         }
     }
 
-    pub fn manage(&mut self, key: &str, state: T) {
-        self.managed.add_state(key.to_owned(), state);
+    pub fn listen(&mut self, port: u16) {
+        self.listen_and_manage(port, EmptyState {});
     }
 
-    pub fn listen(&mut self, port: u16) {
+    pub fn listen_and_manage<T: Send + Sync + Clone + StatesProvider + 'static>(&mut self, port: u16, state: T) {
         let server_address = SocketAddr::from(([127, 0, 0, 1], port));
         if let Ok(listener) = TcpListener::bind(server_address) {
             println!("Listening for connections on port {}", port);
@@ -73,8 +71,7 @@ impl<T: Send + Sync + Clone + 'static> HttpServer<T> {
                 }
             }
 
-            start_with(&listener, &self.router, &self.config,
-                       &self.states, &self.managed);
+            start_with(&listener, &self.router, &self.config, &self.states, &state);
         } else {
             panic!("Unable to start the http server...");
         }
@@ -92,7 +89,7 @@ impl<T: Send + Sync + Clone + 'static> HttpServer<T> {
     }
 }
 
-impl<T: Send + Sync + Clone + 'static> Router for HttpServer<T> {
+impl Router for HttpServer {
     fn get(&mut self, uri: RequestPath, callback: Callback) {
         self.router.get(uri, callback);
     }
@@ -129,46 +126,68 @@ pub trait ServerDef {
     fn disable_session_auto_clean(&mut self);
 }
 
-fn start_with<T: Send + Sync + Clone + 'static>(
-    listener: &TcpListener,
-    router: &Route,
-    config: &ServerConfig,
-    server_states: &ServerStates,
-    managed_states: &ManagedStates<T>) {
+fn start_with<T: Send + Sync + Clone + StatesProvider + 'static>(
+        listener: &TcpListener,
+        router: &Route,
+        config: &ServerConfig,
+        server_states: &ServerStates,
+        managed_states: &T) {
 
     let pool = ThreadPool::new(config.pool_size);
     let read_timeout = Some(Duration::new(config.read_timeout as u64, 0));
     let write_timeout = Some(Duration::new(config.write_timeout as u64, 0));
 
     let meta_data = Arc::new(config.get_meta_data());
-    let managed = Arc::new(Mutex::new(managed_states.to_owned()));
     let router = Arc::new(router.to_owned());
+
+    let states_arc = Arc::new(Mutex::new(managed_states.to_owned()));
+    let has_states_to_manage =
+        match managed_states.interaction_stage() {
+            StatesInteraction::None => false,
+            _ => true
+        };
 
     for stream in listener.incoming() {
 
+/*
 //        if let Some(mut session) = Session::new() {
 //            session.expires_at(SystemTime::now().add(Duration::new(5, 0)));
 //            session.save();
 //            println!("New session: {}", session.get_id());
 //        }
+*/
 
         if let Ok(s) = stream {
             // clone Arc-pointers
             let stream_router = Arc::clone(&router);
             let conn_handler = Arc::clone(&meta_data);
-            let states = Arc::clone(&managed);
 
-            pool.execute(move || {
-                if let Err(e) = s.set_read_timeout(read_timeout) {
-                    println!("Unable to set read timeout: {}", e);
-                }
+            if has_states_to_manage {
+                let states_ptr = Arc::clone(&states_arc);
+                pool.execute(move || {
+                    if let Err(e) = s.set_read_timeout(read_timeout) {
+                        eprintln!("Unable to set read timeout: {}", e);
+                    }
 
-                if let Err(e) = s.set_write_timeout(write_timeout) {
-                    println!("Unable to set write timeout: {}", e);
-                }
+                    if let Err(e) = s.set_write_timeout(write_timeout) {
+                        eprintln!("Unable to set write timeout: {}", e);
+                    }
 
-                handle_connection(s, stream_router, conn_handler, states);
-            });
+                    handle_connection_with_states(s, stream_router, conn_handler, states_ptr);
+                });
+            } else {
+                pool.execute(move || {
+                    if let Err(e) = s.set_read_timeout(read_timeout) {
+                        eprintln!("Unable to set read timeout: {}", e);
+                    }
+
+                    if let Err(e) = s.set_write_timeout(write_timeout) {
+                        eprintln!("Unable to set write timeout: {}", e);
+                    }
+
+                    handle_connection(s, stream_router, conn_handler);
+                });
+            }
         }
 
         if server_states.is_terminating() {
@@ -177,7 +196,7 @@ fn start_with<T: Send + Sync + Clone + 'static>(
     }
 }
 
-impl<T: Send + Sync + Clone + 'static> ServerDef for HttpServer<T> {
+impl ServerDef for HttpServer {
     fn def_router(&mut self, router: Route) {
         self.router = router;
     }

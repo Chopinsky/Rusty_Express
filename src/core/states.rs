@@ -1,4 +1,5 @@
-use std::collections::HashMap;
+#![allow(dead_code)]
+
 use std::thread::*;
 use support::session::*;
 
@@ -35,26 +36,25 @@ impl ServerStates {
     }
 }
 
-pub struct ManagedStates<T: Send + Sync + Clone> {
-    inner_state: HashMap<String, T>,
+pub enum StatesInteraction {
+    WithRequest,
+    WithResponse,
+    Both,
+    None,
 }
 
-impl<T: Send + Sync + Clone> ManagedStates<T> {
-    pub fn new() -> Self {
-        ManagedStates {
-            inner_state: HashMap::new(),
-        }
-    }
+pub struct EmptyState {}
 
-    pub fn add_state(&mut self, key: String, state: T) {
-        self.inner_state.entry(key).or_insert(state);
-    }
+impl Clone for EmptyState {
+    fn clone(&self) -> Self { EmptyState {}}
 }
 
-impl<T: Send + Sync + Clone> Clone for ManagedStates<T> {
-    fn clone(&self) -> Self {
-        ManagedStates {
-            inner_state: self.inner_state.clone(),
-        }
+pub trait StatesProvider {
+    fn interaction_stage(&self) -> StatesInteraction;
+}
+
+impl StatesProvider for EmptyState {
+    fn interaction_stage(&self) -> StatesInteraction {
+        StatesInteraction::None
     }
 }

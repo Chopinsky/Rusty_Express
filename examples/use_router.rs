@@ -8,9 +8,7 @@ fn main() {
     let mut server = HttpServer::new();
 
     // working with the generic data model
-    let mut model = Model::new();
-    model.set_data(100);
-    server.manage("default", model);
+    let mut model = Model::new(100);
 
     // Define router separately
     let mut router = Route::new();
@@ -19,7 +17,8 @@ fn main() {
     router.get(RequestPath::Explicit("/index"), Model::simple_index);
 
     server.def_router(router);
-    server.listen(8080);
+    //server.listen(8080);
+    server.listen_and_manage(8080, model);
 }
 
 struct Model {
@@ -27,8 +26,8 @@ struct Model {
 }
 
 impl Model  {
-    pub fn new() -> Self {
-        Model { data: 1 }
+    pub fn new(d: i32) -> Self {
+        Model { data: d }
     }
 
     pub fn set_data(&mut self, val: i32) {
@@ -50,5 +49,11 @@ impl Clone for Model {
         Model {
             data: self.data.clone(),
         }
+    }
+}
+
+impl StatesProvider for Model {
+    fn interaction_stage(&self) -> StatesInteraction {
+        StatesInteraction::WithRequest
     }
 }

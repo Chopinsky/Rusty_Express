@@ -1,3 +1,5 @@
+#![allow(unused_variables)]
+
 use std::collections::HashMap;
 use std::io::prelude::*;
 use std::io::BufWriter;
@@ -7,7 +9,7 @@ use std::thread;
 use std::time::Duration;
 
 use core::config::ConnMetadata;
-use core::states::ManagedStates;
+use core::states::StatesProvider;
 use core::http::{Request, Response, ResponseStates, ResponseWriter};
 use core::router::{REST, Route, RouteHandler};
 
@@ -24,12 +26,57 @@ struct RequestBase {
     scheme: HashMap<String, Vec<String>>,
 }
 
-pub fn handle_connection<T: Sync + Send + Clone>(
+pub fn handle_connection_with_states<T: Send + Sync + Clone + StatesProvider>(
         stream: TcpStream,
         router: Arc<Route>,
         conn_handler: Arc<ConnMetadata>,
-        managed: Arc<Mutex<ManagedStates<T>>>
+        states: Arc<Mutex<T>>
     ) -> Option<u8> {
+
+    let request: Request;
+    match read_request(&stream) {
+        Ok(req) => {
+            request = req;
+        },
+        Err(ParseError::ReadStreamErr) => {
+            //can't read from the stream, no need to write back...
+            stream.shutdown(Shutdown::Both).unwrap();
+            return None;
+        },
+        Err(ParseError::EmptyRequestErr) => {
+            println!("Error on parsing request");
+            return write_to_stream(stream,
+                                   build_default_response(&conn_handler.get_default_pages()),
+                                   false);
+        },
+    }
+
+    match handle_request_with_fallback(&request, &router,
+                                       &conn_handler.get_default_header(),
+                                       &conn_handler.get_default_pages()) {
+        Ok(response) => {
+            let ignore_body =
+                match request.method {
+                    Some(REST::OTHER(other_method)) => other_method.eq("head"),
+                    _ => false,
+                };
+
+            return write_to_stream(stream, response, ignore_body);
+        },
+        Err(e) => {
+            println!("Error on generating response -- {}", e);
+            return write_to_stream(stream,
+                                   build_default_response(&conn_handler.get_default_pages()),
+                                   false);
+        },
+    }
+}
+
+pub fn handle_connection(
+    stream: TcpStream,
+    router: Arc<Route>,
+    conn_handler: Arc<ConnMetadata>
+) -> Option<u8> {
 
     let request: Request;
     match read_request(&stream) {

@@ -129,10 +129,7 @@ impl RouteMap {
             return Some(*callback);
         }
 
-
-
         let (tx, rx) = mpsc::channel();
-
         let dest_path = uri.to_owned();
         let wildcard_router = self.wildcard.to_owned();
 
@@ -275,7 +272,8 @@ fn handle_request_worker(routes: &RouteMap, req: &Request, resp: &mut Response, 
             resp.redirect("");
             if !redirect.starts_with('/') { redirect.insert(0, '/'); }
 
-            handle_request_worker(&routes, &req, resp, redirect.clone());
+            //TODO: Never provide content directly?? Then move line below...
+            //handle_request_worker(&routes, &req, resp, redirect.clone());
 
             resp.header("Location", &redirect, true);
             resp.status(301);
@@ -294,7 +292,9 @@ fn search_wildcard_router(router: &HashMap<String, RegexRoute>, uri: String, tx:
         }
     }
 
-    match tx.send(result) { _ => { drop(tx); }}
+    if let Err(e) = tx.send(result) {
+        eprintln!("Error on matching wild card routes: {}", e);
+    }
 }
 
 /*
