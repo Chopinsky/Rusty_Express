@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::thread::*;
 use support::session::*;
 
@@ -30,6 +31,30 @@ impl ServerStates {
         if let Some(handler) = self.session_auto_clean_handler.to_owned() {
             Session::auto_clean_has_stopped();
             drop(handler);
+        }
+    }
+}
+
+pub struct ManagedStates<T: Send + Sync + Clone> {
+    inner_state: HashMap<String, T>,
+}
+
+impl<T: Send + Sync + Clone> ManagedStates<T> {
+    pub fn new() -> Self {
+        ManagedStates {
+            inner_state: HashMap::new(),
+        }
+    }
+
+    pub fn add_state(&mut self, key: String, state: T) {
+        self.inner_state.entry(key).or_insert(state);
+    }
+}
+
+impl<T: Send + Sync + Clone> Clone for ManagedStates<T> {
+    fn clone(&self) -> Self {
+        ManagedStates {
+            inner_state: self.inner_state.clone(),
         }
     }
 }

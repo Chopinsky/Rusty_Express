@@ -18,7 +18,7 @@ pub mod prelude {
 
 use std::collections::HashMap;
 use std::net::{SocketAddr, TcpListener};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use core::config::ServerConfig;
@@ -31,18 +31,20 @@ use support::ThreadPool;
 //TODO: 1. handle errors with grace...
 //TODO: 2. Impl middlewear
 
-pub struct HttpServer {
+pub struct HttpServer<T: Send + Sync + Clone + 'static> {
     router: Route,
     config: ServerConfig,
     states: ServerStates,
+    managed: ManagedStates<T>,
 }
 
-impl HttpServer {
+impl<T: Send + Sync + Clone + 'static> HttpServer<T> {
     pub fn new() -> Self {
         HttpServer {
             router: Route::new(),
             config: ServerConfig::new(),
             states: ServerStates::new(),
+            managed: ManagedStates::new(),
         }
     }
 
@@ -51,14 +53,28 @@ impl HttpServer {
             router: Route::new(),
             config,
             states: ServerStates::new(),
+            managed: ManagedStates::new(),
         }
+    }
+
+    pub fn manage(&mut self, key: &str, state: T) {
+        self.managed.add_state(key.to_owned(), state);
     }
 
     pub fn listen(&mut self, port: u16) {
         let server_address = SocketAddr::from(([127, 0, 0, 1], port));
         if let Ok(listener) = TcpListener::bind(server_address) {
             println!("Listening for connections on port {}", port);
-            start_with(&listener, &self.router, &self.config, &mut self.states);
+
+            if self.config.use_session_autoclean && !Session::auto_clean_is_running() {
+                if let Some(duration) = self.config.get_session_auto_clean_period() {
+                    let handler = Session::auto_clean_start(duration);
+                    self.states.set_session_handler(&handler);
+                }
+            }
+
+            start_with(&listener, &self.router, &self.config,
+                       &self.states, &self.managed);
         } else {
             panic!("Unable to start the http server...");
         }
@@ -76,7 +92,7 @@ impl HttpServer {
     }
 }
 
-impl Router for HttpServer {
+impl<T: Send + Sync + Clone + 'static> Router for HttpServer<T> {
     fn get(&mut self, uri: RequestPath, callback: Callback) {
         self.router.get(uri, callback);
     }
@@ -113,7 +129,55 @@ pub trait ServerDef {
     fn disable_session_auto_clean(&mut self);
 }
 
-impl ServerDef for HttpServer {
+fn start_with<T: Send + Sync + Clone + 'static>(
+    listener: &TcpListener,
+    router: &Route,
+    config: &ServerConfig,
+    server_states: &ServerStates,
+    managed_states: &ManagedStates<T>) {
+
+    let pool = ThreadPool::new(config.pool_size);
+    let read_timeout = Some(Duration::new(config.read_timeout as u64, 0));
+    let write_timeout = Some(Duration::new(config.write_timeout as u64, 0));
+
+    let meta_data = Arc::new(config.get_meta_data());
+    let managed = Arc::new(Mutex::new(managed_states.to_owned()));
+    let router = Arc::new(router.to_owned());
+
+    for stream in listener.incoming() {
+
+//        if let Some(mut session) = Session::new() {
+//            session.expires_at(SystemTime::now().add(Duration::new(5, 0)));
+//            session.save();
+//            println!("New session: {}", session.get_id());
+//        }
+
+        if let Ok(s) = stream {
+            // clone Arc-pointers
+            let stream_router = Arc::clone(&router);
+            let conn_handler = Arc::clone(&meta_data);
+            let states = Arc::clone(&managed);
+
+            pool.execute(move || {
+                if let Err(e) = s.set_read_timeout(read_timeout) {
+                    println!("Unable to set read timeout: {}", e);
+                }
+
+                if let Err(e) = s.set_write_timeout(write_timeout) {
+                    println!("Unable to set write timeout: {}", e);
+                }
+
+                handle_connection(s, stream_router, conn_handler, states);
+            });
+        }
+
+        if server_states.is_terminating() {
+            return;
+        }
+    }
+}
+
+impl<T: Send + Sync + Clone + 'static> ServerDef for HttpServer<T> {
     fn def_router(&mut self, router: Route) {
         self.router = router;
     }
@@ -144,56 +208,5 @@ impl ServerDef for HttpServer {
 
     fn disable_session_auto_clean(&mut self) {
         self.config.reset_session_auto_clean();
-    }
-}
-
-fn start_with(listener: &TcpListener,
-              router: &Route,
-              config: &ServerConfig,
-              server_states: &mut ServerStates) {
-
-    let pool = ThreadPool::new(config.pool_size);
-    let read_timeout = Some(Duration::new(config.read_timeout as u64, 0));
-    let write_timeout = Some(Duration::new(config.write_timeout as u64, 0));
-
-    let meta_data = Arc::new(config.get_meta_data());
-    let router = Arc::new(router.to_owned());
-
-    if config.use_session_autoclean && !Session::auto_clean_is_running() {
-        if let Some(duration) = config.get_session_auto_clean_period() {
-            let handler = Session::auto_clean_start(duration);
-            server_states.set_session_handler(&handler);
-        }
-    }
-
-    for stream in listener.incoming() {
-
-//        if let Some(mut session) = Session::new() {
-//            session.expires_at(SystemTime::now().add(Duration::new(5, 0)));
-//            session.save();
-//            println!("New session: {}", session.get_id());
-//        }
-
-        if let Ok(s) = stream {
-            // clone Arc-pointers
-            let stream_router = Arc::clone(&router);
-            let conn_handler = Arc::clone(&meta_data);
-
-            pool.execute(move || {
-                if let Err(e) = s.set_read_timeout(read_timeout) {
-                    println!("Unable to set read timeout: {}", e);
-                }
-
-                if let Err(e) = s.set_write_timeout(write_timeout) {
-                    println!("Unable to set write timeout: {}", e);
-                }
-
-                handle_connection(s, stream_router, conn_handler);
-            });
-        }
-
-        if server_states.is_terminating() {
-            return;
-        }
     }
 }

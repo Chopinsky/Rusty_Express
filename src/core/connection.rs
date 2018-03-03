@@ -2,11 +2,12 @@ use std::collections::HashMap;
 use std::io::prelude::*;
 use std::io::BufWriter;
 use std::net::{TcpStream, Shutdown};
-use std::sync::{Arc, mpsc};
+use std::sync::{Arc, Mutex, mpsc};
 use std::thread;
 use std::time::Duration;
 
 use core::config::ConnMetadata;
+use core::states::ManagedStates;
 use core::http::{Request, Response, ResponseStates, ResponseWriter};
 use core::router::{REST, Route, RouteHandler};
 
@@ -23,10 +24,11 @@ struct RequestBase {
     scheme: HashMap<String, Vec<String>>,
 }
 
-pub fn handle_connection(
+pub fn handle_connection<T: Sync + Send + Clone>(
         stream: TcpStream,
         router: Arc<Route>,
-        conn_handler: Arc<ConnMetadata>
+        conn_handler: Arc<ConnMetadata>,
+        managed: Arc<Mutex<ManagedStates<T>>>
     ) -> Option<u8> {
 
     let request: Request;
