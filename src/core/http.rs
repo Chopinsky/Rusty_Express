@@ -164,8 +164,8 @@ impl Response {
     }
 
     fn resp_header(&self, ignore_body: bool) -> Box<String> {
-        let status = self.status.to_owned();
-        let has_contents = self.has_contents().to_owned();
+        let status = self.status;
+        let has_contents = self.has_contents();
         let (tx_status, rx_status) = mpsc::channel();
 
         thread::spawn(move || {
@@ -372,8 +372,8 @@ impl ResponseWriter for Response {
     }
 
     fn set_cookies(&mut self, cookies: &[Cookie]) {
-        for cookie in cookies {
-            self.set_cookie(cookie.to_owned());
+        for cookie in cookies.to_owned() {
+            self.set_cookie(cookie);
         }
     }
 
@@ -592,25 +592,25 @@ fn default_mime_type_with_ext(ext: &str) -> String {
         "7z" => String::from("application/x-7z-compressed"),
         "svg" => String::from("image/svg+xml"),
         "csh" | "sh" | "tar" | "wav" => {
-            format!("application/x-{}", ext.to_owned())
+            format!("application/x-{}", ext)
         },
         "csv" | "html" | "htm" => {
-            format!("text/{}", ext.to_owned())
+            format!("text/{}", ext)
         },
         "jpeg" | "jpg" | "gif" | "png" | "bmp" | "webp" | "tiff" | "tif" => {
-            format!("image/{}", ext.to_owned())
+            format!("image/{}", ext)
         },
         "otf" | "ttf" | "woff" | "woff2" => {
-            format!("font/{}", ext.to_owned())
+            format!("font/{}", ext)
         },
         "midi" | "mp3" | "aac" | "mid" | "oga"  => {
-            format!("audio/{}", ext.to_owned())
+            format!("audio/{}", ext)
         },
         "webm" | "mp4" | "ogg" | "mpeg" | "ogv" => {
-            format!("video/{}", ext.to_owned())
+            format!("video/{}", ext)
         },
         "xml" | "pdf" | "json" | "ogx" | "rtf" | "zip" => {
-            format!("application/{}", ext.to_owned())
+            format!("application/{}", ext)
         },
         _ => String::from("text/plain"),
     }

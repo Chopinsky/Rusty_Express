@@ -238,26 +238,21 @@ pub trait RouteHandler {
 
 impl RouteHandler for Route {
     fn handle_request_method(&self, req: &Request, resp: &mut Response) {
-        let method: REST;
-        match req.method {
+        match req.method.to_owned() {
             None => {
                 resp.status(404);
-                return;
             },
-            Some(ref m) => {
-                if m.eq(&REST::OTHER(String::from("head"))) {
-                    method = REST::GET;
+            Some(mut method) => {
+                if method.eq(&REST::OTHER(String::from("head"))) {
+                    method = REST::GET
+                }
+
+                if let Some(routes) = self.store.get(&method) {
+                    handle_request_worker(&routes, &req, resp, req.uri.to_owned());
                 } else {
-                    method = m.to_owned();
+                    resp.status(404);
                 }
             },
-        }
-
-        let uri = req.uri.to_owned();
-        if let Some(routes) = self.store.get(&method) {
-            handle_request_worker(&routes, &req, resp, uri);
-        } else {
-            resp.status(404);
         }
     }
 }
