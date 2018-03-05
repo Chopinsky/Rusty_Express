@@ -27,7 +27,7 @@ use core::connection::*;
 use core::router::*;
 use core::states::*;
 use support::session::*;
-use support::ThreadPool;
+use support::{ThreadPool, shared_pool};
 
 //TODO: 1. handle errors with grace...
 //TODO: 2. Impl middlewear
@@ -133,7 +133,9 @@ fn start_with<T: Send + Sync + Clone + StatesProvider + 'static>(
         server_states: &ServerStates,
         managed_states: &T) {
 
-    let threads = ThreadPool::new(config.pool_size);
+    let workers_pool = ThreadPool::new(config.pool_size);
+    shared_pool::initialize();
+
     let read_timeout = Some(Duration::new(config.read_timeout as u64, 0));
     let write_timeout = Some(Duration::new(config.write_timeout as u64, 0));
 
@@ -151,15 +153,6 @@ fn start_with<T: Send + Sync + Clone + StatesProvider + 'static>(
     let router = Arc::new(router.to_owned());
 
     for stream in listener.incoming() {
-
-/*        Test: generate new Sessions
-//        if let Some(mut session) = Session::new() {
-//            session.expires_at(SystemTime::now().add(Duration::new(5, 0)));
-//            session.save();
-//            println!("New session: {}", session.get_id());
-//        }
-*/
-
         if let Ok(s) = stream {
             // clone Arc-pointers
             let router_ptr = Arc::clone(&router);
@@ -167,12 +160,12 @@ fn start_with<T: Send + Sync + Clone + StatesProvider + 'static>(
 
             if has_states_to_manage {
                 let states_ptr = Arc::clone(&states_arc);
-                threads.execute(move || {
+                workers_pool.execute(move || {
                     set_timeout(&s, read_timeout, write_timeout);
                     handle_connection_with_states(s, router_ptr, meta_ptr, states_ptr);
                 });
             } else {
-                threads.execute(move || {
+                workers_pool.execute(move || {
                     set_timeout(&s, read_timeout, write_timeout);
                     handle_connection(s, router_ptr, meta_ptr);
                 });

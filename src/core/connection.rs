@@ -11,7 +11,7 @@ use core::config::ConnMetadata;
 use core::states::{StatesProvider, StatesInteraction};
 use core::http::{Request, RequestWriter, Response, ResponseStates, ResponseWriter, ResponseStreamer};
 use core::router::{REST, Route, RouteHandler};
-use support::pool;
+use support::shared_pool;
 
 #[derive(PartialEq, Eq, Clone, Copy)]
 enum ParseError {
@@ -159,13 +159,9 @@ fn parse_request(request: &str, store: &mut Request) -> bool {
             let val = line.to_owned();
             let tx_clone = mpsc::Sender::clone(&tx_base);
 
-            pool::run(move || {
+            shared_pool::run(move || {
                 parse_request_base(val, tx_clone);
             })
-
-//            thread::spawn(move || {
-//                parse_request_base(val, tx_clone);
-//            });
 
         } else {
             if line.is_empty() {
@@ -220,7 +216,7 @@ fn parse_request_body(store: &mut Request, line: &str, tx_cookie: &mpsc::Sender<
                 let cookie_body = header_info[1].to_owned();
                 let tx_clone = mpsc::Sender::clone(&tx_cookie);
 
-                pool::run(move || {
+                shared_pool::run(move || {
                     cookie_parser(cookie_body, tx_clone);
                 });
 

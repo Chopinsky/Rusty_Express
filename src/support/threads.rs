@@ -3,8 +3,6 @@
 use std::sync::{Arc, mpsc, Mutex, Once, ONCE_INIT};
 use std::{mem, thread};
 
-static POOL_SIZE: usize = 8;
-
 type Job = Box<FnBox + Send + 'static>;
 
 trait FnBox {
@@ -99,31 +97,37 @@ impl Drop for ThreadPool {
     }
 }
 
+static POOL_SIZE: usize = 8;
+static ONCE: Once = ONCE_INIT;
+static mut POOL: Pool = Pool { store: None };
+
 struct Pool {
-    store: Option<ThreadPool>,
+    store: Option<Box<ThreadPool>>,
+}
+
+pub fn initialize() {
+    unsafe {
+        ONCE.call_once(|| {
+            // Make it
+            let pool = Pool { store: Some(Box::new(ThreadPool::new(POOL_SIZE))), };
+
+            // Put it in the heap so it can outlive this call
+            POOL = mem::transmute(pool);
+        });
+    }
 }
 
 pub fn run<F>(f: F)
     where F: FnOnce() + Send + 'static {
 
-    static ONCE: Once = ONCE_INIT;
-    static mut POOL: Pool = Pool { store: None };
-
     unsafe {
-        ONCE.call_once(|| {
-            // Make it
-            let pool = Pool { store: Some(ThreadPool::new(POOL_SIZE)) };
-
-            // Put it in the heap so it can outlive this call
-            POOL = mem::transmute(pool);
-        });
-
         if let Some(ref store) = POOL.store {
             // if pool is created
             store.execute(f);
         } else {
             // otherwise, spawn to a new thread for the work;
             thread::spawn(f);
+            initialize();
         }
     }
 }

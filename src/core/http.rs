@@ -13,7 +13,7 @@ use std::time::Duration;
 use chrono::prelude::*;
 use core::cookie::*;
 use core::router::REST;
-use support::pool;
+use support::shared_pool;
 
 static FOUR_OH_FOUR: &'static str = include_str!("../default/404.html");
 static FIVE_HUNDRED: &'static str = include_str!("../default/500.html");
@@ -168,7 +168,7 @@ impl Response {
         let has_contents = self.has_contents();
         let (tx_status, rx_status) = mpsc::channel();
 
-        pool::run(move || {
+        shared_pool::run(move || {
             // tx_core has been moved in, no need to drop specifically
             write_header_status(status, has_contents, tx_status);
         });
@@ -180,14 +180,14 @@ impl Response {
             let cookie = self.cookie.to_owned();
             let tx_cookie = mpsc::Sender::clone(&tx);
 
-            pool::run(move || {
+            shared_pool::run(move || {
                 write_header_cookie(cookie, tx_cookie);
             });
         }
 
         // other header field-value pairs
         let header_set = self.header.to_owned();
-        pool::run(move || {
+        shared_pool::run(move || {
             // tx_header has been moved in, no need to drop specifically
             write_headers(header_set, tx);
         });

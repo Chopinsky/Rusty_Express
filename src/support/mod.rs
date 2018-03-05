@@ -3,8 +3,8 @@ mod route_trie;
 
 pub mod common;
 pub mod session;
-pub mod pool {
-    pub use support::threads::run;
+pub mod shared_pool {
+    pub use support::threads::{initialize, run};
 }
 
 pub use self::route_trie::*;

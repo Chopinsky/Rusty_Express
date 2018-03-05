@@ -4,12 +4,11 @@
 use std::collections::HashMap;
 use std::cmp::Ordering;
 use std::sync::mpsc;
-use std::thread;
 use std::time::Duration;
 
 use core::http::{Request, Response, ResponseStates, ResponseWriter};
 use regex::Regex;
-use support::RouteTrie;
+use support::{RouteTrie, shared_pool};
 
 #[derive(PartialEq, Eq, Hash, Clone)]
 pub enum REST {
@@ -133,7 +132,7 @@ impl RouteMap {
         let dest_path = uri.to_owned();
         let wildcard_router = self.wildcard.to_owned();
 
-        thread::spawn(move || {
+        shared_pool::run(move || {
             search_wildcard_router(&wildcard_router, dest_path,tx);
         });
 
