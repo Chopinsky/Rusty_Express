@@ -24,7 +24,7 @@ struct RequestBase {
     method: Option<REST>,
     uri: String,
     http_version: String,
-    scheme: HashMap<String, Vec<String>>,
+    scheme: Option<HashMap<String, Vec<String>>>,
 }
 
 pub fn handle_connection_with_states<T: Send + Sync + Clone + StatesProvider>(
@@ -34,7 +34,7 @@ pub fn handle_connection_with_states<T: Send + Sync + Clone + StatesProvider>(
         states: Arc<RwLock<T>>) -> Option<u8> {
 
     let mut request = Request::new();
-    if let Some(err) = handle_request(&stream, &mut request) {
+    if let Err(err) = handle_request(&stream, &mut request) {
         eprintln!("Error on parsing request");
         return write_to_stream(stream,
                                build_err_response(&err,metadata.get_default_pages()),
@@ -50,7 +50,7 @@ pub fn handle_connection(
         conn_handler: Arc<ConnMetadata>) -> Option<u8> {
 
     let mut request= Request::new();
-    if let Some(err) = handle_request(&stream, &mut request) {
+    if let Err(err) = handle_request(&stream, &mut request) {
         eprintln!("Error on parsing request");
         return write_to_stream(stream,
                                build_err_response(&err,conn_handler.get_default_pages()),
@@ -83,7 +83,7 @@ fn handle_response(stream: TcpStream, request: Request, router: Arc<Route>, conn
 }
 
 fn write_to_stream(stream: TcpStream, response: Response, ignore_body: bool) -> Option<u8> {
-    let mut buffer = BufWriter::new(stream);
+    let mut buffer = BufWriter::new(&stream);
 
     response.serialize_header(&mut buffer, ignore_body);
     if !ignore_body { response.serialize_body(&mut buffer); }
@@ -93,35 +93,35 @@ fn write_to_stream(stream: TcpStream, response: Response, ignore_body: bool) -> 
         return Some(1);
     }
 
-    if !response.to_close_connection() {
-        return Some(0);
-    } else {
-        if let Ok(s) = buffer.into_inner() {
-            if let Ok(_) = s.shutdown(Shutdown::Both) {
-                return Some(0);
-            }
+    if response.to_close_connection() {
+        // Told to close the connection, shut down the socket now.
+        if let Ok(_) = stream.shutdown(Shutdown::Both) {
+            return Some(0);
         }
+    } else {
+        // Otherwise we're good to leave.
+        return Some(0);
     }
 
     return Some(1);
 }
 
-fn handle_request(mut stream: &TcpStream, request: &mut Request) -> Option<ParseError> {
+fn handle_request(mut stream: &TcpStream, request: &mut Request) -> Result<(), ParseError> {
     let mut buffer = [0; 512];
 
     if let Ok(_) = stream.read(&mut buffer) {
         let request_raw = String::from_utf8_lossy(&buffer[..]);
         if request_raw.is_empty() {
-            return Some(ParseError::EmptyRequestErr);
+            return Err(ParseError::EmptyRequestErr);
         }
 
         if !parse_request(&request_raw, request) {
-            Some(ParseError::EmptyRequestErr)
+            Err(ParseError::EmptyRequestErr)
         } else {
-            None
+            return Ok(());
         }
     } else {
-        Some(ParseError::ReadStreamErr)
+        Err(ParseError::ReadStreamErr)
     }
 }
 
@@ -154,30 +154,7 @@ fn parse_request(request: &str, store: &mut Request) -> bool {
                 continue;
             }
 
-            if !is_body {
-                let val = line.to_owned();
-                let header_info: Vec<&str> = val.trim().splitn(2, ':').collect();
-
-                if header_info.len() == 2 {
-                    if header_info[0].trim().to_lowercase().eq("cookie") {
-                        let cookie_body = header_info[1].to_owned();
-                        let tx_clone = mpsc::Sender::clone(&tx_cookie);
-
-                        thread::spawn(move || {
-                            cookie_parser(cookie_body, tx_clone);
-                        });
-
-                    } else {
-                        store.write_header(
-                            &header_info[0].trim().to_lowercase(),
-                            header_info[1].trim(),
-                            true
-                        );
-                    }
-                }
-            } else {
-                store.extend_body(line);
-            }
+            parse_request_body(store, line, &tx_cookie, is_body);
         }
     }
 
@@ -191,23 +168,53 @@ fn parse_request(request: &str, store: &mut Request) -> bool {
     if let Ok(base) = rx_base.recv_timeout(Duration::from_millis(200)) {
         store.method = base.method;
         store.uri = base.uri;
-        store.create_scheme(base.scheme);
         store.write_header("http_version", &base.http_version, true);
+
+        if let Some(s) = base.scheme {
+            store.create_scheme(s);
+        }
     }
 
     if let Ok(cookie_set) = rx_cookie.recv_timeout(Duration::from_millis(200)) {
         store.create_cookie(cookie_set);
     }
 
-    //Some(Request::build_from(method, uri, scheme, cookie, header, body))
     true
+}
+
+fn parse_request_body(store: &mut Request, line: &str, tx_cookie: &mpsc::Sender<HashMap<String, String>>, is_body: bool) {
+    if !is_body {
+        let header_info: Vec<&str> = line.trim().splitn(2, ':').collect();
+
+        if header_info.len() == 2 {
+            if header_info[0].trim().to_lowercase().eq("cookie") {
+                let cookie_body = header_info[1].to_owned();
+                let tx_clone = mpsc::Sender::clone(&tx_cookie);
+
+                thread::spawn(move || {
+                    cookie_parser(cookie_body, tx_clone);
+                });
+
+            } else {
+                store.write_header(
+                    &header_info[0].trim().to_lowercase(),
+                    header_info[1].trim(),
+                    true
+                );
+            }
+        }
+    } else {
+        store.extend_body(line);
+    }
 }
 
 fn parse_request_base(line: String, tx: mpsc::Sender<RequestBase>) {
     let mut method = None;
     let mut uri = String::new();
     let mut http_version = String::new();
-    let mut scheme = HashMap::new();
+    let mut scheme = None;
+
+    let (tx_uri, rx_uri) = mpsc::channel();
 
     for (index, info) in line.split_whitespace().enumerate() {
         match index {
@@ -223,12 +230,21 @@ fn parse_request_base(line: String, tx: mpsc::Sender<RequestBase>) {
                 };
             },
             1 => {
-                let (req_uri, req_scheme) = split_path(info);
-                uri = req_uri.to_owned();
+                let path_raw = info.to_owned();
+                let tx_clone = mpsc::Sender::clone(&tx_uri);
 
-                if !req_scheme.is_empty() {
-                    scheme_parser(&req_scheme[..], &mut scheme);
-                }
+                thread::spawn(move || {
+                    let (req_uri, req_scheme) = split_path(path_raw);
+                    let mut uri_scheme = HashMap::new();
+
+                    if !req_scheme.is_empty() {
+                        scheme_parser(&req_scheme[..], &mut uri_scheme);
+                    }
+
+                    tx_clone.send((req_uri, uri_scheme)).unwrap_or_else(|e| {
+                        eprintln!("Error on parsing request uri: {}", e);
+                    });
+                });
             },
             2 => {
                 http_version.push_str(info);
@@ -237,14 +253,20 @@ fn parse_request_base(line: String, tx: mpsc::Sender<RequestBase>) {
         };
     }
 
-    if let Err(e) = tx.send(RequestBase {
+    drop(tx_uri);
+    if let Ok(base) = rx_uri.recv_timeout(Duration::from_millis(200)) {
+        uri = base.0;
+        scheme = Some(base.1);
+    }
+
+    tx.send(RequestBase {
         method,
         uri,
         http_version,
         scheme,
-    }) {
-        println!("Unable to parse base request: {}", e);
-    }
+    }).unwrap_or_else(|e| {
+        eprintln!("Unable to parse base request: {}", e);
+    });
 }
 
 fn get_response_with_fallback(
@@ -274,7 +296,7 @@ fn get_response_with_fallback(
     Ok(resp)
 }
 
-fn split_path(full_uri: &str) -> (String, String) {
+fn split_path(full_uri: String) -> (String, String) {
     let uri = full_uri.trim();
     if uri.is_empty() {
         return (String::from("/"), String::new());

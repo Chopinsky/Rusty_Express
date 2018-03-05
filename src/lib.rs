@@ -61,20 +61,20 @@ impl HttpServer {
 
     pub fn listen_and_manage<T: Send + Sync + Clone + StatesProvider + 'static>(&mut self, port: u16, state: T) {
         let server_address = SocketAddr::from(([127, 0, 0, 1], port));
-        if let Ok(listener) = TcpListener::bind(server_address) {
-            println!("Listening for connections on port {}", port);
+        let listener = TcpListener::bind(server_address).unwrap_or_else(|err| {
+            panic!("Unable to start the http server: {}...", err);
+        });
 
-            if self.config.use_session_autoclean && !Session::auto_clean_is_running() {
-                if let Some(duration) = self.config.get_session_auto_clean_period() {
-                    let handler = Session::auto_clean_start(duration);
-                    self.states.set_session_handler(&handler);
-                }
+        println!("Listening for connections on port {}", port);
+
+        if self.config.use_session_autoclean && !Session::auto_clean_is_running() {
+            if let Some(duration) = self.config.get_session_auto_clean_period() {
+                let handler = Session::auto_clean_start(duration);
+                self.states.set_session_handler(&handler);
             }
-
-            start_with(&listener, &self.router, &self.config, &self.states, &state);
-        } else {
-            panic!("Unable to start the http server...");
         }
+
+        start_with(&listener, &self.router, &self.config, &self.states, &state);
 
         println!("Shutting down...");
     }
@@ -186,13 +186,13 @@ fn start_with<T: Send + Sync + Clone + StatesProvider + 'static>(
 }
 
 fn set_timeout(stream: &TcpStream, read: Option<Duration>, write: Option<Duration>) {
-    if let Err(e) = stream.set_read_timeout(read) {
-        eprintln!("Unable to set read timeout: {}", e);
-    }
+    stream.set_read_timeout(read).unwrap_or_else(|err| {
+        eprintln!("Unable to set read timeout: {}", err);
+    });
 
-    if let Err(e) = stream.set_write_timeout(write) {
-        eprintln!("Unable to set write timeout: {}", e);
-    }
+    stream.set_write_timeout(write).unwrap_or_else(|err| {
+        eprintln!("Unable to set read timeout: {}", err);
+    });
 }
 
 impl ServerDef for HttpServer {

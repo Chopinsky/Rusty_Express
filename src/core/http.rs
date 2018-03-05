@@ -422,18 +422,18 @@ impl ResponseWriter for Response {
 }
 
 pub trait ResponseStreamer {
-    fn serialize_header(&self, buffer: &mut BufWriter<TcpStream>, ignore_body: bool);
-    fn serialize_body(&self, buffer: &mut BufWriter<TcpStream>);
+    fn serialize_header(&self, buffer: &mut BufWriter<&TcpStream>, ignore_body: bool);
+    fn serialize_body(&self, buffer: &mut BufWriter<&TcpStream>);
 }
 
 impl ResponseStreamer for Response {
-    fn serialize_header(&self, buffer: &mut BufWriter<TcpStream>, ignore_body: bool) {
+    fn serialize_header(&self, buffer: &mut BufWriter<&TcpStream>, ignore_body: bool) {
         if let Err(e) = buffer.write(self.resp_header(ignore_body).as_bytes()) {
             eprintln!("An error has taken place when writing the response header to the stream: {}", e);
         }
     }
 
-    fn serialize_body(&self, buffer: &mut BufWriter<TcpStream>) {
+    fn serialize_body(&self, buffer: &mut BufWriter<&TcpStream>) {
         if self.has_contents() {
             //content has been explicitly set, use them
             if let Err(e) = buffer.write(self.body.as_bytes()) {
@@ -464,7 +464,7 @@ pub fn set_header<T>(header: &mut HashMap<String, T>, field: String, value: T, a
     }
 }
 
-fn get_default_page(buffer: &mut BufWriter<TcpStream>, status: u16) {
+fn get_default_page(buffer: &mut BufWriter<&TcpStream>, status: u16) {
     match status {
         500 => {
             /* return default 500 page */
