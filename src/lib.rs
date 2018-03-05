@@ -133,7 +133,7 @@ fn start_with<T: Send + Sync + Clone + StatesProvider + 'static>(
         server_states: &ServerStates,
         managed_states: &T) {
 
-    let pool = ThreadPool::new(config.pool_size);
+    let threads = ThreadPool::new(config.pool_size);
     let read_timeout = Some(Duration::new(config.read_timeout as u64, 0));
     let write_timeout = Some(Duration::new(config.write_timeout as u64, 0));
 
@@ -167,12 +167,12 @@ fn start_with<T: Send + Sync + Clone + StatesProvider + 'static>(
 
             if has_states_to_manage {
                 let states_ptr = Arc::clone(&states_arc);
-                pool.execute(move || {
+                threads.execute(move || {
                     set_timeout(&s, read_timeout, write_timeout);
                     handle_connection_with_states(s, router_ptr, meta_ptr, states_ptr);
                 });
             } else {
-                pool.execute(move || {
+                threads.execute(move || {
                     set_timeout(&s, read_timeout, write_timeout);
                     handle_connection(s, router_ptr, meta_ptr);
                 });

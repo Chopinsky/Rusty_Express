@@ -1,9 +1,11 @@
 #![allow(dead_code)]
 
-use std::thread;
-use std::sync::mpsc;
-use std::sync::Arc;
-use std::sync::Mutex;
+use std::sync::{Arc, mpsc, Mutex, Once, ONCE_INIT};
+use std::{mem, thread};
+
+static POOL_SIZE: usize = 8;
+
+type Job = Box<FnBox + Send + 'static>;
 
 trait FnBox {
     fn call_box(self: Box<Self>);
@@ -14,8 +16,6 @@ impl<F: FnOnce()> FnBox for F {
         (*self)()
     }
 }
-
-type Job = Box<FnBox + Send + 'static>;
 
 enum Message {
     NewJob(Job),
@@ -95,6 +95,35 @@ impl Drop for ThreadPool {
             if let Some(thread) = worker.thread.take() {
                 thread.join().unwrap();
             }
+        }
+    }
+}
+
+struct Pool {
+    store: Option<ThreadPool>,
+}
+
+pub fn run<F>(f: F)
+    where F: FnOnce() + Send + 'static {
+
+    static ONCE: Once = ONCE_INIT;
+    static mut POOL: Pool = Pool { store: None };
+
+    unsafe {
+        ONCE.call_once(|| {
+            // Make it
+            let pool = Pool { store: Some(ThreadPool::new(POOL_SIZE)) };
+
+            // Put it in the heap so it can outlive this call
+            POOL = mem::transmute(pool);
+        });
+
+        if let Some(ref store) = POOL.store {
+            // if pool is created
+            store.execute(f);
+        } else {
+            // otherwise, spawn to a new thread for the work;
+            thread::spawn(f);
         }
     }
 }

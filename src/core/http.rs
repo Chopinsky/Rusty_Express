@@ -168,7 +168,7 @@ impl Response {
         let has_contents = self.has_contents();
         let (tx_status, rx_status) = mpsc::channel();
 
-        pool::execute(move || {
+        pool::run(move || {
             // tx_core has been moved in, no need to drop specifically
             write_header_status(status, has_contents, tx_status);
         });
@@ -180,14 +180,14 @@ impl Response {
             let cookie = self.cookie.to_owned();
             let tx_cookie = mpsc::Sender::clone(&tx);
 
-            pool::execute(move || {
+            pool::run(move || {
                 write_header_cookie(cookie, tx_cookie);
             });
         }
 
         // other header field-value pairs
         let header_set = self.header.to_owned();
-        pool::execute(move || {
+        pool::run(move || {
             // tx_header has been moved in, no need to drop specifically
             write_headers(header_set, tx);
         });

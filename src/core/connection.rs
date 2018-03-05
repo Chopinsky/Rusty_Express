@@ -159,7 +159,7 @@ fn parse_request(request: &str, store: &mut Request) -> bool {
             let val = line.to_owned();
             let tx_clone = mpsc::Sender::clone(&tx_base);
 
-            pool::execute(move || {
+            pool::run(move || {
                 parse_request_base(val, tx_clone);
             })
 
@@ -220,7 +220,7 @@ fn parse_request_body(store: &mut Request, line: &str, tx_cookie: &mpsc::Sender<
                 let cookie_body = header_info[1].to_owned();
                 let tx_clone = mpsc::Sender::clone(&tx_cookie);
 
-                pool::execute(move || {
+                pool::run(move || {
                     cookie_parser(cookie_body, tx_clone);
                 });
 
