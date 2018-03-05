@@ -8,12 +8,12 @@ use std::io::prelude::*;
 use std::net::{TcpStream};
 use std::path::Path;
 use std::sync::mpsc;
-use std::thread;
 use std::time::Duration;
 
 use chrono::prelude::*;
 use core::cookie::*;
 use core::router::REST;
+use support::pool;
 
 static FOUR_OH_FOUR: &'static str = include_str!("../default/404.html");
 static FIVE_HUNDRED: &'static str = include_str!("../default/500.html");
@@ -168,12 +168,11 @@ impl Response {
         let has_contents = self.has_contents();
         let (tx_status, rx_status) = mpsc::channel();
 
-        thread::spawn(move || {
+        pool::execute(move || {
             // tx_core has been moved in, no need to drop specifically
             write_header_status(status, has_contents, tx_status);
         });
 
-        // shared tx+rx for cookie + generic headers
         let (tx, rx) = mpsc::channel();
 
         // other header field-value pairs
@@ -181,14 +180,14 @@ impl Response {
             let cookie = self.cookie.to_owned();
             let tx_cookie = mpsc::Sender::clone(&tx);
 
-            thread::spawn(move || {
+            pool::execute(move || {
                 write_header_cookie(cookie, tx_cookie);
             });
         }
 
         // other header field-value pairs
         let header_set = self.header.to_owned();
-        thread::spawn(move || {
+        pool::execute(move || {
             // tx_header has been moved in, no need to drop specifically
             write_headers(header_set, tx);
         });

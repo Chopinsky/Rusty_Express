@@ -5,13 +5,13 @@ use std::io::prelude::*;
 use std::io::BufWriter;
 use std::net::{TcpStream, Shutdown};
 use std::sync::{Arc, RwLock, mpsc};
-use std::thread;
 use std::time::Duration;
 
 use core::config::ConnMetadata;
-use core::states::StatesProvider;
+use core::states::{StatesProvider, StatesInteraction};
 use core::http::{Request, RequestWriter, Response, ResponseStates, ResponseWriter, ResponseStreamer};
 use core::router::{REST, Route, RouteHandler};
+use support::pool;
 
 #[derive(PartialEq, Eq, Clone, Copy)]
 enum ParseError {
@@ -41,29 +41,45 @@ pub fn handle_connection_with_states<T: Send + Sync + Clone + StatesProvider>(
                                false);
     }
 
-    handle_response(stream, request, router, metadata)
+    match metadata.get_state_interaction() {
+        &StatesInteraction::WithRequest | &StatesInteraction::Both => {
+
+        },
+        _ => { /* Nothing */ },
+    }
+
+    let result = handle_response(stream, request, router, &metadata);
+
+    match metadata.get_state_interaction() {
+        &StatesInteraction::WithRequest | &StatesInteraction::Both => {
+
+        },
+        _ => { /* Nothing */ },
+    }
+
+    result
 }
 
 pub fn handle_connection(
         stream: TcpStream,
         router: Arc<Route>,
-        conn_handler: Arc<ConnMetadata>) -> Option<u8> {
+        metadata: Arc<ConnMetadata>) -> Option<u8> {
 
     let mut request= Request::new();
     if let Err(err) = handle_request(&stream, &mut request) {
         eprintln!("Error on parsing request");
         return write_to_stream(stream,
-                               build_err_response(&err,conn_handler.get_default_pages()),
+                               build_err_response(&err,metadata.get_default_pages()),
                                false);
     }
 
-    handle_response(stream, request, router, conn_handler)
+    handle_response(stream, request, router, &metadata)
 }
 
-fn handle_response(stream: TcpStream, request: Request, router: Arc<Route>, conn_handler: Arc<ConnMetadata>) -> Option<u8> {
+fn handle_response(stream: TcpStream, request: Request, router: Arc<Route>, conn_handler: &Arc<ConnMetadata>) -> Option<u8> {
     match get_response_with_fallback(&request, &router,
-                                     &conn_handler.get_default_header(),
-                                     &conn_handler.get_default_pages()) {
+                                 &conn_handler.get_default_header(),
+                                 &conn_handler.get_default_pages()) {
         Ok(response) => {
             let ignore_body =
                 match request.method {
@@ -71,13 +87,13 @@ fn handle_response(stream: TcpStream, request: Request, router: Arc<Route>, conn
                     _ => false,
                 };
 
-            return write_to_stream(stream, response, ignore_body);
+            write_to_stream(stream, response, ignore_body)
         },
         Err(e) => {
             println!("Error on generating response -- {}", e);
-            return write_to_stream(stream,
+            write_to_stream(stream,
                                    build_err_response(&ParseError::WriteStreamErr, conn_handler.get_default_pages()),
-                                   false);
+                                   false)
         },
     }
 }
@@ -143,9 +159,13 @@ fn parse_request(request: &str, store: &mut Request) -> bool {
             let val = line.to_owned();
             let tx_clone = mpsc::Sender::clone(&tx_base);
 
-            thread::spawn(move || {
+            pool::execute(move || {
                 parse_request_base(val, tx_clone);
-            });
+            })
+
+//            thread::spawn(move || {
+//                parse_request_base(val, tx_clone);
+//            });
 
         } else {
             if line.is_empty() {
@@ -155,6 +175,7 @@ fn parse_request(request: &str, store: &mut Request) -> bool {
             }
 
             parse_request_body(store, line, &tx_cookie, is_body);
+
         }
     }
 
@@ -175,8 +196,16 @@ fn parse_request(request: &str, store: &mut Request) -> bool {
         }
     }
 
-    if let Ok(cookie_set) = rx_cookie.recv_timeout(Duration::from_millis(200)) {
-        store.create_cookie(cookie_set);
+    let mut cookie_created = false;
+    for cookie in rx_cookie {
+        if cookie_created {
+            for pair in cookie.iter() {
+                store.set_cookie(&pair.0[..], &pair.1[..], false);
+            };
+        } else {
+            store.create_cookie(cookie);
+            cookie_created = true;
+        }
     }
 
     true
@@ -191,7 +220,7 @@ fn parse_request_body(store: &mut Request, line: &str, tx_cookie: &mpsc::Sender<
                 let cookie_body = header_info[1].to_owned();
                 let tx_clone = mpsc::Sender::clone(&tx_cookie);
 
-                thread::spawn(move || {
+                pool::execute(move || {
                     cookie_parser(cookie_body, tx_clone);
                 });
 
@@ -214,8 +243,6 @@ fn parse_request_base(line: String, tx: mpsc::Sender<RequestBase>) {
     let mut http_version = String::new();
     let mut scheme = None;
 
-    let (tx_uri, rx_uri) = mpsc::channel();
-
     for (index, info) in line.split_whitespace().enumerate() {
         match index {
             0 => {
@@ -230,33 +257,18 @@ fn parse_request_base(line: String, tx: mpsc::Sender<RequestBase>) {
                 };
             },
             1 => {
-                let path_raw = info.to_owned();
-                let tx_clone = mpsc::Sender::clone(&tx_uri);
+                let (req_uri, req_scheme) = split_path(info);
 
-                thread::spawn(move || {
-                    let (req_uri, req_scheme) = split_path(path_raw);
-                    let mut uri_scheme = HashMap::new();
-
-                    if !req_scheme.is_empty() {
-                        scheme_parser(&req_scheme[..], &mut uri_scheme);
-                    }
-
-                    tx_clone.send((req_uri, uri_scheme)).unwrap_or_else(|e| {
-                        eprintln!("Error on parsing request uri: {}", e);
-                    });
-                });
+                if !req_uri.is_empty() { uri = req_uri; }
+                if !req_scheme.is_empty() {
+                    scheme = scheme_parser(&req_scheme[..]);
+                }
             },
             2 => {
                 http_version.push_str(info);
             },
             _ => { break; },
         };
-    }
-
-    drop(tx_uri);
-    if let Ok(base) = rx_uri.recv_timeout(Duration::from_millis(200)) {
-        uri = base.0;
-        scheme = Some(base.1);
     }
 
     tx.send(RequestBase {
@@ -296,26 +308,25 @@ fn get_response_with_fallback(
     Ok(resp)
 }
 
-fn split_path(full_uri: String) -> (String, String) {
+fn split_path(full_uri: &str) -> (String, String) {
     let uri = full_uri.trim();
     if uri.is_empty() {
         return (String::from("/"), String::new());
     }
 
-    let mut uri_parts: Vec<&str> = uri.trim().rsplitn(2, "/").collect();
-
+    let mut uri_parts: Vec<&str> = uri.rsplitn(2, "/").collect();
     if let Some(pos) = uri_parts[0].find("?") {
         let (last_uri_pc, scheme) = uri_parts[0].split_at(pos);
         uri_parts[0] = last_uri_pc;
 
-        let real_uri =
+        let result_uri =
             if uri_parts[1].is_empty() {
                 format!("/{}", uri_parts[0])
             } else {
                 format!("{}/{}", uri_parts[1], uri_parts[0])
             };
 
-        (real_uri, scheme.trim().to_owned())
+        (result_uri, scheme.trim().to_owned())
     } else {
         let uri_len = uri.len();
         let result_uri =
@@ -353,7 +364,8 @@ fn cookie_parser(cookie_body: String, tx: mpsc::Sender<HashMap<String, String>>)
     }
 }
 
-fn scheme_parser(scheme: &str, scheme_collection: &mut HashMap<String, Vec<String>>) {
+fn scheme_parser(scheme: &str) -> Option<HashMap<String, Vec<String>>> {
+    let mut scheme_result: HashMap<String, Vec<String>> = HashMap::new();
     for (_, kv_pair) in scheme.trim().split("&").enumerate() {
         let store: Vec<&str> = kv_pair.trim().splitn(2, "=").collect();
         if store.len() > 0 {
@@ -365,15 +377,17 @@ fn scheme_parser(scheme: &str, scheme_collection: &mut HashMap<String, Vec<Strin
                     String::new()
                 };
 
-            if scheme_collection.contains_key(key) {
-                if let Some(val_vec) = scheme_collection.get_mut(key) {
+            if scheme_result.contains_key(key) {
+                if let Some(val_vec) = scheme_result.get_mut(key) {
                     val_vec.push(val);
                 }
             } else {
-                scheme_collection.insert(key.to_owned(), vec![val]);
+                scheme_result.insert(key.to_owned(), vec![val]);
             }
         }
     }
+
+    Some(scheme_result)
 }
 
 fn build_err_response(err: &ParseError, default_pages: &HashMap<u16, String>) -> Response {
