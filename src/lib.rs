@@ -118,8 +118,8 @@ impl Router for HttpServer {
 pub trait ServerDef {
     fn def_router(&mut self, router: Route);
     fn set_pool_size(&mut self, size: usize);
-    fn set_read_timeout(&mut self, timeout: u8);
-    fn set_write_timeout(&mut self, timeout: u8);
+    fn set_read_timeout(&mut self, timeout: u16);
+    fn set_write_timeout(&mut self, timeout: u16);
     fn def_default_response_header(&mut self, header: HashMap<String, String>);
     fn set_default_response_header(&mut self, field: String, value: String);
     fn enable_session_auto_clean(&mut self, auto_clean_period: Duration);
@@ -136,8 +136,8 @@ fn start_with<T: Send + Sync + Clone + StatesProvider + 'static>(
     let workers_pool = ThreadPool::new(config.pool_size);
     shared_pool::initialize();
 
-    let read_timeout = Some(Duration::new(config.read_timeout as u64, 0));
-    let write_timeout = Some(Duration::new(config.write_timeout as u64, 0));
+    let read_timeout = Some(Duration::from_millis(config.read_timeout as u64));
+    let write_timeout = Some(Duration::from_millis(config.write_timeout as u64));
 
     let states_arc = Arc::new(RwLock::new(managed_states.to_owned()));
     let has_states_to_manage =
@@ -197,11 +197,11 @@ impl ServerDef for HttpServer {
         self.config.pool_size = size;
     }
 
-    fn set_read_timeout(&mut self, timeout: u8) {
+    fn set_read_timeout(&mut self, timeout: u16) {
         self.config.read_timeout = timeout;
     }
 
-    fn set_write_timeout(&mut self, timeout: u8) {
+    fn set_write_timeout(&mut self, timeout: u16) {
         self.config.write_timeout = timeout;
     }
 

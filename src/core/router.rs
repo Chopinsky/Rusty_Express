@@ -6,7 +6,7 @@ use std::cmp::Ordering;
 use std::sync::mpsc;
 use std::time::Duration;
 
-use core::http::{Request, Response, ResponseStates, ResponseWriter};
+use core::http::{Request, RequestWriter, Response, ResponseStates, ResponseWriter};
 use regex::Regex;
 use support::{RouteTrie, shared_pool};
 
@@ -32,7 +32,6 @@ pub type Callback = fn(&Request, &mut Response);
 struct RegexRoute {
     pub regex: Regex,
     pub handler: Callback,
-    pub params: Vec<String>,
 }
 
 impl RegexRoute {
@@ -40,7 +39,6 @@ impl RegexRoute {
         RegexRoute {
             regex: re,
             handler,
-            params: Vec::new(),
         }
     }
 }
@@ -50,14 +48,13 @@ impl Clone for RegexRoute {
         RegexRoute {
             regex: self.regex.clone(),
             handler: self.handler,
-            params: self.params.clone(),
         }
     }
 }
 
 pub struct RouteMap {
     explicit: HashMap<String, Callback>,
-    explicit_with_params: HashMap<String, RegexRoute>,
+    explicit_with_params: RouteTrie, //HashMap<String, RegexRoute>,
     wildcard: HashMap<String, RegexRoute>,
 }
 
@@ -65,7 +62,7 @@ impl RouteMap {
     pub fn new() -> Self {
         RouteMap {
             explicit: HashMap::new(),
-            explicit_with_params: HashMap::new(),
+            explicit_with_params: RouteTrie::initialize(), //HashMap::new(),
             wildcard: HashMap::new(),
         }
     }
@@ -92,54 +89,57 @@ impl RouteMap {
                 }
             },
             RequestPath::ExplicitWithParams(req_uri) => {
-                if req_uri.starts_with('/') && req_uri.len() == 1 {
+                if !req_uri.contains("/:") {
                     self.explicit.entry(req_uri.to_owned()).or_insert(callback);
                     return;
                 }
 
-                let mut raw_regex = String::new();
-                let mut params: Vec<String> = Vec::new();
+                let segments: Vec<String> = req_uri.trim_matches('/')
+                                                   .split('/')
+                                                   .filter(|s| !s.is_empty())
+                                                   .map(|s| s.to_owned())
+                                                   .collect();
 
-                for segment in req_uri.trim_left_matches('/').split('/').into_iter() {
-                    let seg_lean: &str = segment.trim();
-                    if seg_lean.is_empty() { continue; }
-
-                    if seg_lean.starts_with(':') && seg_lean.len() > 1 {
-                        params.push((&seg_lean[1..]).to_owned());
-                        raw_regex.push_str(r"/\w+");
-                    } else {
-                        raw_regex.push_str(&format!("/{}", seg_lean));
-                    }
-                }
-
-                let reg_uri = format!(r"^{}$", raw_regex);
-                if self.explicit_with_params.contains_key(&reg_uri) { return; }
-
-                if let Ok(re) = Regex::new(&reg_uri) {
-                    let route = RegexRoute::new(re, callback);
-                    self.explicit_with_params.entry(reg_uri.to_owned()).or_insert(route);
-                }
+                self.explicit_with_params.add(segments, callback);
             },
         }
     }
 
-    fn seek_path(&self, uri: String) -> Option<Callback> {
-        if let Some(callback) = self.explicit.get(&uri) {
+    fn seek_path(&self, uri: &str, params: &mut HashMap<String, String>) -> Option<Callback> {
+        if let Some(callback) = self.explicit.get(uri) {
             return Some(*callback);
         }
 
         let (tx, rx) = mpsc::channel();
-        let dest_path = uri.to_owned();
-        let wildcard_router = self.wildcard.to_owned();
 
-        shared_pool::run(move || {
-            search_wildcard_router(&wildcard_router, dest_path,tx);
-        });
+        if !self.wildcard.is_empty() {
+            let wildcard_routes = self.wildcard.to_owned();
+            let dest_path = uri.to_owned();
+            let tx_clone = mpsc::Sender::clone(&tx);
 
-        if let Ok(callback) = rx.recv_timeout(Duration::from_millis(200)) {
-            match callback {
-                None => { return None; },
-                _ => { return callback; }
+            shared_pool::run(move || {
+                search_wildcard_router(&wildcard_routes, dest_path, tx_clone);
+            });
+        }
+
+        if !self.explicit_with_params.is_empty() {
+            let route_head = self.explicit_with_params.to_owned();
+            let dest_path = uri.to_owned();
+            let tx_clone = mpsc::Sender::clone(&tx);
+
+            shared_pool::run(move || {
+                search_params_router(&route_head, dest_path, tx_clone);
+            });
+        }
+
+        drop(tx);
+        for results in rx {
+            if let Some(callback) = results.0 {
+                for param in results.1 {
+                    params.insert(param.0, param.1);
+                }
+
+                return Some(callback);
             }
         }
 
@@ -232,63 +232,81 @@ impl Router for Route {
 }
 
 pub trait RouteHandler {
-    fn handle_request_method(&self, req: &Request, resp: &mut Response);
+    fn handle_request_method(&self, req: &mut Request, resp: &mut Response);
 }
 
 impl RouteHandler for Route {
-    fn handle_request_method(&self, req: &Request, resp: &mut Response) {
-        match req.method.to_owned() {
-            None => {
-                resp.status(404);
-            },
-            Some(mut method) => {
-                if method.eq(&REST::OTHER(String::from("head"))) {
-                    method = REST::GET
+    fn handle_request_method(&self, req: &mut Request, resp: &mut Response) {
+        if let Some(ref req_method) = req.method.to_owned() {
+            let method = match req_method {
+                &REST::OTHER(ref others) => {
+                    if others.eq("head") {
+                        &REST::GET
+                    } else {
+                        req_method
+                    }
+                },
+                _ => { req_method },
+            };
+
+            if let Some(routes) = self.store.get(method) {
+                let mut params = HashMap::new();
+                if let Some(callback) = routes.seek_path(&req.uri[..], &mut params) {
+                    if !params.is_empty() {
+                        req.create_param(params);
+                    }
+
+                    handle_request_worker(&callback, req, resp);
+                    return;
                 }
-
-                if let Some(routes) = self.store.get(&method) {
-                    handle_request_worker(&routes, &req, resp, req.uri.to_owned());
-                } else {
-                    resp.status(404);
-                }
-            },
+            }
         }
-    }
-}
 
-fn handle_request_worker(routes: &RouteMap, req: &Request, resp: &mut Response, dest: String) {
-    if let Some(callback) = routes.seek_path(dest) {
-        //Callback function will decide what to be written into the response
-        callback(req, resp);
-
-        let mut redirect = resp.get_redirect_path();
-        if !redirect.is_empty() {
-            resp.redirect("");
-            if !redirect.starts_with('/') { redirect.insert(0, '/'); }
-
-            //TODO: Never provide content directly?? Then move line below...
-            //handle_request_worker(&routes, &req, resp, redirect.clone());
-
-            resp.header("Location", &redirect, true);
-            resp.status(301);
-        }
-    } else {
         resp.status(404);
     }
 }
 
-fn search_wildcard_router(router: &HashMap<String, RegexRoute>, uri: String, tx: mpsc::Sender<Option<Callback>>) {
+fn handle_request_worker(callback: &Callback, req: &Request, resp: &mut Response) {
+    //Callback function will decide what to be written into the response
+    callback(req, resp);
+
+    let mut redirect = resp.get_redirect_path();
+    if !redirect.is_empty() {
+        if !redirect.starts_with('/') { redirect.insert(0, '/'); }
+
+        //TODO: Never provide content directly?? Then move line below...
+        //resp.redirect("");
+        //handle_request_worker(&routes, &req, resp, redirect.clone());
+
+        resp.header("Location", &redirect, true);
+        resp.status(301);
+    }
+}
+
+fn search_wildcard_router(routes: &HashMap<String, RegexRoute>, uri: String, tx: mpsc::Sender<(Option<Callback>, Vec<(String, String)>)>) {
     let mut result = None;
-    for (_, route) in router.iter() {
+    for (_, route) in routes.iter() {
         if route.regex.is_match(&uri) {
             result = Some(route.handler);
             break;
         }
     }
 
-    if let Err(e) = tx.send(result) {
+    tx.send((result, Vec::with_capacity(0))).unwrap_or_else(|e| {
         eprintln!("Error on matching wild card routes: {}", e);
-    }
+    });
+}
+
+fn search_params_router(route_head: &RouteTrie, uri: String, tx: mpsc::Sender<(Option<Callback>, Vec<(String, String)>)>) {
+    let raw_segments: Vec<String> = uri.trim_matches('/').split('/').map(|s| s.to_owned()).collect();
+    let segements = raw_segments.as_slice();
+    let mut params: Vec<(String, String)> = Vec::new();
+
+    let result = RouteTrie::find(&route_head.root, segements, &mut params);
+
+    tx.send((result, params)).unwrap_or_else(|e| {
+        eprintln!("Error on matching wild card routes: {}", e);
+    });
 }
 
 /*

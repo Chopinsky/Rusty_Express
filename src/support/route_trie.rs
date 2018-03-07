@@ -1,23 +1,22 @@
 #![allow(dead_code)]
 
-use std::cell::RefCell;
 use std::collections::HashMap;
 use core::router::Callback;
 
 pub struct TrieNode {
     field: String,
-    is_param_field: bool,
     callback: Option<Callback>,
-    children: HashMap<String, RefCell<TrieNode>>,
+    named_children: HashMap<String, Box<TrieNode>>,
+    params_children: Vec<Box<TrieNode>>,
 }
 
 impl TrieNode {
-    fn new(field: &str, callback: Option<Callback>, is_param_field: bool) -> Self {
+    fn new(field: &str, callback: Option<Callback>) -> Self {
         TrieNode {
             field: field.to_owned(),
-            is_param_field,
             callback,
-            children: HashMap::new(),
+            named_children: HashMap::new(),
+            params_children: Vec::new(),
         }
     }
 
@@ -33,45 +32,122 @@ impl TrieNode {
         // if already has this child, keep calling insert recursively. Only do this when not
         // a params, otherwise, always create a new branch
         if !is_param {
-            if let Some(child) = self.children.get(current) {
+            if let Some(child) = self.named_children.get_mut(current) {
                 match segments.len() {
-                    0 => (*child.borrow_mut()).callback = Some(callback),
-                    _ => (*child.borrow_mut()).insert(segments, callback),
+                    0 => {
+                        if let Some(_) = child.callback { panic!("Key collision!"); }
+                        child.callback = Some(callback);
+                    },
+                    _ => {
+                        child.insert(segments, callback);
+                    },
                 }
 
                 return;
             }
+
+            let new_child = match segments.len() {
+                    0 => {
+                        TrieNode::new(current, Some(callback))
+                    },
+                    _ => {
+                        let mut temp = TrieNode::new(current, None);
+                        temp.insert(segments, callback);
+                        temp
+                    },
+                };
+
+            self.named_children.insert(head.to_owned(), Box::new(new_child));
+            return;
         }
 
         let new_child = match segments.len() {
             0 => {
-                TrieNode::new(current, Some(callback), is_param)
+                TrieNode::new(current, Some(callback))
             },
             _ => {
-                let mut node = TrieNode::new(current, None, is_param);
+                let mut node = TrieNode::new(current, None);
                 node.insert(segments, callback);
                 node
             },
         };
 
-        self.children.insert(current.to_owned(), RefCell::new(new_child));
+        self.params_children.push(Box::new(new_child));
     }
 
     //TODO: comprise to radix-trie?
 }
 
+impl Clone for TrieNode {
+    fn clone(&self) -> Self {
+        TrieNode {
+            field: self.field.clone(),
+            callback: self.callback.clone(),
+            named_children: self.named_children.clone(),
+            params_children: self.params_children.clone(),
+        }
+    }
+}
+
 pub struct RouteTrie {
-    root: TrieNode
+    pub root: TrieNode
 }
 
 impl RouteTrie {
     pub fn initialize() -> Self {
         RouteTrie {
-            root: TrieNode::new("/", None, false),
+            root: TrieNode::new("/", None),
         }
+    }
+
+    #[inline]
+    pub fn is_empty(&self) -> bool {
+        self.root.named_children.is_empty() && self.root.params_children.is_empty()
     }
 
     pub fn add(&mut self, segments: Vec<String>, callback: Callback) {
         self.root.insert(segments, callback);
+    }
+
+    pub fn find(root: &TrieNode, segments: &[String], params: &mut Vec<(String, String)>) -> Option<Callback> {
+        if segments.is_empty() { return None; }
+
+        let head = &segments[0];
+        let is_segments_tail = segments.len() <= 1;
+
+        if let Some(child) = root.named_children.get(head) {
+            if is_segments_tail {
+                return child.callback;
+            }
+
+            return RouteTrie::find(&child, &segments[1..], params);
+        }
+
+        for params_child in root.params_children.iter() {
+            let param_node = params_child;
+            params.push((param_node.field.to_owned(), head.to_owned()));
+
+            if is_segments_tail {
+                if let Some(callback) = param_node.callback {
+                    return Some(callback);
+                }
+            } else {
+                if let Some(callback) = RouteTrie::find(param_node, &segments[1..], params) {
+                    return Some(callback);
+                }
+            }
+
+            params.pop();
+        }
+
+        None
+    }
+}
+
+impl Clone for RouteTrie {
+    fn clone(&self) -> Self {
+        RouteTrie {
+            root: self.root.clone(),
+        }
     }
 }

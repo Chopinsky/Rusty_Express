@@ -8,8 +8,8 @@ use support::common::*;
 
 pub struct ServerConfig {
     pub pool_size: usize,
-    pub read_timeout: u8,
-    pub write_timeout: u8,
+    pub read_timeout: u16,
+    pub write_timeout: u16,
     pub use_session_autoclean: bool,
     session_auto_clean_period: Option<chrono::Duration>,
     meta_data: ConnMetadata,
@@ -19,8 +19,8 @@ impl ServerConfig {
     pub fn new() -> Self {
         ServerConfig {
             pool_size: 8,
-            read_timeout: 8,
-            write_timeout: 8,
+            read_timeout: 512,
+            write_timeout: 512,
             use_session_autoclean: false,
             session_auto_clean_period: Some(chrono::Duration::seconds(3600)),
             meta_data: ConnMetadata::new(),

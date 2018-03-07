@@ -24,35 +24,19 @@ pub struct Request {
     pub uri: String,
     cookie: HashMap<String, String>,
     scheme: HashMap<String, Vec<String>>,
+    params: HashMap<String, String>,
     header: HashMap<String, String>,
     body: Vec<String>,
 }
 
 impl Request {
-    pub fn build(
-        method: Option<REST>,
-        uri: String,
-        scheme: HashMap<String, Vec<String>>,
-        cookie: HashMap<String, String>,
-        header: HashMap<String, String>,
-        body: Vec<String>
-    ) -> Self {
-        Request {
-            method,
-            uri,
-            cookie,
-            scheme,
-            header,
-            body,
-        }
-    }
-
     pub fn new() -> Self {
         Request {
             method: None,
             uri: String::new(),
             cookie: HashMap::new(),
             scheme: HashMap::new(),
+            params: HashMap::new(),
             header: HashMap::new(),
             body: Vec::new(),
         }
@@ -78,6 +62,7 @@ impl Request {
         }
     }
 
+    #[inline]
     pub fn cookie_iter(&self) -> Iter<String, String> {
         self.cookie.iter()
     }
@@ -91,6 +76,16 @@ impl Request {
             None => None,
         }
     }
+
+    #[inline]
+    pub fn param(&self, key: &str) -> Option<&String> {
+        self.params.get(key)
+    }
+
+    #[inline]
+    pub fn param_iter(&self) -> Iter<String, String> {
+        self.params.iter()
+    }
 }
 
 pub trait RequestWriter {
@@ -99,6 +94,8 @@ pub trait RequestWriter {
     fn create_scheme(&mut self, scheme: HashMap<String, Vec<String>>);
     fn set_cookie(&mut self, key: &str, val: &str, allow_override: bool);
     fn create_cookie(&mut self, cookie: HashMap<String, String>);
+    fn set_param(&mut self, key: &str, val: &str);
+    fn create_param(&mut self, params: HashMap<String, String>);
     fn extend_body(&mut self, content: &str);
 }
 
@@ -121,6 +118,16 @@ impl RequestWriter for Request {
 
     fn create_cookie(&mut self, cookie: HashMap<String, String>) {
         self.cookie = cookie;
+    }
+
+    #[inline]
+    fn set_param(&mut self, key: &str, val: &str) {
+        self.params.entry(key.to_owned()).or_insert(val.to_owned());
+    }
+
+    #[inline]
+    fn create_param(&mut self, params: HashMap<String, String>) {
+        self.params = params;
     }
 
     fn extend_body(&mut self, content: &str) {
@@ -287,7 +294,7 @@ pub trait ResponseWriter {
     fn set_cookie(&mut self, cookie: Cookie);
     fn set_cookies(&mut self, cookie: &[Cookie]);
     fn clear_cookies(&mut self);
-    fn set_content_type(&mut self, content_type: String);
+    fn set_content_type(&mut self, content_type: &str);
     fn check_and_update(&mut self, fallback: &HashMap<u16, String>);
     fn close_connection(&mut self, is_bad_request: bool);
     fn redirect(&mut self, path: &str);
@@ -347,13 +354,13 @@ impl ResponseWriter for Response {
             if self.status == 200 && self.content_type.is_empty() {
                 let mime_type =
                     if let Some(ext) = file_path.extension() {
-                        let file_extension = ext.to_string_lossy().into_owned();
-                        default_mime_type_with_ext(&file_extension[..])
+                        let file_extension = ext.to_string_lossy();
+                        default_mime_type_with_ext(&file_extension)
                     } else {
                         String::from("text/plain")
                     };
 
-                self.set_content_type(mime_type);
+                self.set_content_type(&mime_type[..]);
             }
         }
     }
@@ -380,9 +387,9 @@ impl ResponseWriter for Response {
         self.cookie.clear();
     }
 
-    fn set_content_type(&mut self, content_type: String) {
+    fn set_content_type(&mut self, content_type: &str) {
         if !content_type.is_empty() {
-            self.content_type = content_type;
+            self.content_type = content_type.to_owned();
         }
     }
 
@@ -635,9 +642,9 @@ fn write_header_status(status: u16, has_contents: bool, tx: mpsc::Sender<String>
         },
     }
 
-    if let Err(e) = tx.send(header) {
-        println!("Unable to write header status: {}", e);
-    }
+    tx.send(header).unwrap_or_else(|e| {
+        eprintln!("Unable to write header status: {}", e);
+    });
 }
 
 fn write_headers(header: HashMap<String, String>, tx: mpsc::Sender<String>) {
@@ -657,14 +664,12 @@ fn write_headers(header: HashMap<String, String>, tx: mpsc::Sender<String>) {
         headers.push_str(&format!("{}: {}\r\n", field, value));
     }
 
-    if let Err(e) = tx.send(headers) {
-        println!("Unable to write main response header: {}", e);
-    }
+    tx.send(headers).unwrap_or_else(|e| {
+        eprintln!("Unable to write main response header: {}", e);
+    });
 }
 
 fn write_header_cookie(cookie: HashMap<String, Cookie>, tx: mpsc::Sender<String>) {
-    println!("cookie parse");
-
     let mut set_cookie = String::new();
     for (_, cookie) in cookie.into_iter() {
         if cookie.is_valid() {
@@ -672,10 +677,8 @@ fn write_header_cookie(cookie: HashMap<String, Cookie>, tx: mpsc::Sender<String>
         }
     }
 
-    println!("cookie sent");
-
-    if let Err(e) = tx.send(set_cookie) {
-        println!("Unable to write response cookies: {}", e);
-    }
+    tx.send(set_cookie).unwrap_or_else(|e| {
+        eprintln!("Unable to write response cookies: {}", e);
+    });
 }
 

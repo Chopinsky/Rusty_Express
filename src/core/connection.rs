@@ -7,6 +7,8 @@ use std::net::{TcpStream, Shutdown};
 use std::sync::{Arc, RwLock, mpsc};
 use std::time::Duration;
 
+use std::time::SystemTime;
+
 use core::config::ConnMetadata;
 use core::states::{StatesProvider, StatesInteraction};
 use core::http::{Request, RequestWriter, Response, ResponseStates, ResponseWriter, ResponseStreamer};
@@ -48,7 +50,7 @@ pub fn handle_connection_with_states<T: Send + Sync + Clone + StatesProvider>(
         _ => { /* Nothing */ },
     }
 
-    let result = handle_response(stream, request, router, &metadata);
+    let result = handle_response(stream, &mut request, router, &metadata);
 
     match metadata.get_state_interaction() {
         &StatesInteraction::WithRequest | &StatesInteraction::Both => {
@@ -73,24 +75,24 @@ pub fn handle_connection(
                                false);
     }
 
-    handle_response(stream, request, router, &metadata)
+    handle_response(stream, &mut request, router, &metadata)
 }
 
-fn handle_response(stream: TcpStream, request: Request, router: Arc<Route>, conn_handler: &Arc<ConnMetadata>) -> Option<u8> {
-    match get_response_with_fallback(&request, &router,
+fn handle_response(stream: TcpStream, request: &mut Request, router: Arc<Route>, conn_handler: &Arc<ConnMetadata>) -> Option<u8> {
+    match get_response_with_fallback(request, &router,
                                  &conn_handler.get_default_header(),
                                  &conn_handler.get_default_pages()) {
         Ok(response) => {
             let ignore_body =
-                match request.method {
-                    Some(REST::OTHER(other_method)) => other_method.eq("head"),
+                match &request.method {
+                    &Some(REST::OTHER(ref other_method)) => other_method.eq("head"),
                     _ => false,
                 };
 
             write_to_stream(stream, response, ignore_body)
         },
         Err(e) => {
-            println!("Error on generating response -- {}", e);
+            eprintln!("Error on generating response -- {}", e);
             write_to_stream(stream,
                                    build_err_response(&ParseError::WriteStreamErr, conn_handler.get_default_pages()),
                                    false)
@@ -105,7 +107,7 @@ fn write_to_stream(stream: TcpStream, response: Response, ignore_body: bool) -> 
     if !ignore_body { response.serialize_body(&mut buffer); }
 
     if let Err(e) = buffer.flush() {
-        println!("An error has taken place when flushing the response to the stream: {}", e);
+        eprintln!("An error has taken place when flushing the response to the stream: {}", e);
         return Some(1);
     }
 
@@ -125,7 +127,10 @@ fn write_to_stream(stream: TcpStream, response: Response, ignore_body: bool) -> 
 fn handle_request(mut stream: &TcpStream, request: &mut Request) -> Result<(), ParseError> {
     let mut buffer = [0; 512];
 
-    if let Ok(_) = stream.read(&mut buffer) {
+    if let Err(e) = stream.read(&mut buffer){
+        //eprintln!("Reading stream error -- {} at {:?}", e, SystemTime::now());
+        Err(ParseError::ReadStreamErr)
+    } else {
         let request_raw = String::from_utf8_lossy(&buffer[..]);
         if request_raw.is_empty() {
             return Err(ParseError::EmptyRequestErr);
@@ -136,8 +141,6 @@ fn handle_request(mut stream: &TcpStream, request: &mut Request) -> Result<(), P
         } else {
             return Ok(());
         }
-    } else {
-        Err(ParseError::ReadStreamErr)
     }
 }
 
@@ -278,7 +281,7 @@ fn parse_request_base(line: String, tx: mpsc::Sender<RequestBase>) {
 }
 
 fn get_response_with_fallback(
-        request_info: &Request,
+        request_info: &mut Request,
         router: &Route,
         header: &HashMap<String, String>,
         fallback: &HashMap<u16, String>
@@ -296,7 +299,7 @@ fn get_response_with_fallback(
             return Err(String::from("Invalid request method"));
         },
         _ => {
-            router.handle_request_method(&request_info, &mut resp);
+            router.handle_request_method(request_info, &mut resp);
         }
     }
 
@@ -395,6 +398,7 @@ fn build_err_response(err: &ParseError, default_pages: &HashMap<u16, String>) ->
 
     resp.status(status);
     resp.check_and_update(&default_pages);
+    resp.close_connection(false);
 
     resp
 }

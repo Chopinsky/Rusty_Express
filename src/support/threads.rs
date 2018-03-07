@@ -1,7 +1,8 @@
 #![allow(dead_code)]
 
-use std::sync::{Arc, mpsc, Mutex, Once, ONCE_INIT};
+use std::cmp;
 use std::{mem, thread};
+use std::sync::{Arc, mpsc, Mutex, Once, ONCE_INIT};
 
 type Job = Box<FnBox + Send + 'static>;
 
@@ -97,7 +98,7 @@ impl Drop for ThreadPool {
     }
 }
 
-static POOL_SIZE: usize = 8;
+static MIN_POOL_SIZE: usize = 12;
 static ONCE: Once = ONCE_INIT;
 static mut POOL: Pool = Pool { store: None };
 
@@ -105,16 +106,22 @@ struct Pool {
     store: Option<Box<ThreadPool>>,
 }
 
-pub fn initialize() {
+fn initialize_with(size: usize) {
+    let count = cmp::max(MIN_POOL_SIZE, size);
+
     unsafe {
         ONCE.call_once(|| {
             // Make it
-            let pool = Pool { store: Some(Box::new(ThreadPool::new(POOL_SIZE))), };
+            let pool = Pool { store: Some(Box::new(ThreadPool::new(count))), };
 
             // Put it in the heap so it can outlive this call
             POOL = mem::transmute(pool);
         });
     }
+}
+
+pub fn initialize() {
+    initialize_with(MIN_POOL_SIZE);
 }
 
 pub fn run<F>(f: F)
