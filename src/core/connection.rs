@@ -3,15 +3,13 @@
 use std::collections::HashMap;
 use std::io::prelude::*;
 use std::io::BufWriter;
-use std::net::{TcpStream, Shutdown};
+use std::net::TcpStream;
 use std::sync::{Arc, RwLock, mpsc};
 use std::time::Duration;
 
-use std::time::SystemTime;
-
 use core::config::ConnMetadata;
 use core::states::{StatesProvider, StatesInteraction};
-use core::http::{Request, RequestWriter, Response, ResponseStates, ResponseWriter, ResponseStreamer};
+use core::http::{Request, RequestWriter, Response, ResponseWriter, ResponseStreamer};
 use core::router::{REST, Route, RouteHandler};
 use support::shared_pool;
 
@@ -111,24 +109,15 @@ fn write_to_stream(stream: TcpStream, response: Response, ignore_body: bool) -> 
         return Some(1);
     }
 
-    if response.to_close_connection() {
-        // Told to close the connection, shut down the socket now.
-        if let Ok(_) = stream.shutdown(Shutdown::Both) {
-            return Some(0);
-        }
-    } else {
-        // Otherwise we're good to leave.
-        return Some(0);
-    }
-
-    return Some(1);
+    // Otherwise we're good to leave.
+    return Some(0);
 }
 
 fn handle_request(mut stream: &TcpStream, request: &mut Request) -> Result<(), ParseError> {
     let mut buffer = [0; 512];
 
     if let Err(e) = stream.read(&mut buffer){
-        //eprintln!("Reading stream error -- {} at {:?}", e, SystemTime::now());
+        eprintln!("Reading stream error -- {}", e);
         Err(ParseError::ReadStreamErr)
     } else {
         let request_raw = String::from_utf8_lossy(&buffer[..]);
@@ -359,7 +348,7 @@ fn cookie_parser(cookie_body: String, tx: mpsc::Sender<HashMap<String, String>>)
     }
 
     if let Err(e) = tx.send(cookie) {
-        println!("Unable to parse base request cookies: {}", e);
+        eprintln!("Unable to parse base request cookies: {}", e);
     }
 }
 
@@ -398,7 +387,7 @@ fn build_err_response(err: &ParseError, default_pages: &HashMap<u16, String>) ->
 
     resp.status(status);
     resp.check_and_update(&default_pages);
-    resp.close_connection(false);
+    resp.keep_alive(false);
 
     resp
 }

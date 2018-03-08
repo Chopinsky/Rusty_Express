@@ -137,7 +137,7 @@ impl RequestWriter for Request {
 
 pub struct Response {
     status: u16,
-    to_close: bool,
+    keep_alive: bool,
     content_type: String,
     cookie: HashMap<String, Cookie>,
     header: HashMap<String, String>,
@@ -149,7 +149,7 @@ impl Response {
     pub fn new() -> Self {
         Response {
             status: 0,
-            to_close: false,
+            keep_alive: false,
             content_type: String::new(),
             cookie: HashMap::new(),
             header: HashMap::new(),
@@ -161,7 +161,7 @@ impl Response {
     pub fn new_with_default_header(default_header: &HashMap<String, String>) -> Self {
         Response {
             status: 0,
-            to_close: false,
+            keep_alive: false,
             content_type: String::new(),
             cookie: HashMap::new(),
             header: default_header.clone(),
@@ -218,6 +218,17 @@ impl Response {
             }
         }
 
+        if !self.header.contains_key("connection") {
+            let connection =
+                if self.keep_alive {
+                    "keep-alive"
+                } else {
+                    "close"
+                };
+
+            header_misc.push_str(&format!("Connection: {}\r\n", connection));
+        }
+
         let mut header = Box::new(String::new());
         if let Ok(status) = rx_status.recv_timeout(Duration::from_millis(200)) {
             if !status.is_empty() {
@@ -244,7 +255,7 @@ impl Response {
 }
 
 pub trait ResponseStates {
-    fn to_close_connection(&self) -> bool;
+    fn to_keep_alive(&self) -> bool;
     fn get_redirect_path(&self) -> String;
     fn get_header(&self, key: &str) -> Option<&String>;
     fn get_cookie(&self, key: &str) -> Option<&Cookie>;
@@ -254,8 +265,8 @@ pub trait ResponseStates {
 
 impl ResponseStates for Response {
     #[inline]
-    fn to_close_connection(&self) -> bool {
-        self.to_close
+    fn to_keep_alive(&self) -> bool {
+        self.keep_alive
     }
 
     #[inline]
@@ -296,7 +307,7 @@ pub trait ResponseWriter {
     fn clear_cookies(&mut self);
     fn set_content_type(&mut self, content_type: &str);
     fn check_and_update(&mut self, fallback: &HashMap<u16, String>);
-    fn close_connection(&mut self, is_bad_request: bool);
+    fn keep_alive(&mut self, to_keep: bool);
     fn redirect(&mut self, path: &str);
 }
 
@@ -320,6 +331,11 @@ impl ResponseWriter for Response {
         match &field.to_lowercase()[..] {
             "content-type" => {
                 self.content_type = value.to_owned();
+            },
+            "connection" => {
+                if value.to_lowercase().eq("keep-alive") {
+                    self.keep_alive = true;
+                }
             },
             _ => {
                 set_header(&mut self.header, field.to_owned(), value.to_owned(), replace);
@@ -345,7 +361,7 @@ impl ResponseWriter for Response {
         let file_path = Path::new(file_loc);
         if !file_path.is_file() {
             // if doesn't exist or not a file, fail now
-            println!("Can't locate requested file");
+            eprintln!("Can't locate requested file");
             self.status(404);
         } else {
             let status = read_from_file(&file_path, &mut self.body);
@@ -412,12 +428,8 @@ impl ResponseWriter for Response {
         }
     }
 
-    fn close_connection(&mut self, is_bad_request: bool) {
-        if is_bad_request {
-            self.status(500);
-        }
-
-        self.to_close = true;
+    fn keep_alive(&mut self, to_keep: bool) {
+        self.keep_alive = to_keep;
     }
 
     /// Can only redirect to internal path, no outsource path, sorry for the hackers (FYI, you can

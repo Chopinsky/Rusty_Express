@@ -18,7 +18,7 @@ pub mod prelude {
 }
 
 use std::collections::HashMap;
-use std::net::{SocketAddr, TcpListener, TcpStream};
+use std::net::{SocketAddr, Shutdown, TcpListener, TcpStream};
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
@@ -154,6 +154,15 @@ fn start_with<T: Send + Sync + Clone + StatesProvider + 'static>(
 
     for stream in listener.incoming() {
         if let Ok(s) = stream {
+            if server_states.is_terminating() {
+                // Told to close the connection, shut down the socket now.
+                &s.shutdown(Shutdown::Both).unwrap_or_else(|e| {
+                    eprintln!("Unable to shut down the stream: {}", e);
+                });
+
+                return;
+            }
+
             // clone Arc-pointers
             let router_ptr = Arc::clone(&router);
             let meta_ptr = Arc::clone(&meta_arc);
@@ -170,10 +179,6 @@ fn start_with<T: Send + Sync + Clone + StatesProvider + 'static>(
                     handle_connection(s, router_ptr, meta_ptr);
                 });
             }
-        }
-
-        if server_states.is_terminating() {
-            return;
         }
     }
 }
