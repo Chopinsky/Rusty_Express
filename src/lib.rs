@@ -31,6 +31,7 @@ use support::{ThreadPool, shared_pool};
 
 //TODO: 1. handle errors with grace...
 //TODO: 2. Impl middlewear
+//TODO: 3. config to and from config.tmol file
 
 pub struct HttpServer {
     router: Route,

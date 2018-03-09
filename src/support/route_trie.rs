@@ -74,8 +74,6 @@ impl TrieNode {
 
         self.params_children.push(Box::new(new_child));
     }
-
-    //TODO: comprise to radix-trie?
 }
 
 impl Clone for TrieNode {
