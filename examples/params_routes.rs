@@ -3,8 +3,9 @@ extern crate rusty_express;
 use rusty_express::prelude::*;
 
 fn main() {
+    // define http server now
     let mut server = HttpServer::new();
-    server.set_pool_size(8);
+    server.set_pool_size(12);
 
     //define router directly
     server.get(RequestPath::Explicit("/"), simple_response);
@@ -18,6 +19,7 @@ fn main() {
 pub fn simple_response(req: &Request, resp: &mut Response) {
     resp.send(&format!("Hello world from rusty server from {}!<br />", req.uri));
     resp.status(200);
+    resp.set_content_type("text/html");
 }
 
 pub fn user_param_response(req: &Request, resp: &mut Response) {

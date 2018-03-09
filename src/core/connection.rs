@@ -3,7 +3,7 @@
 use std::collections::HashMap;
 use std::io::prelude::*;
 use std::io::BufWriter;
-use std::net::TcpStream;
+use std::net::{Shutdown, TcpStream};
 use std::sync::{Arc, RwLock, mpsc};
 use std::time::Duration;
 
@@ -107,6 +107,9 @@ fn write_to_stream(stream: TcpStream, response: Response, ignore_body: bool) -> 
     if let Err(e) = buffer.flush() {
         eprintln!("An error has taken place when flushing the response to the stream: {}", e);
         return Some(1);
+    } else if let Err(e) = stream.shutdown(Shutdown::Both) {
+        eprintln!("An error has taken place when flushing the response to the stream: {}", e);
+        return Some(1);
     }
 
     // Otherwise we're good to leave.
@@ -138,7 +141,7 @@ fn parse_request(request: &str, store: &mut Request) -> bool {
         return false;
     }
 
-    //println!("{}", request);
+    //println!("Print request: {}", request);
 
     let (tx_base, rx_base) = mpsc::channel();
     let (tx_cookie, rx_cookie) = mpsc::channel();

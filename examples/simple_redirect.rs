@@ -1,10 +1,9 @@
-#![allow(unused_variables)]
-
 extern crate rusty_express;
 
 use rusty_express::prelude::*;
 
 fn main() {
+    // define http server now
     let mut server = HttpServer::new();
     server.set_pool_size(8);
 

@@ -84,8 +84,7 @@ impl RouteMap {
                 if self.wildcard.contains_key(req_uri) { return; }
 
                 if let Ok(re) = Regex::new(req_uri) {
-                    let route = RegexRoute::new(re, callback);
-                    self.wildcard.entry(req_uri.to_owned()).or_insert(route);
+                    self.wildcard.entry(req_uri.to_owned()).or_insert(RegexRoute::new(re, callback));
                 }
             },
             RequestPath::ExplicitWithParams(req_uri) => {
