@@ -14,6 +14,7 @@ use chrono::prelude::*;
 use core::cookie::*;
 use core::router::REST;
 use support::shared_pool;
+use support::common::MapUpdates;
 
 static FOUR_OH_FOUR: &'static str = include_str!("../default/404.html");
 static FIVE_HUNDRED: &'static str = include_str!("../default/500.html");
@@ -101,11 +102,11 @@ pub trait RequestWriter {
 
 impl RequestWriter for Request {
     fn write_header(&mut self, key: &str, val: &str, allow_override: bool) {
-        set_header(&mut self.header, key.to_owned(), val.to_owned(), allow_override);
+        self.header.add(key, val.to_owned(), allow_override);
     }
 
     fn write_scheme(&mut self, key: &str, val: Vec<String>, allow_override: bool) {
-        set_header(&mut self.scheme, key.to_owned(), val.to_owned(), allow_override);
+        self.scheme.add(key, val.to_owned(), allow_override);
     }
 
     fn create_scheme(&mut self, scheme: HashMap<String, Vec<String>>) {
@@ -113,7 +114,7 @@ impl RequestWriter for Request {
     }
 
     fn set_cookie(&mut self, key: &str, val: &str, allow_override: bool) {
-        set_header(&mut self.cookie, key.to_owned(), val.to_owned(), allow_override);
+        self.cookie.add(key, val.to_owned(), allow_override);
     }
 
     fn create_cookie(&mut self, cookie: HashMap<String, String>) {
@@ -338,7 +339,7 @@ impl ResponseWriter for Response {
                 }
             },
             _ => {
-                set_header(&mut self.header, field.to_owned(), value.to_owned(), replace);
+                self.header.add(field, value.to_owned(), replace);
             },
         };
     }
@@ -465,20 +466,6 @@ impl ResponseStreamer for Response {
                 _ => { /* Nothing */ },
             };
         }
-    }
-}
-
-pub fn set_header<T>(header: &mut HashMap<String, T>, field: String, value: T, allow_override: bool) -> Option<T> {
-    if field.is_empty() { return None; }
-
-    let f = field.to_lowercase();
-    if allow_override {
-        //new field, insert
-        header.insert(f, value)
-    } else {
-        //existing field, replace existing value or append depending on the parameter
-        header.entry(f).or_insert(value);
-        None
     }
 }
 

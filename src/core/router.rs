@@ -1,14 +1,16 @@
 #![allow(unused_imports)]
 #![allow(unused_variables)]
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::cmp::Ordering;
+use std::io::Error;
 use std::sync::mpsc;
 use std::time::Duration;
 
 use core::http::{Request, RequestWriter, Response, ResponseStates, ResponseWriter};
 use regex::Regex;
 use support::{RouteTrie, shared_pool};
+use support::common::MapUpdates;
 
 #[derive(PartialEq, Eq, Hash, Clone)]
 pub enum REST {
@@ -74,7 +76,7 @@ impl RouteMap {
                     panic!("Request path must have valid contents and start with '/'.");
                 }
 
-                self.explicit.entry(req_uri.to_owned()).or_insert(callback);
+                self.explicit.add(req_uri, callback, false);
             },
             RequestPath::WildCard(req_uri) => {
                 if req_uri.is_empty() {
@@ -84,12 +86,12 @@ impl RouteMap {
                 if self.wildcard.contains_key(req_uri) { return; }
 
                 if let Ok(re) = Regex::new(req_uri) {
-                    self.wildcard.entry(req_uri.to_owned()).or_insert(RegexRoute::new(re, callback));
+                    self.wildcard.add(req_uri, RegexRoute::new(re, callback), false);
                 }
             },
             RequestPath::ExplicitWithParams(req_uri) => {
                 if !req_uri.contains("/:") {
-                    self.explicit.entry(req_uri.to_owned()).or_insert(callback);
+                    self.explicit.add(req_uri, callback, false);
                     return;
                 }
 
@@ -98,6 +100,10 @@ impl RouteMap {
                                                    .filter(|s| !s.is_empty())
                                                    .map(|s| s.to_owned())
                                                    .collect();
+
+                if let Err(e) = validate_segments(&segments) {
+                    panic!("{}", e);
+                }
 
                 self.explicit_with_params.add(segments, callback);
             },
@@ -306,4 +312,19 @@ fn search_params_router(route_head: &RouteTrie, uri: String, tx: mpsc::Sender<(O
     tx.send((result, params)).unwrap_or_else(|e| {
         eprintln!("Error on matching wild card routes: {}", e);
     });
+}
+
+fn validate_segments(segments: &Vec<String>) -> Result<(), &'static str> {
+    let mut param_names = HashSet::new();
+    for seg in segments {
+        if seg.starts_with(':') {
+            if param_names.contains(seg) {
+                return Err("Route parameters must have unique names.");
+            } else {
+                param_names.insert(seg);
+            }
+        }
+    }
+
+    Ok(())
 }

@@ -4,7 +4,7 @@ description = "A simple server written in Rust and provide Express-alike APIs. M
 readme = "README.md"
 documentation = "https://docs.rs/rusty_express/"
 repository = "https://github.com/Chopinsky/Rusty_Express.git"
-version = "0.2.8"
+version = "0.2.9"
 authors = ["Jacob Zuo <chopinsky@live.com>"]
 license = "MIT"
 

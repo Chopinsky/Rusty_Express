@@ -19,9 +19,9 @@ You're also very welcome to submit PR to fix bugs or implement new features.
 
 ## How to use
 In your project's `Cargo.toml`, add dependency:
-```rust
+```cargo
 [dependencies]
-rusty_express = "^0.2.7"
+rusty_express = "^0.2.8"
 ...
 ```
 
@@ -34,8 +34,9 @@ use rusty_express::prelude::*;
 fn main() {
     //A http server with default thread pool size of 4
     let mut server = HttpServer::new();
-    //Change thread pool size to 8.
-    server.set_pool_size(8);
+    
+    //Change thread pool size from 8 (default) to 10.
+    server.set_pool_size(10);
 
     //Route definition
     server.get(RequestPath::Exact("/"), simple_response);

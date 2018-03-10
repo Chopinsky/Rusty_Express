@@ -1,10 +1,16 @@
 use std::collections::HashMap;
+use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
 use chrono;
-use core::common::*;
 use core::states::StatesInteraction;
 use support::common::*;
+
+lazy_static! {
+    static ref VIEW_ENGINE: Arc<RwLock<HashMap<String, ViewEngine>>> = Arc::new(RwLock::new(HashMap::new()));
+}
+
+pub type ViewEngine = fn(&Box<String>) -> Box<String>;
 
 pub struct ServerConfig {
     pub pool_size: usize,
@@ -42,7 +48,7 @@ impl ServerConfig {
     }
 
     pub fn set_default_header(&mut self, field: String, value: String, replace: bool) {
-        set_header(&mut self.meta_data.header, field, value, replace);
+        self.meta_data.header.add(&field[..], value, replace);
     }
 
     pub fn set_session_auto_clean(&mut self, auto_clean_period: Duration) {
