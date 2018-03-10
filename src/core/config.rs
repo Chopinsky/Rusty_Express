@@ -7,10 +7,10 @@ use core::states::StatesInteraction;
 use support::common::*;
 
 lazy_static! {
-    static ref VIEW_ENGINE: Arc<RwLock<HashMap<String, ViewEngine>>> = Arc::new(RwLock::new(HashMap::new()));
+    static ref VIEW_ENGINES: Arc<RwLock<HashMap<String, Box<ViewEngine>>>> = Arc::new(RwLock::new(HashMap::new()));
 }
 
-pub type ViewEngine = fn(&Box<String>) -> Box<String>;
+pub type ViewEngine = fn(Box<String>, HashMap<String, String>) -> Box<String>;
 
 pub struct ServerConfig {
     pub pool_size: usize,
@@ -67,6 +67,24 @@ impl ServerConfig {
         }
     }
 }
+
+pub trait DefineViewEngine {
+    fn view_engine(extension: &str, engine: ViewEngine);
+}
+
+impl DefineViewEngine for ServerConfig {
+    fn view_engine(extension: &str, engine: ViewEngine) {
+        if extension.is_empty() { return; }
+
+        if let Ok(mut engines) = VIEW_ENGINES.write() {
+            engines.insert(extension.to_owned(), Box::new(engine));
+        }
+    }
+}
+
+//pub trait ViewParser {
+//    fn parse_view()
+//}
 
 pub struct ConnMetadata {
     header: HashMap<String, String>,

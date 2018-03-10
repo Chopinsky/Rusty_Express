@@ -9,7 +9,7 @@ mod support;
 
 pub mod prelude {
     pub use {HttpServer, ServerDef};
-    pub use core::config::*;
+    pub use core::config::{ServerConfig};
     pub use core::cookie::*;
     pub use core::http::{Request, RequestWriter, Response, ResponseStates, ResponseWriter};
     pub use core::router::{REST, Route, Router, RequestPath};

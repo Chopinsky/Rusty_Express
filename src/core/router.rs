@@ -56,7 +56,7 @@ impl Clone for RegexRoute {
 
 pub struct RouteMap {
     explicit: HashMap<String, Callback>,
-    explicit_with_params: RouteTrie, //HashMap<String, RegexRoute>,
+    explicit_with_params: RouteTrie,
     wildcard: HashMap<String, RegexRoute>,
 }
 
@@ -64,7 +64,7 @@ impl RouteMap {
     pub fn new() -> Self {
         RouteMap {
             explicit: HashMap::new(),
-            explicit_with_params: RouteTrie::initialize(), //HashMap::new(),
+            explicit_with_params: RouteTrie::initialize(),
             wildcard: HashMap::new(),
         }
     }

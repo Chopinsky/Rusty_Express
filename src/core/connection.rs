@@ -43,7 +43,7 @@ pub fn handle_connection_with_states<T: Send + Sync + Clone + StatesProvider>(
 
     match metadata.get_state_interaction() {
         &StatesInteraction::WithRequest | &StatesInteraction::Both => {
-
+            //TODO: interact with defined state actors
         },
         _ => { /* Nothing */ },
     }
@@ -52,7 +52,7 @@ pub fn handle_connection_with_states<T: Send + Sync + Clone + StatesProvider>(
 
     match metadata.get_state_interaction() {
         &StatesInteraction::WithRequest | &StatesInteraction::Both => {
-
+            //TODO: interact with defined state actors
         },
         _ => { /* Nothing */ },
     }

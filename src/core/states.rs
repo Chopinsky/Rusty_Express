@@ -1,5 +1,3 @@
-#![allow(dead_code)]
-
 use std::thread::*;
 use support::session::*;
 
@@ -44,14 +42,15 @@ pub enum StatesInteraction {
     None,
 }
 
+pub trait StatesProvider {
+    fn interaction_stage(&self) -> StatesInteraction;
+    //TODO: method to interact with request, response, or both
+}
+
 pub struct EmptyState {}
 
 impl Clone for EmptyState {
-    fn clone(&self) -> Self { EmptyState {}}
-}
-
-pub trait StatesProvider {
-    fn interaction_stage(&self) -> StatesInteraction;
+    fn clone(&self) -> Self { EmptyState {} }
 }
 
 impl StatesProvider for EmptyState {
