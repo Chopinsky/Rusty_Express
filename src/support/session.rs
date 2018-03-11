@@ -6,6 +6,8 @@ use std::io::{BufRead, BufReader, Write};
 use std::ops::*;
 use std::path::Path;
 use std::sync::{Arc, RwLock, mpsc};
+use std::sync::atomic;
+use std::sync::atomic::{AtomicBool};
 use std::time::{Duration, SystemTime};
 use std::thread;
 use std::thread::*;
@@ -23,7 +25,7 @@ static DELEM_LV_4: char = '\u{0008}';
 lazy_static! {
     static ref STORE: Arc<RwLock<HashMap<String, Session>>> = Arc::new(RwLock::new(HashMap::new()));
     static ref DEFAULT_LIFETIME: Arc<RwLock<Duration>> = Arc::new(RwLock::new(Duration::from_secs(172800)));
-    static ref AUTO_CLEARN: Arc<RwLock<bool>> = Arc::new(RwLock::new(false));
+    static ref AUTO_CLEARN: AtomicBool = AtomicBool::new(false);
 }
 
 pub struct Session {
@@ -211,9 +213,7 @@ impl SessionExchange for Session {
             };
 
         let handler: JoinHandle<_> = thread::spawn(move || {
-            if let Ok(mut auto_clean) = AUTO_CLEARN.write() {
-                *auto_clean = true;
-            }
+            AUTO_CLEARN.store(true, atomic::Ordering::Release);
 
             loop {
                 thread::sleep(sleep_period);
@@ -226,19 +226,12 @@ impl SessionExchange for Session {
 
     fn auto_clean_has_stopped() {
         thread::spawn(move || {
-            if let Ok(mut auto_clean) = AUTO_CLEARN.write() {
-                *auto_clean = false;
-            }
+            AUTO_CLEARN.store(false, atomic::Ordering::Release);
         });
     }
 
     fn auto_clean_is_running() -> bool {
-        if let Ok(auto_clean) = AUTO_CLEARN.read() {
-            return *auto_clean;
-        }
-
-        return false;
-
+        return AUTO_CLEARN.load(atomic::Ordering::Release);
     }
 }
 

@@ -1,7 +1,8 @@
 #![allow(dead_code)]
 
 use std::cmp;
-use std::{mem, thread};
+use std::mem;
+use std::thread;
 use std::sync::{Arc, mpsc, Mutex, Once, ONCE_INIT};
 
 type Job = Box<FnBox + Send + 'static>;

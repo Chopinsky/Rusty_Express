@@ -1,3 +1,6 @@
+#![allow(unused_variables)]
+#![allow(dead_code)]
+
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
@@ -10,7 +13,7 @@ lazy_static! {
     static ref VIEW_ENGINES: Arc<RwLock<HashMap<String, Box<ViewEngine>>>> = Arc::new(RwLock::new(HashMap::new()));
 }
 
-pub type ViewEngine = fn(Box<String>, HashMap<String, String>) -> Box<String>;
+pub type ViewEngine = fn(Box<String>, EngineContext) -> Box<String>;
 
 pub struct ServerConfig {
     pub pool_size: usize,
@@ -66,6 +69,11 @@ impl ServerConfig {
             _ => None,
         }
     }
+}
+
+pub struct EngineContext {
+    value: String,
+    children: HashMap<String, EngineContext>,
 }
 
 pub trait DefineViewEngine {

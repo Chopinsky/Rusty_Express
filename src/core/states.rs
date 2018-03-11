@@ -1,4 +1,8 @@
+#![allow(unused_variables)]
+
 use std::thread::*;
+
+use core::http::{Request, Response};
 use support::session::*;
 
 pub struct ServerStates {
@@ -42,9 +46,13 @@ pub enum StatesInteraction {
     None,
 }
 
+pub type RequireStateUpdates = bool;
+
 pub trait StatesProvider {
     fn interaction_stage(&self) -> StatesInteraction;
-    //TODO: method to interact with request, response, or both
+    fn on_request(&self, req: &mut Request) -> RequireStateUpdates;
+    fn on_response(&self, resp: &mut Response) -> RequireStateUpdates;
+    fn update(&mut self, req: &Request, resp: Option<&Response>);
 }
 
 pub struct EmptyState {}
@@ -54,7 +62,21 @@ impl Clone for EmptyState {
 }
 
 impl StatesProvider for EmptyState {
+    #[inline]
     fn interaction_stage(&self) -> StatesInteraction {
         StatesInteraction::None
     }
+
+    #[inline]
+    fn on_request(&self, req: &mut Request) -> RequireStateUpdates {
+        false
+    }
+
+    #[inline]
+    fn on_response(&self, resp: &mut Response) -> RequireStateUpdates {
+        false
+    }
+
+    #[inline]
+    fn update(&mut self, req: &Request, resp: Option<&Response>) { }
 }

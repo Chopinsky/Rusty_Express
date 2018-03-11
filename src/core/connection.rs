@@ -36,26 +36,43 @@ pub fn handle_connection_with_states<T: Send + Sync + Clone + StatesProvider>(
     let mut request = Request::new();
     if let Err(err) = handle_request(&stream, &mut request) {
         eprintln!("Error on parsing request");
-        return write_to_stream(stream,
-                               build_err_response(&err,metadata.get_default_pages()),
-                               false);
+        return write_to_stream(stream, &build_err_response(&err, &metadata), false);
     }
 
     match metadata.get_state_interaction() {
         &StatesInteraction::WithRequest | &StatesInteraction::Both => {
-            //TODO: interact with defined state actors
+            let require_updates = match states.read() {
+                Ok(s) => s.on_request(&mut request),
+                _ => false,
+            };
+
+            if require_updates {
+                if let Ok(mut s) = states.write() {
+                    s.update(&request, None);
+                }
+            }
         },
         _ => { /* Nothing */ },
-    }
+    };
 
-    let result = handle_response(stream, &mut request, router, &metadata);
+    let mut response = initialize_response(&metadata);
+    let result = handle_response(stream, &mut request, &mut response, &router, &metadata);
 
     match metadata.get_state_interaction() {
         &StatesInteraction::WithRequest | &StatesInteraction::Both => {
-            //TODO: interact with defined state actors
+            let require_updates = match states.read() {
+                Ok(s) => s.on_response(&mut response),
+                _ => false,
+            };
+
+            if require_updates {
+                if let Ok(mut s) = states.write() {
+                    s.update(&request, Some(&response));
+                }
+            }
         },
         _ => { /* Nothing */ },
-    }
+    };
 
     result
 }
@@ -68,37 +85,43 @@ pub fn handle_connection(
     let mut request= Request::new();
     if let Err(err) = handle_request(&stream, &mut request) {
         eprintln!("Error on parsing request");
-        return write_to_stream(stream,
-                               build_err_response(&err,metadata.get_default_pages()),
-                               false);
+        return write_to_stream(stream, &build_err_response(&err, &metadata), false);
     }
 
-    handle_response(stream, &mut request, router, &metadata)
+    handle_response(stream, &mut request, &mut initialize_response(&metadata), &router, &metadata)
 }
 
-fn handle_response(stream: TcpStream, request: &mut Request, router: Arc<Route>, conn_handler: &Arc<ConnMetadata>) -> Option<u8> {
-    match get_response_with_fallback(request, &router,
-                                 &conn_handler.get_default_header(),
-                                 &conn_handler.get_default_pages()) {
-        Ok(response) => {
+fn handle_response(stream: TcpStream, request: &mut Request, response: &mut Response,
+                   router: &Arc<Route>, metadata: &Arc<ConnMetadata>) -> Option<u8> {
+
+    match get_response_with_fallback(request, response, router, &metadata.get_default_pages()) {
+        Err(e) => {
+            eprintln!("Error on generating response -- {}", e);
+            write_to_stream(stream,
+                            &build_err_response(&ParseError::WriteStreamErr, &metadata),
+                            false)
+        },
+        _ => {
             let ignore_body =
                 match &request.method {
                     &Some(REST::OTHER(ref other_method)) => other_method.eq("head"),
                     _ => false,
                 };
 
-            write_to_stream(stream, response, ignore_body)
-        },
-        Err(e) => {
-            eprintln!("Error on generating response -- {}", e);
-            write_to_stream(stream,
-                                   build_err_response(&ParseError::WriteStreamErr, conn_handler.get_default_pages()),
-                                   false)
+            write_to_stream(stream, &response, ignore_body)
         },
     }
 }
 
-fn write_to_stream(stream: TcpStream, response: Response, ignore_body: bool) -> Option<u8> {
+fn initialize_response(metadata: &Arc<ConnMetadata>) -> Response {
+    let header = metadata.get_default_header();
+    match header.is_empty() {
+        true => Response::new(),
+        _ => Response::new_with_default_header(&header),
+    }
+}
+
+fn write_to_stream(stream: TcpStream, response: &Response, ignore_body: bool) -> Option<u8> {
     let mut buffer = BufWriter::new(&stream);
 
     response.serialize_header(&mut buffer, ignore_body);
@@ -273,30 +296,23 @@ fn parse_request_base(line: String, tx: mpsc::Sender<RequestBase>) {
 }
 
 fn get_response_with_fallback(
-        request_info: &mut Request,
+        request: &mut Request,
+        response: &mut Response,
         router: &Route,
-        header: &HashMap<String, String>,
         fallback: &HashMap<u16, String>
-    ) -> Result<Response, String> {
+    ) -> Result<(), String> {
 
-    let mut resp =
-        if header.is_empty() {
-            Response::new()
-        } else {
-            Response::new_with_default_header(&header)
-        };
-
-    match request_info.method {
+    match request.method {
         None => {
             return Err(String::from("Invalid request method"));
         },
         _ => {
-            router.handle_request_method(request_info, &mut resp);
+            router.handle_request_method(request, response);
         }
     }
 
-    resp.check_and_update(&fallback);
-    Ok(resp)
+    response.check_and_update(&fallback);
+    Ok(())
 }
 
 fn split_path(full_uri: &str) -> (String, String) {
@@ -381,7 +397,7 @@ fn scheme_parser(scheme: &str) -> Option<HashMap<String, Vec<String>>> {
     Some(scheme_result)
 }
 
-fn build_err_response(err: &ParseError, default_pages: &HashMap<u16, String>) -> Response {
+fn build_err_response(err: &ParseError, metadata: &Arc<ConnMetadata>) -> Response {
     let mut resp = Response::new();
     let status: u16 = match err {
         &ParseError::WriteStreamErr | &ParseError::ReadStreamErr => 500,
@@ -389,7 +405,7 @@ fn build_err_response(err: &ParseError, default_pages: &HashMap<u16, String>) ->
     };
 
     resp.status(status);
-    resp.check_and_update(&default_pages);
+    resp.check_and_update(&metadata.get_default_pages());
     resp.keep_alive(false);
 
     resp

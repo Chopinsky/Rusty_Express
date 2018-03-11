@@ -13,7 +13,7 @@ pub mod prelude {
     pub use core::cookie::*;
     pub use core::http::{Request, RequestWriter, Response, ResponseStates, ResponseWriter};
     pub use core::router::{REST, Route, Router, RequestPath};
-    pub use core::states::{StatesProvider, StatesInteraction};
+    pub use core::states::{StatesProvider, StatesInteraction, RequireStateUpdates};
     pub use support::session::*;
 }
 
@@ -57,10 +57,10 @@ impl HttpServer {
     }
 
     pub fn listen(&mut self, port: u16) {
-        self.listen_and_manage(port, EmptyState {});
+        self.listen_and_manage(port, Arc::new(RwLock::new(EmptyState {})));
     }
 
-    pub fn listen_and_manage<T: Send + Sync + Clone + StatesProvider + 'static>(&mut self, port: u16, state: T) {
+    pub fn listen_and_manage<T: Send + Sync + Clone + StatesProvider + 'static>(&mut self, port: u16, state: Arc<RwLock<T>>) {
         let server_address = SocketAddr::from(([127, 0, 0, 1], port));
         let listener = TcpListener::bind(server_address).unwrap_or_else(|err| {
             panic!("Unable to start the http server: {}...", err);
@@ -75,7 +75,7 @@ impl HttpServer {
             }
         }
 
-        start_with(&listener, &self.router, &self.config, &self.states, &state);
+        start_with(&listener, &self.router, &self.config, &self.states, state);
 
         println!("Shutting down...");
     }
@@ -132,23 +132,28 @@ fn start_with<T: Send + Sync + Clone + StatesProvider + 'static>(
         router: &Route,
         config: &ServerConfig,
         server_states: &ServerStates,
-        managed_states: &T) {
+        managed_states: Arc<RwLock<T>>) {
 
     let workers_pool = ThreadPool::new(config.pool_size);
     shared_pool::initialize();
 
     let read_timeout = Some(Duration::from_millis(config.read_timeout as u64));
     let write_timeout = Some(Duration::from_millis(config.write_timeout as u64));
+    let mut meta_data = config.get_meta_data();
 
-    let states_arc = Arc::new(RwLock::new(managed_states.to_owned()));
     let has_states_to_manage =
-        match managed_states.interaction_stage() {
-            StatesInteraction::None => false,
-            _ => true
+        if let Ok(state) = managed_states.read() {
+            let stage = state.interaction_stage();
+            meta_data.set_state_interaction(stage);
+
+            match stage {
+                StatesInteraction::None => false,
+                _ => true
+            }
+        } else {
+            false
         };
 
-    let mut meta_data = config.get_meta_data();
-    meta_data.set_state_interaction(managed_states.interaction_stage());
 
     let meta_arc = Arc::new(meta_data);
     let router = Arc::new(router.to_owned());
@@ -169,7 +174,7 @@ fn start_with<T: Send + Sync + Clone + StatesProvider + 'static>(
             let meta_ptr = Arc::clone(&meta_arc);
 
             if has_states_to_manage {
-                let states_ptr = Arc::clone(&states_arc);
+                let states_ptr = Arc::clone(&managed_states);
                 workers_pool.execute(move || {
                     set_timeout(&s, read_timeout, write_timeout);
                     handle_connection_with_states(s, router_ptr, meta_ptr, states_ptr);
