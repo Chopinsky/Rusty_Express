@@ -8,6 +8,10 @@ version = "0.2.9"
 authors = ["Jacob Zuo <chopinsky@live.com>"]
 license = "MIT"
 
+[features]
+default = ["session"]
+session = []
+
 [dependencies]
 regex = "^0.2"
 chrono = "^0.4"

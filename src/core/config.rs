@@ -13,8 +13,6 @@ lazy_static! {
     static ref VIEW_ENGINES: Arc<RwLock<HashMap<String, Box<ViewEngine>>>> = Arc::new(RwLock::new(HashMap::new()));
 }
 
-pub type ViewEngine = fn(Box<String>, EngineContext) -> Box<String>;
-
 pub struct ServerConfig {
     pub pool_size: usize,
     pub read_timeout: u16,
@@ -71,16 +69,17 @@ impl ServerConfig {
     }
 }
 
+pub type ViewEngine = fn(Box<String>, EngineContext, &mut Box<String>) -> u16;
 pub struct EngineContext {
     value: String,
     children: HashMap<String, EngineContext>,
 }
 
-pub trait DefineViewEngine {
+pub trait ViewEngineDefinition {
     fn view_engine(extension: &str, engine: ViewEngine);
 }
 
-impl DefineViewEngine for ServerConfig {
+impl ViewEngineDefinition for ServerConfig {
     fn view_engine(extension: &str, engine: ViewEngine) {
         if extension.is_empty() { return; }
 
@@ -90,9 +89,23 @@ impl DefineViewEngine for ServerConfig {
     }
 }
 
-//pub trait ViewParser {
-//    fn parse_view()
-//}
+pub trait ViewEngineParser {
+    fn template_parser(extension: &str, content: Box<String>, context: EngineContext, output: &mut Box<String>) -> u16;
+}
+
+impl ViewEngineParser for ServerConfig {
+    fn template_parser(extension: &str, content: Box<String>, context: EngineContext, output: &mut Box<String>) -> u16 {
+        if extension.is_empty() { return 0; }
+
+        if let Ok(template_engines) = VIEW_ENGINES.read() {
+            if let Some(engine) = template_engines.get(extension) {
+                return engine(content, context, output);
+            }
+        }
+
+        return 0;
+    }
+}
 
 pub struct ConnMetadata {
     header: HashMap<String, String>,

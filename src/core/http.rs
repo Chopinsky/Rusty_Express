@@ -13,6 +13,7 @@ use std::time::Duration;
 use chrono::prelude::*;
 use core::cookie::*;
 use core::router::REST;
+use core::config::{ServerConfig, ViewEngine, ViewEngineParser};
 use support::shared_pool;
 use support::common::MapUpdates;
 
@@ -303,6 +304,7 @@ pub trait ResponseWriter {
     fn header(&mut self, field: &str, value: &str, replace: bool);
     fn send(&mut self, content: &str);
     fn send_file(&mut self, file_path: &str);
+    fn send_template(&mut self, file_path: &str);
     fn set_cookie(&mut self, cookie: Cookie);
     fn set_cookies(&mut self, cookie: &[Cookie]);
     fn clear_cookies(&mut self);
@@ -351,35 +353,40 @@ impl ResponseWriter for Response {
     }
 
     fn send_file(&mut self, file_loc: &str) {
+
+        //TODO - use meta path
+
         if file_loc.is_empty() {
-            println!("Undefined file path to retrieve data from...");
+            eprintln!("Undefined file path to retrieve data from...");
             return;
         }
 
-        //TODO - 1: use meta path
-        //TODO - 2: use 'view engine' to generate final markups --> use a different API for this
-
         let file_path = Path::new(file_loc);
         if !file_path.is_file() {
-            // if doesn't exist or not a file, fail now
             eprintln!("Can't locate requested file");
             self.status(404);
-        } else {
-            let status = read_from_file(&file_path, &mut self.body);
-            if !self.status_is_set() { self.status(status); }
-
-            if self.status == 200 && self.content_type.is_empty() {
-                let mime_type =
-                    if let Some(ext) = file_path.extension() {
-                        let file_extension = ext.to_string_lossy();
-                        default_mime_type_with_ext(&file_extension)
-                    } else {
-                        String::from("text/plain")
-                    };
-
-                self.set_content_type(&mime_type[..]);
-            }
+            return;
         }
+
+        let status = read_from_file(&file_path, &mut self.body);
+        if !self.status_is_set() { self.status(status); }
+
+        if self.status == 200 && self.content_type.is_empty() {
+            let mime_type =
+                if let Some(ext) = file_path.extension() {
+                    let file_extension = ext.to_string_lossy();
+                    default_mime_type_with_ext(&file_extension)
+                } else {
+                    String::from("text/plain")
+                };
+
+            self.set_content_type(&mime_type[..]);
+        }
+    }
+
+    fn send_template(&mut self, file_loc: &str) {
+        //TODO - impl ServerConfig::template_parser
+        //ServerConfig::template_parser();
     }
 
     fn set_cookie(&mut self, cookie: Cookie) {

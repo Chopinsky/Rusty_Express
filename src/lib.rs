@@ -9,11 +9,13 @@ mod support;
 
 pub mod prelude {
     pub use {HttpServer, ServerDef};
-    pub use core::config::{ServerConfig};
+    pub use core::config::{ServerConfig, ViewEngineDefinition, ViewEngine};
     pub use core::cookie::*;
     pub use core::http::{Request, RequestWriter, Response, ResponseStates, ResponseWriter};
     pub use core::router::{REST, Route, Router, RequestPath};
     pub use core::states::{StatesProvider, StatesInteraction, RequireStateUpdates};
+
+    #[cfg(feature = "session")]
     pub use support::session::*;
 }
 
@@ -22,14 +24,14 @@ use std::net::{SocketAddr, Shutdown, TcpListener, TcpStream};
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
-use core::config::ServerConfig;
+use core::config::{ServerConfig, ViewEngineDefinition, ViewEngine};
 use core::connection::*;
 use core::router::*;
 use core::states::*;
 use support::session::*;
 use support::{ThreadPool, shared_pool};
 
-//TODO: 1. handle errors with grace...
+//TODO: 1. handle errors with grace... use env::var("DEBUG") for debug logging
 //TODO: 2. Impl middlewear
 //TODO: 3. config to and from config.tmol file
 
@@ -88,43 +90,6 @@ impl HttpServer {
     pub fn drop_session_auto_clean(&mut self) {
         self.states.drop_session_auto_clean();
     }
-}
-
-impl Router for HttpServer {
-    fn get(&mut self, uri: RequestPath, callback: Callback) {
-        self.router.get(uri, callback);
-    }
-
-    fn post(&mut self, uri: RequestPath, callback: Callback) {
-        self.router.post(uri, callback);
-    }
-
-    fn put(&mut self, uri: RequestPath, callback: Callback) {
-        self.router.put(uri, callback);
-    }
-
-    fn delete(&mut self, uri: RequestPath, callback: Callback) {
-        self.router.delete(uri, callback);
-    }
-
-    fn options(&mut self, uri: RequestPath, callback: Callback) {
-        self.router.options(uri, callback);
-    }
-
-    fn other(&mut self, method: &str, uri: RequestPath, callback: Callback) {
-        self.router.other(method, uri, callback);
-    }
-}
-
-pub trait ServerDef {
-    fn def_router(&mut self, router: Route);
-    fn set_pool_size(&mut self, size: usize);
-    fn set_read_timeout(&mut self, timeout: u16);
-    fn set_write_timeout(&mut self, timeout: u16);
-    fn def_default_response_header(&mut self, header: HashMap<String, String>);
-    fn set_default_response_header(&mut self, field: String, value: String);
-    fn enable_session_auto_clean(&mut self, auto_clean_period: Duration);
-    fn disable_session_auto_clean(&mut self);
 }
 
 fn start_with<T: Send + Sync + Clone + StatesProvider + 'static>(
@@ -199,6 +164,17 @@ fn set_timeout(stream: &TcpStream, read: Option<Duration>, write: Option<Duratio
     });
 }
 
+pub trait ServerDef {
+    fn def_router(&mut self, router: Route);
+    fn set_pool_size(&mut self, size: usize);
+    fn set_read_timeout(&mut self, timeout: u16);
+    fn set_write_timeout(&mut self, timeout: u16);
+    fn def_default_response_header(&mut self, header: HashMap<String, String>);
+    fn set_default_response_header(&mut self, field: String, value: String);
+    fn enable_session_auto_clean(&mut self, auto_clean_period: Duration);
+    fn disable_session_auto_clean(&mut self);
+}
+
 impl ServerDef for HttpServer {
     fn def_router(&mut self, router: Route) {
         self.router = router;
@@ -230,5 +206,38 @@ impl ServerDef for HttpServer {
 
     fn disable_session_auto_clean(&mut self) {
         self.config.reset_session_auto_clean();
+    }
+}
+
+impl Router for HttpServer {
+    fn get(&mut self, uri: RequestPath, callback: Callback) {
+        self.router.get(uri, callback);
+    }
+
+    fn post(&mut self, uri: RequestPath, callback: Callback) {
+        self.router.post(uri, callback);
+    }
+
+    fn put(&mut self, uri: RequestPath, callback: Callback) {
+        self.router.put(uri, callback);
+    }
+
+    fn delete(&mut self, uri: RequestPath, callback: Callback) {
+        self.router.delete(uri, callback);
+    }
+
+    fn options(&mut self, uri: RequestPath, callback: Callback) {
+        self.router.options(uri, callback);
+    }
+
+    fn other(&mut self, method: &str, uri: RequestPath, callback: Callback) {
+        self.router.other(method, uri, callback);
+    }
+}
+
+impl ViewEngineDefinition for HttpServer {
+    #[inline]
+    fn view_engine(extension: &str, engine: ViewEngine) {
+        ServerConfig::view_engine(extension, engine);
     }
 }
