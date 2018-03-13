@@ -32,7 +32,7 @@ impl ServerStates {
 
     pub fn drop_session_auto_clean(&mut self) {
         if let Some(handler) = self.session_auto_clean_handler.to_owned() {
-            Session::auto_clean_has_stopped();
+            Session::auto_clean_stop();
             drop(handler);
         }
     }

@@ -1,4 +1,3 @@
-
 use std::collections::HashMap;
 use std::cmp::Ordering;
 use std::fs::File;
@@ -119,8 +118,8 @@ pub trait SessionExchange {
     fn clean();
     fn clean_up_to(lifetime: DateTime<Utc>);
     fn store_size() -> Option<usize>;
-    fn auto_clean_start(period: Duration) -> Thread;
-    fn auto_clean_has_stopped();
+    fn auto_clean_start(period: Duration) -> Option<Thread>;
+    fn auto_clean_stop();
     fn auto_clean_is_running() -> bool;
 }
 
@@ -204,7 +203,11 @@ impl SessionExchange for Session {
         }
     }
 
-    fn auto_clean_start(period: Duration) -> Thread {
+    fn auto_clean_start(period: Duration) -> Option<Thread> {
+        if Session::auto_clean_is_running() {
+            return None;
+        }
+
         let sleep_period =
             if period.cmp(&Duration::from_secs(60)) == Ordering::Less {
                 Duration::from_secs(60)
@@ -221,10 +224,10 @@ impl SessionExchange for Session {
             }
         });
 
-        handler.thread().to_owned()
+        Some(handler.thread().to_owned())
     }
 
-    fn auto_clean_has_stopped() {
+    fn auto_clean_stop() {
         thread::spawn(move || {
             AUTO_CLEARN.store(false, atomic::Ordering::Release);
         });
@@ -321,11 +324,13 @@ impl PersistHandler for Session {
                         recreate_session_from_raw(session, &now, &default_expires, tx_clone);
                     });
                 }
+
             } else {
                 failures += 1;
                 if failures > 5 {
                     break;
                 }
+
             }
         }
 
@@ -488,6 +493,8 @@ fn release(id: String) -> bool {
 fn clean_up_to(time: DateTime<Utc>) {
     let mut stale_sessions: Vec<String> = Vec::new();
     if let Ok(mut store) = STORE.write() {
+        if store.is_empty() { return; }
+
         for session in store.values() {
             if session.expires_at.cmp(&time) != Ordering::Greater {
                 stale_sessions.push(session.id.to_owned());

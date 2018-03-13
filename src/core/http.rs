@@ -447,12 +447,12 @@ impl ResponseWriter for Response {
     }
 }
 
-pub trait ResponseStreamer {
+pub trait StreamWriter {
     fn serialize_header(&self, buffer: &mut BufWriter<&TcpStream>, ignore_body: bool);
     fn serialize_body(&self, buffer: &mut BufWriter<&TcpStream>);
 }
 
-impl ResponseStreamer for Response {
+impl StreamWriter for Response {
     fn serialize_header(&self, buffer: &mut BufWriter<&TcpStream>, ignore_body: bool) {
         if let Err(e) = buffer.write(self.resp_header(ignore_body).as_bytes()) {
             eprintln!("An error has taken place when writing the response header to the stream: {}", e);

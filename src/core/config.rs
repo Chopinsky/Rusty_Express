@@ -26,8 +26,8 @@ impl ServerConfig {
     pub fn new() -> Self {
         ServerConfig {
             pool_size: 8,
-            read_timeout: 512,
-            write_timeout: 512,
+            read_timeout: 256,
+            write_timeout: 1024,
             use_session_autoclean: false,
             session_auto_clean_period: Some(chrono::Duration::seconds(3600)),
             meta_data: ConnMetadata::new(),

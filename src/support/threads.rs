@@ -107,7 +107,7 @@ struct Pool {
     store: Option<Box<ThreadPool>>,
 }
 
-fn initialize_with(size: usize) {
+pub fn initialize_with(size: usize) {
     let count = cmp::max(MIN_POOL_SIZE, size);
 
     unsafe {
@@ -119,10 +119,6 @@ fn initialize_with(size: usize) {
             POOL = mem::transmute(pool);
         });
     }
-}
-
-pub fn initialize() {
-    initialize_with(MIN_POOL_SIZE);
 }
 
 pub fn run<F>(f: F)

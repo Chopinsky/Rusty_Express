@@ -5,8 +5,9 @@ mod route_trie;
 pub mod session;
 
 pub mod common;
+pub mod debug;
 pub mod shared_pool {
-    pub use support::threads::{initialize, run};
+    pub use support::threads::{initialize_with, run};
 }
 
 pub use self::route_trie::*;

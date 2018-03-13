@@ -28,6 +28,7 @@ use core::config::{ServerConfig, ViewEngineDefinition, ViewEngine};
 use core::connection::*;
 use core::router::*;
 use core::states::*;
+use support::debug;
 use support::session::*;
 use support::{ThreadPool, shared_pool};
 
@@ -63,6 +64,8 @@ impl HttpServer {
     }
 
     pub fn listen_and_manage<T: Send + Sync + Clone + StatesProvider + 'static>(&mut self, port: u16, state: Arc<RwLock<T>>) {
+        debug::initialize();
+
         let server_address = SocketAddr::from(([127, 0, 0, 1], port));
         let listener = TcpListener::bind(server_address).unwrap_or_else(|err| {
             panic!("Unable to start the http server: {}...", err);
@@ -72,18 +75,18 @@ impl HttpServer {
 
         if self.config.use_session_autoclean && !Session::auto_clean_is_running() {
             if let Some(duration) = self.config.get_session_auto_clean_period() {
-                let handler = Session::auto_clean_start(duration);
-                self.states.set_session_handler(&handler);
+                if let Some(handler) = Session::auto_clean_start(duration) {
+                    self.states.set_session_handler(&handler);
+                }
             }
         }
 
         start_with(&listener, &self.router, &self.config, &self.states, state);
-
         println!("Shutting down...");
     }
 
     pub fn try_to_terminate(&mut self) {
-        println!("Requested to shutdown...");
+        debug::print("Requested to shutdown...", 0);
         self.states.ack_to_terminate();
     }
 
@@ -100,7 +103,7 @@ fn start_with<T: Send + Sync + Clone + StatesProvider + 'static>(
         managed_states: Arc<RwLock<T>>) {
 
     let workers_pool = ThreadPool::new(config.pool_size);
-    shared_pool::initialize();
+    shared_pool::initialize_with(config.pool_size);
 
     let read_timeout = Some(Duration::from_millis(config.read_timeout as u64));
     let write_timeout = Some(Duration::from_millis(config.write_timeout as u64));
@@ -128,7 +131,8 @@ fn start_with<T: Send + Sync + Clone + StatesProvider + 'static>(
             if server_states.is_terminating() {
                 // Told to close the connection, shut down the socket now.
                 &s.shutdown(Shutdown::Both).unwrap_or_else(|e| {
-                    eprintln!("Unable to shut down the stream: {}", e);
+                    debug::print(
+                        &format!("Unable to shut down the stream: {}", e)[..], 1);
                 });
 
                 return;
@@ -156,11 +160,11 @@ fn start_with<T: Send + Sync + Clone + StatesProvider + 'static>(
 
 fn set_timeout(stream: &TcpStream, read: Option<Duration>, write: Option<Duration>) {
     stream.set_read_timeout(read).unwrap_or_else(|err| {
-        eprintln!("Unable to set read timeout: {}", err);
+        debug::print(&format!("Unable to set read timeout: {}", err)[..], 1);
     });
 
     stream.set_write_timeout(write).unwrap_or_else(|err| {
-        eprintln!("Unable to set read timeout: {}", err);
+        debug::print(&format!("Unable to set write timeout: {}", err)[..], 1);
     });
 }
 

@@ -7,7 +7,7 @@ fn main() {
     let mut server = HttpServer::new();
 
     //define router directly
-    server.get(RequestPath::WildCard(r"/\w+"), simple_response);
+    server.get(RequestPath::WildCard(r"/\w*"), simple_response);
 
     server.listen(8080);
 }
@@ -22,7 +22,7 @@ pub fn simple_response(req: &Request, resp: &mut Response) {
     //        }
     */
 
-    resp.send(&format!("Hello world from rusty server from {}!\n", req.uri));
+    resp.send(&format!("Hello world from rusty server from path: {}", req.uri));
     resp.status(200);
 }
 

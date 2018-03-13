@@ -9,8 +9,9 @@ use std::time::Duration;
 
 use core::config::ConnMetadata;
 use core::states::{StatesProvider, StatesInteraction};
-use core::http::{Request, RequestWriter, Response, ResponseWriter, ResponseStreamer};
+use core::http::{Request, RequestWriter, Response, ResponseWriter, StreamWriter};
 use core::router::{REST, Route, RouteHandler};
+use support::debug;
 use support::shared_pool;
 
 #[derive(PartialEq, Eq, Clone, Copy)]
@@ -35,7 +36,7 @@ pub fn handle_connection_with_states<T: Send + Sync + Clone + StatesProvider>(
 
     let mut request = Request::new();
     if let Err(err) = handle_request(&stream, &mut request) {
-        eprintln!("Error on parsing request");
+        debug::print("Error on parsing request", 3);
         return write_to_stream(stream, &build_err_response(&err, &metadata), false);
     }
 
@@ -84,7 +85,7 @@ pub fn handle_connection(
 
     let mut request= Request::new();
     if let Err(err) = handle_request(&stream, &mut request) {
-        eprintln!("Error on parsing request");
+        debug::print("Error on parsing request", 3);
         return write_to_stream(stream, &build_err_response(&err, &metadata), false);
     }
 
@@ -128,10 +129,14 @@ fn write_to_stream(stream: TcpStream, response: &Response, ignore_body: bool) ->
     if !ignore_body { response.serialize_body(&mut buffer); }
 
     if let Err(e) = buffer.flush() {
-        eprintln!("An error has taken place when flushing the response to the stream: {}", e);
+        debug::print(
+            &format!("An error has taken place when flushing the response to the stream: {}", e)[..], 1);
         return Some(1);
-    } else if let Err(e) = stream.shutdown(Shutdown::Both) {
-        eprintln!("An error has taken place when flushing the response to the stream: {}", e);
+    }
+
+    if let Err(e) = stream.shutdown(Shutdown::Both) {
+        debug::print(
+            &format!("An error has taken place when flushing the response to the stream: {}", e)[..], 1);
         return Some(1);
     }
 
@@ -143,7 +148,7 @@ fn handle_request(mut stream: &TcpStream, request: &mut Request) -> Result<(), P
     let mut buffer = [0; 512];
 
     if let Err(e) = stream.read(&mut buffer){
-        eprintln!("Reading stream error -- {}", e);
+        debug::print(&format!("Reading stream error -- {}", e), 3);
         Err(ParseError::ReadStreamErr)
     } else {
         let request_raw = String::from_utf8_lossy(&buffer[..]);
@@ -164,7 +169,7 @@ fn parse_request(request: &str, store: &mut Request) -> bool {
         return false;
     }
 
-    //println!("Print request: {}", request);
+    debug::print(&format!("\r\nPrint request: \r\n{}", request)[..], 2);
 
     let (tx_base, rx_base) = mpsc::channel();
     let (tx_cookie, rx_cookie) = mpsc::channel();
@@ -291,7 +296,7 @@ fn parse_request_base(line: String, tx: mpsc::Sender<RequestBase>) {
         http_version,
         scheme,
     }).unwrap_or_else(|e| {
-        eprintln!("Unable to parse base request: {}", e);
+        debug::print(&format!("Unable to parse base request: {}", e)[..], 1);
     });
 }
 
@@ -367,7 +372,7 @@ fn cookie_parser(cookie_body: String, tx: mpsc::Sender<HashMap<String, String>>)
     }
 
     if let Err(e) = tx.send(cookie) {
-        eprintln!("Unable to parse base request cookies: {}", e);
+        debug::print(&format!("Unable to parse base request cookies: {}", e)[..], 1);
     }
 }
 
