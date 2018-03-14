@@ -2,10 +2,12 @@
 #![allow(dead_code)]
 
 use std::collections::HashMap;
+use std::cmp;
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
 use chrono;
+use num_cpus;
 use core::states::StatesInteraction;
 use support::common::*;
 
@@ -25,7 +27,9 @@ pub struct ServerConfig {
 impl ServerConfig {
     pub fn new() -> Self {
         ServerConfig {
-            pool_size: 8,
+            /// Be aware that we will create 4 times more worker threads in separate pools
+            /// to support the main pool.
+            pool_size: cmp::max(num_cpus::get(), 4),
             read_timeout: 256,
             write_timeout: 1024,
             use_session_autoclean: false,
@@ -152,3 +156,5 @@ impl Clone for ConnMetadata {
         }
     }
 }
+
+//TODO: load config from file, e.g. config.toml

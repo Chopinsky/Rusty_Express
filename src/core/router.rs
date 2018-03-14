@@ -9,8 +9,9 @@ use std::time::Duration;
 
 use core::http::{Request, RequestWriter, Response, ResponseStates, ResponseWriter};
 use regex::Regex;
-use support::{RouteTrie, shared_pool};
 use support::common::MapUpdates;
+use support::TaskType;
+use support::{RouteTrie, shared_pool};
 
 #[derive(PartialEq, Eq, Hash, Clone)]
 pub enum REST {
@@ -116,35 +117,35 @@ impl RouteMap {
         }
 
         let (tx, rx) = mpsc::channel();
+        let search_in_wildcards = !self.wildcard.is_empty();
 
-        if !self.wildcard.is_empty() {
+        if search_in_wildcards {
             let wildcard_routes = self.wildcard.to_owned();
             let dest_path = uri.to_owned();
-            let tx_clone = mpsc::Sender::clone(&tx);
 
             shared_pool::run(move || {
-                search_wildcard_router(&wildcard_routes, dest_path, tx_clone);
-            });
+                search_wildcard_router(&wildcard_routes, dest_path, tx);
+            }, TaskType::Request);
         }
 
         if !self.explicit_with_params.is_empty() {
-            let route_head = self.explicit_with_params.to_owned();
-            let dest_path = uri.to_owned();
-            let tx_clone = mpsc::Sender::clone(&tx);
+            let (callback, temp_params) =
+                search_params_router(&self.explicit_with_params, uri);
 
-            shared_pool::run(move || {
-                search_params_router(&route_head, dest_path, tx_clone);
-            });
-        }
-
-        drop(tx);
-        for results in rx {
-            if let Some(callback) = results.0 {
-                for param in results.1 {
+            if callback.is_some() {
+                for param in temp_params {
                     params.insert(param.0, param.1);
                 }
 
-                return Some(callback);
+                return callback;
+            }
+        }
+
+        if search_in_wildcards {
+            if let Ok(received) = rx.recv_timeout(Duration::from_millis(128)) {
+                if received.is_some() {
+                    return received;
+                }
             }
         }
 
@@ -237,37 +238,22 @@ impl Router for Route {
 }
 
 pub trait RouteHandler {
-    fn handle_request_method(&self, req: &mut Request, resp: &mut Response);
+    fn handle_request_method(&self, method: &REST, req: &mut Request, resp: &mut Response);
 }
 
 impl RouteHandler for Route {
-    fn handle_request_method(&self, req: &mut Request, resp: &mut Response) {
-        if let Some(ref req_method) = req.method.to_owned() {
-            let method = match req_method {
-                &REST::OTHER(ref others) => {
-                    if others.eq("head") {
-                        &REST::GET
-                    } else {
-                        req_method
-                    }
-                },
-                _ => { req_method },
-            };
-
-            if let Some(routes) = self.store.get(method) {
-                let mut params = HashMap::new();
-                if let Some(callback) = routes.seek_path(&req.uri[..], &mut params) {
-                    if !params.is_empty() {
-                        req.create_param(params);
-                    }
-
-                    handle_request_worker(&callback, req, resp);
-                    return;
+    fn handle_request_method(&self, method: &REST, req: &mut Request, resp: &mut Response) {
+        if let Some(routes) = self.store.get(method) {
+            let mut params = HashMap::new();
+            if let Some(callback) = routes.seek_path(&req.uri[..], &mut params) {
+                if !params.is_empty() {
+                    req.create_param(params);
                 }
+
+                handle_request_worker(&callback, req, resp);
+                return;
             }
         }
-
-        resp.status(404);
     }
 }
 
@@ -288,7 +274,7 @@ fn handle_request_worker(callback: &Callback, req: &Request, resp: &mut Response
     }
 }
 
-fn search_wildcard_router(routes: &HashMap<String, RegexRoute>, uri: String, tx: mpsc::Sender<(Option<Callback>, Vec<(String, String)>)>) {
+fn search_wildcard_router(routes: &HashMap<String, RegexRoute>, uri: String, tx: mpsc::Sender<Option<Callback>>) {
     let mut result = None;
     for (_, route) in routes.iter() {
         if route.regex.is_match(&uri) {
@@ -297,21 +283,20 @@ fn search_wildcard_router(routes: &HashMap<String, RegexRoute>, uri: String, tx:
         }
     }
 
-    tx.send((result, Vec::with_capacity(0))).unwrap_or_else(|e| {
+    tx.send(result).unwrap_or_else(|e| {
         eprintln!("Error on matching wild card routes: {}", e);
     });
 }
 
-fn search_params_router(route_head: &RouteTrie, uri: String, tx: mpsc::Sender<(Option<Callback>, Vec<(String, String)>)>) {
+fn search_params_router(route_head: &RouteTrie, uri: &str) -> (Option<Callback>, Vec<(String, String)>) {
     let raw_segments: Vec<String> = uri.trim_matches('/').split('/').map(|s| s.to_owned()).collect();
     let segements = raw_segments.as_slice();
     let mut params: Vec<(String, String)> = Vec::new();
 
-    let result = RouteTrie::find(&route_head.root, segements, &mut params);
+    let result =
+        RouteTrie::find(&route_head.root, segements, &mut params);
 
-    tx.send((result, params)).unwrap_or_else(|e| {
-        eprintln!("Error on matching wild card routes: {}", e);
-    });
+    (result, params)
 }
 
 fn validate_segments(segments: &Vec<String>) -> Result<(), &'static str> {

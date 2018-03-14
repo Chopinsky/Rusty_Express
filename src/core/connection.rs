@@ -12,20 +12,20 @@ use core::states::{StatesProvider, StatesInteraction};
 use core::http::{Request, RequestWriter, Response, ResponseWriter, StreamWriter};
 use core::router::{REST, Route, RouteHandler};
 use support::debug;
+use support::TaskType;
 use support::shared_pool;
 
 #[derive(PartialEq, Eq, Clone, Copy)]
 enum ParseError {
     EmptyRequestErr,
     ReadStreamErr,
-    WriteStreamErr,
 }
 
 struct RequestBase {
-    method: Option<REST>,
+    method: String,
     uri: String,
     http_version: String,
-    scheme: Option<HashMap<String, Vec<String>>>,
+    scheme: HashMap<String, Vec<String>>,
 }
 
 pub fn handle_connection_with_states<T: Send + Sync + Clone + StatesProvider>(
@@ -95,23 +95,15 @@ pub fn handle_connection(
 fn handle_response(stream: TcpStream, request: &mut Request, response: &mut Response,
                    router: &Arc<Route>, metadata: &Arc<ConnMetadata>) -> Option<u8> {
 
-    match get_response_with_fallback(request, response, router, &metadata.get_default_pages()) {
-        Err(e) => {
-            eprintln!("Error on generating response -- {}", e);
-            write_to_stream(stream,
-                            &build_err_response(&ParseError::WriteStreamErr, &metadata),
-                            false)
-        },
-        _ => {
-            let ignore_body =
-                match &request.method {
-                    &Some(REST::OTHER(ref other_method)) => other_method.eq("head"),
-                    _ => false,
-                };
+    let (override_method , ignore_body) = match &request.method {
+        &REST::OTHER(ref others) if others.eq("head") => { (REST::GET, true) },
+        _ => { (request.method.to_owned(), false) },
+    };
 
-            write_to_stream(stream, &response, ignore_body)
-        },
-    }
+    router.handle_request_method(&override_method, request, response);
+    response.check_and_update(&metadata.get_default_pages());
+
+    write_to_stream(stream, &response, ignore_body)
 }
 
 fn initialize_response(metadata: &Arc<ConnMetadata>) -> Response {
@@ -172,20 +164,18 @@ fn parse_request(request: &str, store: &mut Request) -> bool {
     debug::print(&format!("\r\nPrint request: \r\n{}", request)[..], 2);
 
     let (tx_base, rx_base) = mpsc::channel();
-    let (tx_cookie, rx_cookie) = mpsc::channel();
-
     let mut is_body = false;
+
     for (num, line) in request.trim().lines().enumerate() {
         if num == 0 {
-            if line.is_empty() { continue; }
+            if line.is_empty() { return false; }
 
             let val = line.to_owned();
             let tx_clone = mpsc::Sender::clone(&tx_base);
 
             shared_pool::run(move || {
                 parse_request_base(val, tx_clone);
-            })
-
+            }, TaskType::Request);
         } else {
             if line.is_empty() {
                 // meeting the empty line dividing header and body
@@ -193,8 +183,7 @@ fn parse_request(request: &str, store: &mut Request) -> bool {
                 continue;
             }
 
-            parse_request_body(store, line, &tx_cookie, is_body);
-
+            parse_request_body(store, line, is_body);
         }
     }
 
@@ -203,46 +192,37 @@ fn parse_request(request: &str, store: &mut Request) -> bool {
      * messages back.
      */
     drop(tx_base);
-    drop(tx_cookie);
 
-    if let Ok(base) = rx_base.recv_timeout(Duration::from_millis(200)) {
-        store.method = base.method;
+    if let Ok(base) = rx_base.recv_timeout(Duration::from_millis(128)) {
+        if base.method.is_empty() { return false; }
+
+        store.method = match &base.method[..] {
+            "GET" => REST::GET,
+            "PUT" => REST::PUT,
+            "POST" => REST::POST,
+            "DELETE" => REST::DELETE,
+            "OPTIONS" => REST::OPTIONS,
+            _ => REST::OTHER(base.method.to_owned()),
+        };
+
         store.uri = base.uri;
         store.write_header("http_version", &base.http_version, true);
 
-        if let Some(s) = base.scheme {
-            store.create_scheme(s);
-        }
-    }
-
-    let mut cookie_created = false;
-    for cookie in rx_cookie {
-        if cookie_created {
-            for pair in cookie.iter() {
-                store.set_cookie(&pair.0[..], &pair.1[..], false);
-            };
-        } else {
-            store.create_cookie(cookie);
-            cookie_created = true;
+        if !base.scheme.is_empty() {
+            store.create_scheme(base.scheme);
         }
     }
 
     true
 }
 
-fn parse_request_body(store: &mut Request, line: &str, tx_cookie: &mpsc::Sender<HashMap<String, String>>, is_body: bool) {
+fn parse_request_body(store: &mut Request, line: &str, is_body: bool) {
     if !is_body {
         let header_info: Vec<&str> = line.trim().splitn(2, ':').collect();
 
         if header_info.len() == 2 {
             if header_info[0].trim().to_lowercase().eq("cookie") {
-                let cookie_body = header_info[1].to_owned();
-                let tx_clone = mpsc::Sender::clone(&tx_cookie);
-
-                shared_pool::run(move || {
-                    cookie_parser(cookie_body, tx_clone);
-                });
-
+                cookie_parser(store, header_info[1]);
             } else {
                 store.write_header(
                     &header_info[0].trim().to_lowercase(),
@@ -257,35 +237,16 @@ fn parse_request_body(store: &mut Request, line: &str, tx_cookie: &mpsc::Sender<
 }
 
 fn parse_request_base(line: String, tx: mpsc::Sender<RequestBase>) {
-    let mut method = None;
+    let mut method = String::new();
     let mut uri = String::new();
     let mut http_version = String::new();
-    let mut scheme = None;
+    let mut scheme = HashMap::new();
 
     for (index, info) in line.split_whitespace().enumerate() {
         match index {
-            0 => {
-                method = match &info[..] {
-                    "GET" => Some(REST::GET),
-                    "PUT" => Some(REST::PUT),
-                    "POST" => Some(REST::POST),
-                    "DELETE" => Some(REST::DELETE),
-                    "OPTIONS" => Some(REST::OPTIONS),
-                    "" => None,
-                    _ => Some(REST::OTHER(info.to_lowercase().to_owned())),
-                };
-            },
-            1 => {
-                let (req_uri, req_scheme) = split_path(info);
-
-                if !req_uri.is_empty() { uri = req_uri; }
-                if !req_scheme.is_empty() {
-                    scheme = scheme_parser(&req_scheme[..]);
-                }
-            },
-            2 => {
-                http_version.push_str(info);
-            },
+            0 if !info.is_empty() => method = info.to_uppercase(),
+            1 => split_path(info, &mut uri, &mut scheme),
+            2 => http_version.push_str(info),
             _ => { break; },
         };
     }
@@ -300,30 +261,11 @@ fn parse_request_base(line: String, tx: mpsc::Sender<RequestBase>) {
     });
 }
 
-fn get_response_with_fallback(
-        request: &mut Request,
-        response: &mut Response,
-        router: &Route,
-        fallback: &HashMap<u16, String>
-    ) -> Result<(), String> {
-
-    match request.method {
-        None => {
-            return Err(String::from("Invalid request method"));
-        },
-        _ => {
-            router.handle_request_method(request, response);
-        }
-    }
-
-    response.check_and_update(&fallback);
-    Ok(())
-}
-
-fn split_path(full_uri: &str) -> (String, String) {
+fn split_path(full_uri: &str, final_uri: &mut String, final_scheme: &mut HashMap<String, Vec<String>>) {
     let uri = full_uri.trim();
     if uri.is_empty() {
-        return (String::from("/"), String::new());
+        final_uri.push_str("/");
+        return;
     }
 
     let mut uri_parts: Vec<&str> = uri.rsplitn(2, "/").collect();
@@ -331,24 +273,22 @@ fn split_path(full_uri: &str) -> (String, String) {
         let (last_uri_pc, scheme) = uri_parts[0].split_at(pos);
         uri_parts[0] = last_uri_pc;
 
-        let result_uri =
-            if uri_parts[1].is_empty() {
-                format!("/{}", uri_parts[0])
-            } else {
-                format!("{}/{}", uri_parts[1], uri_parts[0])
-            };
+        if uri_parts[1].is_empty() {
+            final_uri.push_str(&format!("/{}", uri_parts[0])[..]);
+        } else {
+            final_uri.push_str(&format!("{}/{}", uri_parts[1], uri_parts[0])[..]);
+        };
 
-        (result_uri, scheme.trim().to_owned())
+        scheme_parser(scheme.trim(), final_scheme);
+
     } else {
         let uri_len = uri.len();
-        let result_uri =
-            if uri_len > 1 && uri.ends_with("/") {
-                uri[..uri_len-1].to_owned()
-            } else {
-                uri.to_owned()
-            };
+        if uri_len > 1 && uri.ends_with("/") {
+            final_uri.push_str(&uri[..uri_len-1]);
+        } else {
+            final_uri.push_str(uri)
+        };
 
-        (result_uri, String::new())
     }
 }
 
@@ -356,30 +296,23 @@ fn split_path(full_uri: &str) -> (String, String) {
 /// field is the key of the map, which map to a single value of the key from the Cookie
 /// header field. Assuming no duplicate cookie keys, or the first cookie key-value pair
 /// will be stored.
-fn cookie_parser(cookie_body: String, tx: mpsc::Sender<HashMap<String, String>>) { //cookie: &mut HashMap<String, String>) {
+fn cookie_parser(store: &mut Request, cookie_body: &str) {
     if cookie_body.is_empty() { return; }
 
-    let mut cookie = HashMap::new();
     for set in cookie_body.trim().split(";").into_iter() {
         let pair: Vec<&str> = set.trim().splitn(2, "=").collect();
         if pair.len() == 2 {
-            cookie.entry(pair[0].trim().to_owned())
-                .or_insert(pair[1].trim().to_owned());
+            store.set_cookie(pair[0].trim(), pair[1].trim(), false);
         } else if pair.len() > 0 {
-            cookie.entry(pair[0].trim().to_owned())
-                .or_insert(String::new());
+            store.set_cookie(pair[0].trim(), "", false);
         }
-    }
-
-    if let Err(e) = tx.send(cookie) {
-        debug::print(&format!("Unable to parse base request cookies: {}", e)[..], 1);
     }
 }
 
-fn scheme_parser(scheme: &str) -> Option<HashMap<String, Vec<String>>> {
-    let mut scheme_result: HashMap<String, Vec<String>> = HashMap::new();
+fn scheme_parser(scheme: &str, scheme_result: &mut HashMap<String, Vec<String>>) {
     for (_, kv_pair) in scheme.trim().split("&").enumerate() {
         let store: Vec<&str> = kv_pair.trim().splitn(2, "=").collect();
+
         if store.len() > 0 {
             let key = store[0].trim();
             let val =
@@ -398,14 +331,12 @@ fn scheme_parser(scheme: &str) -> Option<HashMap<String, Vec<String>>> {
             }
         }
     }
-
-    Some(scheme_result)
 }
 
 fn build_err_response(err: &ParseError, metadata: &Arc<ConnMetadata>) -> Response {
     let mut resp = Response::new();
     let status: u16 = match err {
-        &ParseError::WriteStreamErr | &ParseError::ReadStreamErr => 500,
+        &ParseError::ReadStreamErr => 500,
         _ => 404,
     };
 

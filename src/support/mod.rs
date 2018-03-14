@@ -10,6 +10,7 @@ pub mod shared_pool {
     pub use support::threads::{initialize_with, run};
 }
 
+pub use self::threads::TaskType;
 pub use self::route_trie::*;
 pub use self::threads::ThreadPool;
 

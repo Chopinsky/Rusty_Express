@@ -3,6 +3,7 @@ extern crate lazy_static;
 extern crate regex;
 extern crate chrono;
 extern crate rand;
+extern crate num_cpus;
 
 mod core;
 mod support;
@@ -34,7 +35,6 @@ use support::{ThreadPool, shared_pool};
 
 //TODO: 1. handle errors with grace... use env::var("DEBUG") for debug logging
 //TODO: 2. Impl middlewear
-//TODO: 3. config to and from config.tmol file
 
 pub struct HttpServer {
     router: Route,

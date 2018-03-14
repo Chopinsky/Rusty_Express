@@ -1,9 +1,9 @@
 #![allow(dead_code)]
 
-use std::cmp;
 use std::mem;
 use std::thread;
 use std::sync::{Arc, mpsc, Mutex, Once, ONCE_INIT};
+use num_cpus;
 
 type Job = Box<FnBox + Send + 'static>;
 
@@ -99,21 +99,30 @@ impl Drop for ThreadPool {
     }
 }
 
-static MIN_POOL_SIZE: usize = 12;
-static ONCE: Once = ONCE_INIT;
-static mut POOL: Pool = Pool { store: None };
-
 struct Pool {
-    store: Option<Box<ThreadPool>>,
+    req_workers: Box<ThreadPool>,
+    resp_workers: Box<ThreadPool>,
+    body_workers: Box<ThreadPool>,
+}
+
+static ONCE: Once = ONCE_INIT;
+static mut POOL: Option<Pool> = None;
+
+pub enum TaskType {
+    Request,
+    Response,
+    Body,
 }
 
 pub fn initialize_with(size: usize) {
-    let count = cmp::max(MIN_POOL_SIZE, size);
-
     unsafe {
         ONCE.call_once(|| {
             // Make it
-            let pool = Pool { store: Some(Box::new(ThreadPool::new(count))), };
+            let pool = Some(Pool {
+                req_workers: Box::new(ThreadPool::new(size)),
+                resp_workers: Box::new(ThreadPool::new(2 * size)),
+                body_workers: Box::new(ThreadPool::new(size)),
+            });
 
             // Put it in the heap so it can outlive this call
             POOL = mem::transmute(pool);
@@ -121,17 +130,21 @@ pub fn initialize_with(size: usize) {
     }
 }
 
-pub fn run<F>(f: F)
+pub fn run<F>(f: F, task: TaskType)
     where F: FnOnce() + Send + 'static {
 
     unsafe {
-        if let Some(ref store) = POOL.store {
-            // if pool is created
-            store.execute(f);
+        if let Some(ref pool) = POOL {
+            // if pool has been created
+            match task {
+                TaskType::Request => pool.req_workers.execute(f),
+                TaskType::Response => pool.resp_workers.execute(f),
+                TaskType::Body => pool.body_workers.execute(f),
+            };
         } else {
             // otherwise, spawn to a new thread for the work;
             thread::spawn(f);
-            initialize();
+            initialize_with(num_cpus::get());
         }
     }
 }

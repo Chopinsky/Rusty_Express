@@ -8,21 +8,21 @@ use std::io::prelude::*;
 use std::net::{TcpStream};
 use std::path::Path;
 use std::sync::mpsc;
-use std::time::Duration;
 
 use chrono::prelude::*;
 use core::cookie::*;
 use core::router::REST;
 use core::config::{ServerConfig, ViewEngine, ViewEngineParser};
-use support::shared_pool;
 use support::common::MapUpdates;
+use support::shared_pool;
+use support::TaskType;
 
 static FOUR_OH_FOUR: &'static str = include_str!("../default/404.html");
 static FIVE_HUNDRED: &'static str = include_str!("../default/500.html");
-static VERSION: &'static str = "0.2.8";
+static VERSION: &'static str = "0.2.9";
 
 pub struct Request {
-    pub method: Option<REST>,
+    pub method: REST,
     pub uri: String,
     cookie: HashMap<String, String>,
     scheme: HashMap<String, Vec<String>>,
@@ -34,7 +34,7 @@ pub struct Request {
 impl Request {
     pub fn new() -> Self {
         Request {
-            method: None,
+            method: REST::GET,
             uri: String::new(),
             cookie: HashMap::new(),
             scheme: HashMap::new(),
@@ -173,15 +173,6 @@ impl Response {
     }
 
     fn resp_header(&self, ignore_body: bool) -> Box<String> {
-        let status = self.status;
-        let has_contents = self.has_contents();
-        let (tx_status, rx_status) = mpsc::channel();
-
-        shared_pool::run(move || {
-            // tx_core has been moved in, no need to drop specifically
-            write_header_status(status, has_contents, tx_status);
-        });
-
         let (tx, rx) = mpsc::channel();
 
         // other header field-value pairs
@@ -191,7 +182,7 @@ impl Response {
 
             shared_pool::run(move || {
                 write_header_cookie(cookie, tx_cookie);
-            });
+            }, TaskType::Response);
         }
 
         // other header field-value pairs
@@ -199,24 +190,28 @@ impl Response {
         shared_pool::run(move || {
             // tx_header has been moved in, no need to drop specifically
             write_headers(header_set, tx);
-        });
+        }, TaskType::Response);
 
-        let mut header_misc = format!("Server: Rusty-Express/{}\r\n", VERSION);
+        let mut header =
+            Box::new(write_header_status(self.status, self.has_contents()));
+
+        header.push_str(&format!("Server: Rusty-Express/{}\r\n", VERSION));
 
         if !self.content_type.is_empty() {
-            header_misc.push_str(&format!("Content-Type: {}\r\n", self.content_type));
+            header.push_str(&format!("Content-Type: {}\r\n", self.content_type));
         }
 
         if !self.header.contains_key("date") {
             let dt = Utc::now();
-            header_misc.push_str(&format!("Date: {}\r\n", dt.format("%a, %e %b %Y %T GMT").to_string()));
+            header.push_str(&format!("Date: {}\r\n", dt.format("%a, %e %b %Y %T GMT").to_string()));
         }
 
         if !self.header.contains_key("content-length") {
+            //TODO: if using rx, need to move this to body writer, and don't append empty line in this function but in the body writer function.
             if ignore_body || self.body.is_empty() {
-                header_misc.push_str("Content-Length: 0\r\n");
+                header.push_str("Content-Length: 0\r\n");
             } else {
-                header_misc.push_str(&format!("Content-Length: {}\r\n", self.body.len()));
+                header.push_str(&format!("Content-Length: {}\r\n", self.body.len()));
             }
         }
 
@@ -228,26 +223,13 @@ impl Response {
                     "close"
                 };
 
-            header_misc.push_str(&format!("Connection: {}\r\n", connection));
-        }
-
-        let mut header = Box::new(String::new());
-        if let Ok(status) = rx_status.recv_timeout(Duration::from_millis(200)) {
-            if !status.is_empty() {
-                header.push_str(&status);
-            } else {
-                return Box::new(String::from("500 Internal Server Error\r\n\r\n"));
-            }
+            header.push_str(&format!("Connection: {}\r\n", connection));
         }
 
         for received in rx {
             if !received.is_empty() {
                 header.push_str(&received);
             }
-        }
-
-        if !header_misc.is_empty() {
-            header.push_str(&header_misc);
         }
 
         // write an empty line to end the header
@@ -355,6 +337,7 @@ impl ResponseWriter for Response {
     fn send_file(&mut self, file_loc: &str) {
 
         //TODO - use meta path
+        //TODO - send back rx, and write to stream from receiver
 
         if file_loc.is_empty() {
             eprintln!("Undefined file path to retrieve data from...");
@@ -628,29 +611,24 @@ fn default_mime_type_with_ext(ext: &str) -> String {
     }
 }
 
-fn write_header_status(status: u16, has_contents: bool, tx: mpsc::Sender<String>) {
-    let header: String;
+fn write_header_status(status: u16, has_contents: bool) -> String {
     match status {
         404 | 500 => {
-            header = get_status(status);
+            get_status(status)
         },
         0 => {
             /* No status has been explicitly set, be smart here */
             if has_contents {
-                header = get_status(200);
+                get_status(200)
             } else {
-                header = get_status(404);
+                get_status(404)
             }
         },
         _ => {
             /* A status has been set explicitly, respect that here. */
-            header = get_status(status);
+            get_status(status)
         },
     }
-
-    tx.send(header).unwrap_or_else(|e| {
-        eprintln!("Unable to write header status: {}", e);
-    });
 }
 
 fn write_headers(header: HashMap<String, String>, tx: mpsc::Sender<String>) {
@@ -676,14 +654,14 @@ fn write_headers(header: HashMap<String, String>, tx: mpsc::Sender<String>) {
 }
 
 fn write_header_cookie(cookie: HashMap<String, Cookie>, tx: mpsc::Sender<String>) {
-    let mut set_cookie = String::new();
+    let mut cookie_output = String::new();
     for (_, cookie) in cookie.into_iter() {
         if cookie.is_valid() {
-            set_cookie.push_str(&format!("Set-Cookie: {}\r\n", &cookie.to_string()));
+            cookie_output.push_str(&format!("Set-Cookie: {}\r\n", &cookie.to_string()));
         }
     }
 
-    tx.send(set_cookie).unwrap_or_else(|e| {
+    tx.send(cookie_output).unwrap_or_else(|e| {
         eprintln!("Unable to write response cookies: {}", e);
     });
 }
