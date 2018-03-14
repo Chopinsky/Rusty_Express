@@ -12,7 +12,7 @@ use std::sync::mpsc;
 use chrono::prelude::*;
 use core::cookie::*;
 use core::router::REST;
-use core::config::{ServerConfig, ViewEngine, ViewEngineParser};
+use core::config::{EngineContext, ServerConfig, ViewEngine, ViewEngineParser};
 use support::common::MapUpdates;
 use support::shared_pool;
 use support::TaskType;
@@ -286,7 +286,7 @@ pub trait ResponseWriter {
     fn header(&mut self, field: &str, value: &str, replace: bool);
     fn send(&mut self, content: &str);
     fn send_file(&mut self, file_path: &str);
-    fn send_template(&mut self, file_path: &str);
+    fn send_template(&mut self, file_path: &str, context: EngineContext);
     fn set_cookie(&mut self, cookie: Cookie);
     fn set_cookies(&mut self, cookie: &[Cookie]);
     fn clear_cookies(&mut self);
@@ -367,7 +367,7 @@ impl ResponseWriter for Response {
         }
     }
 
-    fn send_template(&mut self, file_loc: &str) {
+    fn send_template(&mut self, file_loc: &str, context: EngineContext) {
         //TODO - impl ServerConfig::template_parser
         //ServerConfig::template_parser();
     }

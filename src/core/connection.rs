@@ -22,7 +22,7 @@ enum ParseError {
 }
 
 struct RequestBase {
-    method: String,
+    method: Option<REST>,
     uri: String,
     http_version: String,
     scheme: HashMap<String, Vec<String>>,
@@ -177,7 +177,7 @@ fn parse_request(request: &str, store: &mut Request) -> bool {
                 parse_request_base(val, tx_clone);
             }, TaskType::Request);
         } else {
-            if line.is_empty() {
+            if line.is_empty() && !is_body {
                 // meeting the empty line dividing header and body
                 is_body = true;
                 continue;
@@ -194,22 +194,16 @@ fn parse_request(request: &str, store: &mut Request) -> bool {
     drop(tx_base);
 
     if let Ok(base) = rx_base.recv_timeout(Duration::from_millis(128)) {
-        if base.method.is_empty() { return false; }
+        if let Some(method) = base.method {
+            store.method = method;
+            store.uri = base.uri;
+            store.write_header("http_version", &base.http_version, true);
 
-        store.method = match &base.method[..] {
-            "GET" => REST::GET,
-            "PUT" => REST::PUT,
-            "POST" => REST::POST,
-            "DELETE" => REST::DELETE,
-            "OPTIONS" => REST::OPTIONS,
-            _ => REST::OTHER(base.method.to_owned()),
-        };
-
-        store.uri = base.uri;
-        store.write_header("http_version", &base.http_version, true);
-
-        if !base.scheme.is_empty() {
-            store.create_scheme(base.scheme);
+            if !base.scheme.is_empty() {
+                store.create_scheme(base.scheme);
+            }
+        } else {
+            return false;
         }
     }
 
@@ -217,6 +211,8 @@ fn parse_request(request: &str, store: &mut Request) -> bool {
 }
 
 fn parse_request_body(store: &mut Request, line: &str, is_body: bool) {
+    //TODO: consider content-disposition cases.
+
     if !is_body {
         let header_info: Vec<&str> = line.trim().splitn(2, ':').collect();
 
@@ -237,14 +233,27 @@ fn parse_request_body(store: &mut Request, line: &str, is_body: bool) {
 }
 
 fn parse_request_base(line: String, tx: mpsc::Sender<RequestBase>) {
-    let mut method = String::new();
+    let mut method = None;
     let mut uri = String::new();
     let mut http_version = String::new();
     let mut scheme = HashMap::new();
 
     for (index, info) in line.split_whitespace().enumerate() {
+        if info.is_empty() { continue; }
+
         match index {
-            0 if !info.is_empty() => method = info.to_uppercase(),
+            0 => {
+                let base_method = match &info.to_uppercase()[..] {
+                    "GET" => REST::GET,
+                    "PUT" => REST::PUT,
+                    "POST" => REST::POST,
+                    "DELETE" => REST::DELETE,
+                    "OPTIONS" => REST::OPTIONS,
+                    _ => REST::OTHER(info.to_owned()),
+                };
+
+                method = Some(base_method);
+            },
             1 => split_path(info, &mut uri, &mut scheme),
             2 => http_version.push_str(info),
             _ => { break; },
