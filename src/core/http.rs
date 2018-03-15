@@ -1,4 +1,6 @@
 #![allow(dead_code)]
+#![allow(unused_variables)]
+#![allow(unused_imports)]
 
 use std::collections::HashMap;
 use std::collections::hash_map::Iter;
@@ -141,7 +143,7 @@ pub struct Response {
     status: u16,
     keep_alive: bool,
     content_type: String,
-    cookie: HashMap<String, Cookie>,
+    cookie: HashMap<String, Box<Cookie>>,
     header: HashMap<String, String>,
     body: Box<String>,
     redirect: String,
@@ -242,7 +244,8 @@ pub trait ResponseStates {
     fn to_keep_alive(&self) -> bool;
     fn get_redirect_path(&self) -> String;
     fn get_header(&self, key: &str) -> Option<&String>;
-    fn get_cookie(&self, key: &str) -> Option<&Cookie>;
+    fn get_cookie(&self, key: &str) -> Option<&Box<Cookie>>;
+    fn get_content_type(&self) -> String;
     fn status_is_set(&self) -> bool;
     fn has_contents(&self) -> bool;
 }
@@ -264,8 +267,13 @@ impl ResponseStates for Response {
     }
 
     #[inline]
-    fn get_cookie(&self, key: &str) -> Option<&Cookie> {
+    fn get_cookie(&self, key: &str) -> Option<&Box<Cookie>> {
         self.cookie.get(key)
+    }
+
+    #[inline]
+    fn get_content_type(&self) -> String {
+        self.content_type.to_owned()
     }
 
     fn status_is_set(&self) -> bool {
@@ -376,12 +384,7 @@ impl ResponseWriter for Response {
         if !cookie.is_valid() { return; }
 
         let key = cookie.get_cookie_key();
-        if let Some(val) = self.cookie.get_mut(&key) {
-            *val = cookie;
-            return;
-        }
-
-        self.cookie.insert(key, cookie);
+        self.cookie.insert(key, Box::new(cookie));
     }
 
     fn set_cookies(&mut self, cookies: &[Cookie]) {
@@ -581,32 +584,20 @@ fn default_mime_type_with_ext(ext: &str) -> String {
         "rar" => String::from("application/x-rar-compressed"),
         "swf" => String::from("application/x-shockwave-flash"),
         "vsd" => String::from("application/vnd.visio"),
+        "wasm" => String::from("application/wasm"),
         "weba" => String::from("audio/webm"),
         "xhtml" => String::from("application/xhtml+xml"),
         "xul" => String::from("application/vnd.mozilla.xul+xml"),
         "7z" => String::from("application/x-7z-compressed"),
         "svg" => String::from("image/svg+xml"),
-        "csh" | "sh" | "tar" | "wav" => {
-            format!("application/x-{}", ext)
-        },
-        "csv" | "html" | "htm" => {
-            format!("text/{}", ext)
-        },
-        "jpeg" | "jpg" | "gif" | "png" | "bmp" | "webp" | "tiff" | "tif" => {
-            format!("image/{}", ext)
-        },
-        "otf" | "ttf" | "woff" | "woff2" => {
-            format!("font/{}", ext)
-        },
-        "midi" | "mp3" | "aac" | "mid" | "oga"  => {
-            format!("audio/{}", ext)
-        },
-        "webm" | "mp4" | "ogg" | "mpeg" | "ogv" => {
-            format!("video/{}", ext)
-        },
-        "xml" | "pdf" | "json" | "ogx" | "rtf" | "zip" => {
-            format!("application/{}", ext)
-        },
+        "csh" | "sh" | "tar" | "wav" => format!("application/x-{}", ext),
+        "csv" | "html" | "htm" => format!("text/{}", ext),
+        "jpeg" | "jpg" | "gif" | "png" | "bmp" | "webp" | "tiff" | "tif" => format!("image/{}", ext),
+        "otf" | "ttf" | "woff" | "woff2" => format!("font/{}", ext),
+        "midi" | "mp3" | "aac" | "mid" | "oga"  => format!("audio/{}", ext),
+        "webm" | "mp4" | "ogg" | "mpeg" | "ogv" => format!("video/{}", ext),
+        "xml" | "pdf" | "json" | "ogx" | "rtf" | "zip" => format!("application/{}", ext),
+        _ if !ext.is_empty() => format!("application/{}", ext),
         _ => String::from("text/plain"),
     }
 }
@@ -653,7 +644,7 @@ fn write_headers(header: HashMap<String, String>, tx: mpsc::Sender<String>) {
     });
 }
 
-fn write_header_cookie(cookie: HashMap<String, Cookie>, tx: mpsc::Sender<String>) {
+fn write_header_cookie(cookie: HashMap<String, Box<Cookie>>, tx: mpsc::Sender<String>) {
     let mut cookie_output = String::new();
     for (_, cookie) in cookie.into_iter() {
         if cookie.is_valid() {

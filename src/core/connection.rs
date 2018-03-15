@@ -9,7 +9,7 @@ use std::time::Duration;
 
 use core::config::ConnMetadata;
 use core::states::{StatesProvider, StatesInteraction};
-use core::http::{Request, RequestWriter, Response, ResponseWriter, StreamWriter};
+use core::http::{Request, RequestWriter, Response, ResponseStates, ResponseWriter, StreamWriter};
 use core::router::{REST, Route, RouteHandler};
 use support::debug;
 use support::TaskType;
@@ -163,35 +163,31 @@ fn parse_request(request: &str, store: &mut Request) -> bool {
 
     debug::print(&format!("\r\nPrint request: \r\n{}", request)[..], 2);
 
+    let mut lines = request.trim().lines();
     let (tx_base, rx_base) = mpsc::channel();
-    let mut is_body = false;
 
-    for (num, line) in request.trim().lines().enumerate() {
-        if num == 0 {
-            if line.is_empty() { return false; }
+    if let Some(line) = lines.nth(0) {
+        if line.is_empty() { return false; }
 
-            let val = line.to_owned();
-            let tx_clone = mpsc::Sender::clone(&tx_base);
+        let base_line = line.to_owned();
+        shared_pool::run(move || {
+            parse_request_base(base_line, tx_base);
+        }, TaskType::Request);
 
-            shared_pool::run(move || {
-                parse_request_base(val, tx_clone);
-            }, TaskType::Request);
-        } else {
-            if line.is_empty() && !is_body {
-                // meeting the empty line dividing header and body
-                is_body = true;
-                continue;
-            }
-
-            parse_request_body(store, line, is_body);
-        }
+    } else {
+        return false;
     }
 
-    /* Since we don't move the tx but cloned them, need to drop them
-     * specifically here, or we would hang forever before getting the
-     * messages back.
-     */
-    drop(tx_base);
+    let mut is_body = false;
+    for line in lines {
+        if line.is_empty() && !is_body {
+            // meeting the empty line dividing header and body
+            is_body = true;
+            continue;
+        }
+
+        parse_request_body(store, line, is_body);
+    }
 
     if let Ok(base) = rx_base.recv_timeout(Duration::from_millis(128)) {
         if let Some(method) = base.method {
@@ -211,20 +207,17 @@ fn parse_request(request: &str, store: &mut Request) -> bool {
 }
 
 fn parse_request_body(store: &mut Request, line: &str, is_body: bool) {
-    //TODO: consider content-disposition cases.
+    //TODO: Better support for content-dispositions?
 
     if !is_body {
         let header_info: Vec<&str> = line.trim().splitn(2, ':').collect();
 
         if header_info.len() == 2 {
-            if header_info[0].trim().to_lowercase().eq("cookie") {
-                cookie_parser(store, header_info[1]);
+            let header_key = &header_info[0].trim().to_lowercase()[..];
+            if header_key.eq("cookie") {
+                cookie_parser(store, header_info[1].trim());
             } else {
-                store.write_header(
-                    &header_info[0].trim().to_lowercase(),
-                    header_info[1].trim(),
-                    true
-                );
+                store.write_header(header_key, header_info[1].trim(), true);
             }
         }
     } else {
@@ -352,6 +345,10 @@ fn build_err_response(err: &ParseError, metadata: &Arc<ConnMetadata>) -> Respons
     resp.status(status);
     resp.check_and_update(&metadata.get_default_pages());
     resp.keep_alive(false);
+
+    if resp.get_content_type().is_empty() {
+        resp.set_content_type("text/html");
+    }
 
     resp
 }

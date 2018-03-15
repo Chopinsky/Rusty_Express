@@ -62,23 +62,26 @@ struct Worker {
 impl Worker {
     fn new(id: usize, receiver: Arc<Mutex<mpsc::Receiver<Message>>>) -> Worker {
         let thread = thread::spawn(move || {
-            loop {
-                let message = receiver.lock().unwrap().recv().unwrap();
-
-                match message {
-                    Message::NewJob(job) => {
-                        job.call_box();
-                    },
-                    Message::Terminate => {
-                        break;
-                    },
-                }
-            }
+            Worker::launch(receiver);
         });
 
         Worker {
             id,
             thread: Some(thread),
+        }
+    }
+
+    fn launch(receiver: Arc<Mutex<mpsc::Receiver<Message>>>) {
+        loop {
+            if let Ok(rx) = receiver.lock() {
+                if let Ok(message) = rx.recv() {
+                    if let Message::NewJob(job) = message {
+                        job.call_box();
+                    } else {
+                        break;
+                    }
+                }
+            }
         }
     }
 }
@@ -144,7 +147,6 @@ pub fn run<F>(f: F, task: TaskType)
         } else {
             // otherwise, spawn to a new thread for the work;
             thread::spawn(f);
-            initialize_with(num_cpus::get());
         }
     }
 }

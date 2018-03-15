@@ -73,10 +73,11 @@ impl ServerConfig {
     }
 }
 
-pub type ViewEngine = fn(Box<String>, EngineContext, &mut Box<String>) -> u16;
+pub type ViewEngine = fn(Box<String>, Box<EngineContext>, &mut Box<String>) -> u16;
+
 pub struct EngineContext {
     value: String,
-    children: HashMap<String, EngineContext>,
+    children: HashMap<String, Box<EngineContext>>,
 }
 
 pub trait ViewEngineDefinition {
@@ -94,11 +95,11 @@ impl ViewEngineDefinition for ServerConfig {
 }
 
 pub trait ViewEngineParser {
-    fn template_parser(extension: &str, content: Box<String>, context: EngineContext, output: &mut Box<String>) -> u16;
+    fn template_parser(extension: &str, content: Box<String>, context: Box<EngineContext>, output: &mut Box<String>) -> u16;
 }
 
 impl ViewEngineParser for ServerConfig {
-    fn template_parser(extension: &str, content: Box<String>, context: EngineContext, output: &mut Box<String>) -> u16 {
+    fn template_parser(extension: &str, content: Box<String>, context: Box<EngineContext>, output: &mut Box<String>) -> u16 {
         if extension.is_empty() { return 0; }
 
         if let Ok(template_engines) = VIEW_ENGINES.read() {
