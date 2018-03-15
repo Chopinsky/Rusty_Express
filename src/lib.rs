@@ -197,7 +197,7 @@ impl ServerDef for HttpServer {
     }
 
     fn def_default_response_header(&mut self, header: HashMap<String, String>) {
-        self.config.use_default_header(&header);
+        self.config.use_default_header(header);
     }
 
     fn set_default_response_header(&mut self, field: String, value: String) {

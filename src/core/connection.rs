@@ -110,7 +110,7 @@ fn initialize_response(metadata: &Arc<ConnMetadata>) -> Response {
     let header = metadata.get_default_header();
     match header.is_empty() {
         true => Response::new(),
-        _ => Response::new_with_default_header(&header),
+        _ => Response::new_with_default_header(header),
     }
 }
 

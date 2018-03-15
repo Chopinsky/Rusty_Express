@@ -4,7 +4,12 @@
 extern crate rusty_express;
 
 use std::sync::{Arc, RwLock};
+use std::thread;
 use rusty_express::prelude::*;
+
+//lazy_static! {
+//    static ref COUNT: RwLock<u64> = RwLock::new(0);
+//}
 
 fn main() {
     // define http server now
@@ -67,11 +72,19 @@ impl StatesProvider for Model {
     fn on_response(&self, _: &mut Response) -> RequireStateUpdates { false }
 
     fn update(&mut self, req: &Request, resp: Option<&Response>) {
+        // Blocking way
         let count = self.count;
         self.set_count(count + 1);
 
         if let None = resp {
             println!("Visit counts: {}", self.get_count());
         }
+
+        // Non-Blocking way
+        thread::spawn(move || {
+//            if let Ok(mut count) = COUNT.write() {
+//                *count = *count + 1;
+//            }
+        });
     }
 }

@@ -9,7 +9,7 @@ use std::io::{BufReader, BufWriter};
 use std::io::prelude::*;
 use std::net::{TcpStream};
 use std::path::Path;
-use std::sync::mpsc;
+use std::sync::{Arc, mpsc};
 
 use chrono::prelude::*;
 use core::cookie::*;
@@ -143,8 +143,8 @@ pub struct Response {
     status: u16,
     keep_alive: bool,
     content_type: String,
-    cookie: HashMap<String, Box<Cookie>>,
-    header: HashMap<String, String>,
+    cookie: Arc<HashMap<String, Box<Cookie>>>,
+    header: Arc<HashMap<String, String>>,
     body: Box<String>,
     redirect: String,
 }
@@ -155,20 +155,20 @@ impl Response {
             status: 0,
             keep_alive: false,
             content_type: String::new(),
-            cookie: HashMap::new(),
-            header: HashMap::new(),
+            cookie: Arc::new(HashMap::new()),
+            header: Arc::new(HashMap::new()),
             body: Box::new(String::new()),
             redirect: String::new(),
         }
     }
 
-    pub fn new_with_default_header(default_header: &HashMap<String, String>) -> Self {
+    pub fn new_with_default_header(default_header: Arc<HashMap<String, String>>) -> Self {
         Response {
             status: 0,
             keep_alive: false,
             content_type: String::new(),
-            cookie: HashMap::new(),
-            header: default_header.clone(),
+            cookie: Arc::new(HashMap::new()),
+            header: Arc::clone(&default_header),
             body: Box::new(String::new()),
             redirect: String::new(),
         }
@@ -179,7 +179,7 @@ impl Response {
 
         // other header field-value pairs
         if !self.cookie.is_empty() {
-            let cookie = self.cookie.to_owned();
+            let cookie = Arc::clone(&self.cookie);
             let tx_cookie = mpsc::Sender::clone(&tx);
 
             shared_pool::run(move || {
@@ -188,7 +188,7 @@ impl Response {
         }
 
         // other header field-value pairs
-        let header_set = self.header.to_owned();
+        let header_set = Arc::clone(&self.header);
         shared_pool::run(move || {
             // tx_header has been moved in, no need to drop specifically
             write_headers(header_set, tx);
@@ -294,7 +294,7 @@ pub trait ResponseWriter {
     fn header(&mut self, field: &str, value: &str, replace: bool);
     fn send(&mut self, content: &str);
     fn send_file(&mut self, file_path: &str);
-    fn send_template(&mut self, file_path: &str, context: EngineContext);
+    fn send_template(&mut self, file_path: &str, context: Box<EngineContext>);
     fn set_cookie(&mut self, cookie: Cookie);
     fn set_cookies(&mut self, cookie: &[Cookie]);
     fn clear_cookies(&mut self);
@@ -331,7 +331,9 @@ impl ResponseWriter for Response {
                 }
             },
             _ => {
-                self.header.add(field, value.to_owned(), replace);
+                if let Some(header) = Arc::get_mut(&mut self.header) {
+                    (*header).add(field, value.to_owned(), replace);
+                }
             },
         };
     }
@@ -375,7 +377,7 @@ impl ResponseWriter for Response {
         }
     }
 
-    fn send_template(&mut self, file_loc: &str, context: EngineContext) {
+    fn send_template(&mut self, file_loc: &str, context: Box<EngineContext>) {
         //TODO - impl ServerConfig::template_parser
         //ServerConfig::template_parser();
     }
@@ -383,18 +385,27 @@ impl ResponseWriter for Response {
     fn set_cookie(&mut self, cookie: Cookie) {
         if !cookie.is_valid() { return; }
 
-        let key = cookie.get_cookie_key();
-        self.cookie.insert(key, Box::new(cookie));
+        if let Some(cookie_set) = Arc::get_mut(&mut self.cookie) {
+            let key = cookie.get_cookie_key();
+            cookie_set.insert(key, Box::new(cookie));
+        }
     }
 
     fn set_cookies(&mut self, cookies: &[Cookie]) {
-        for cookie in cookies.to_owned() {
-            self.set_cookie(cookie);
+        if let Some(cookie_set) = Arc::get_mut(&mut self.cookie) {
+            for cookie in cookies.iter() {
+                if !cookie.is_valid() { continue; }
+
+                let key = cookie.get_cookie_key();
+                cookie_set.insert(key, Box::new(cookie.clone()));
+            }
         }
     }
 
     fn clear_cookies(&mut self) {
-        self.cookie.clear();
+        if let Some(cookie_set) = Arc::get_mut(&mut self.cookie) {
+            cookie_set.clear();
+        }
     }
 
     fn set_content_type(&mut self, content_type: &str) {
@@ -622,7 +633,7 @@ fn write_header_status(status: u16, has_contents: bool) -> String {
     }
 }
 
-fn write_headers(header: HashMap<String, String>, tx: mpsc::Sender<String>) {
+fn write_headers(header: Arc<HashMap<String, String>>, tx: mpsc::Sender<String>) {
     let mut headers = String::new();
 
     for (field, value) in header.iter() {
@@ -644,9 +655,9 @@ fn write_headers(header: HashMap<String, String>, tx: mpsc::Sender<String>) {
     });
 }
 
-fn write_header_cookie(cookie: HashMap<String, Box<Cookie>>, tx: mpsc::Sender<String>) {
+fn write_header_cookie(cookie: Arc<HashMap<String, Box<Cookie>>>, tx: mpsc::Sender<String>) {
     let mut cookie_output = String::new();
-    for (_, cookie) in cookie.into_iter() {
+    for (_, cookie) in cookie.iter() {
         if cookie.is_valid() {
             cookie_output.push_str(&format!("Set-Cookie: {}\r\n", &cookie.to_string()));
         }

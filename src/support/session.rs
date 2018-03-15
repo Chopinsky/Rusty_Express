@@ -22,6 +22,7 @@ static DELEM_LV_3: char = '\u{0007}';
 static DELEM_LV_4: char = '\u{0008}';
 
 lazy_static! {
+    //TODO: do we really need arc here???
     static ref STORE: Arc<RwLock<HashMap<String, Session>>> = Arc::new(RwLock::new(HashMap::new()));
     static ref DEFAULT_LIFETIME: Arc<RwLock<Duration>> = Arc::new(RwLock::new(Duration::from_secs(172800)));
     static ref AUTO_CLEARN: AtomicBool = AtomicBool::new(false);
