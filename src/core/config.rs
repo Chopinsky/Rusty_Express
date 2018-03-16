@@ -129,8 +129,8 @@ impl ConnMetadata {
     }
 
     #[inline]
-    pub fn get_default_header(&self) -> Box<HashMap<String, String>> {
-        self.header.clone()
+    pub fn get_default_header(&self) -> HashMap<String, String> {
+        (*self.header).clone()
     }
 
     #[inline]

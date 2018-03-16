@@ -144,8 +144,8 @@ pub struct Response {
     status: u16,
     keep_alive: bool,
     content_type: String,
-    cookie: Arc<Box<HashMap<String, Cookie>>>,
-    header: Box<HashMap<String, String>>,
+    cookie: Arc<HashMap<String, Box<Cookie>>>,
+    header: HashMap<String, String>,
     body: Box<String>,
     redirect: String,
 }
@@ -156,19 +156,19 @@ impl Response {
             status: 0,
             keep_alive: false,
             content_type: String::new(),
-            cookie: Arc::new(Box::new(HashMap::new())),
-            header: Box::new(HashMap::new()),
+            cookie: Arc::new(HashMap::new()),
+            header: HashMap::new(),
             body: Box::new(String::new()),
             redirect: String::new(),
         }
     }
 
-    pub fn new_with_default_header(default_header: Box<HashMap<String, String>>) -> Self {
+    pub fn new_with_default_header(default_header: HashMap<String, String>) -> Self {
         Response {
             status: 0,
             keep_alive: false,
             content_type: String::new(),
-            cookie: Arc::new(Box::new(HashMap::new())),
+            cookie: Arc::new(HashMap::new()),
             header: default_header,
             body: Box::new(String::new()),
             redirect: String::new(),
@@ -240,7 +240,7 @@ pub trait ResponseStates {
     fn to_keep_alive(&self) -> bool;
     fn get_redirect_path(&self) -> String;
     fn get_header(&self, key: &str) -> Option<&String>;
-    fn get_cookie(&self, key: &str) -> Option<&Cookie>;
+    fn get_cookie(&self, key: &str) -> Option<&Box<Cookie>>;
     fn get_content_type(&self) -> String;
     fn status_is_set(&self) -> bool;
     fn has_contents(&self, ignore_body: bool) -> bool;
@@ -263,7 +263,7 @@ impl ResponseStates for Response {
     }
 
     #[inline]
-    fn get_cookie(&self, key: &str) -> Option<&Cookie> {
+    fn get_cookie(&self, key: &str) -> Option<&Box<Cookie>> {
         self.cookie.get(key)
     }
 
@@ -318,9 +318,7 @@ impl ResponseWriter for Response {
         if field.is_empty() || value.is_empty() { return; }
 
         match &field.to_lowercase()[..] {
-            "content-type" => {
-                self.content_type = value.to_owned();
-            },
+            "content-type" => self.content_type = value.to_owned(),
             "connection" => {
                 if value.to_lowercase().eq("keep-alive") {
                     self.keep_alive = true;
@@ -381,7 +379,7 @@ impl ResponseWriter for Response {
 
         if let Some(cookie_set) = Arc::get_mut(&mut self.cookie) {
             let key = cookie.get_cookie_key();
-            cookie_set.insert(key, cookie);
+            cookie_set.insert(key, Box::new(cookie));
         }
     }
 
@@ -391,7 +389,7 @@ impl ResponseWriter for Response {
                 if !cookie.is_valid() { continue; }
 
                 let key = cookie.get_cookie_key();
-                cookie_set.insert(key, cookie.clone());
+                cookie_set.insert(key, Box::new(cookie.clone()));
             }
         }
     }
@@ -490,7 +488,7 @@ fn read_from_file(file_path: &Path, buf: &mut Box<String>) -> u16 {
         let mut buf_reader = BufReader::new(file);
         return match buf_reader.read_to_string(buf) {
             Err(e) => {
-                println!("Unable to read file: {}", e);
+                eprintln!("Unable to read file: {}", e);
                 500
             },
             Ok(size) if size > 0 => {
@@ -498,12 +496,12 @@ fn read_from_file(file_path: &Path, buf: &mut Box<String>) -> u16 {
                 200
             },
             _ => {
-                println!("File stream finds nothing...");
+                eprintln!("File stream finds nothing...");
                 404
             }
         };
     } else {
-        println!("Unable to open requested file for path");
+        eprintln!("Unable to open requested file for path");
         404
     }
 }
@@ -627,7 +625,7 @@ fn write_header_status(status: u16, has_contents: bool) -> String {
     }
 }
 
-fn write_headers(header: &Box<HashMap<String, String>>, final_header: &mut Box<String>) {
+fn write_headers(header: &HashMap<String, String>, final_header: &mut Box<String>) {
     final_header.push_str(&format!("Server: Rusty-Express/{}\r\n", VERSION));
 
     for (field, value) in header.iter() {
@@ -635,7 +633,7 @@ fn write_headers(header: &Box<HashMap<String, String>>, final_header: &mut Box<S
     }
 }
 
-fn write_header_cookie(cookie: Arc<Box<HashMap<String, Cookie>>>, tx: mpsc::Sender<String>) {
+fn write_header_cookie(cookie: Arc<HashMap<String, Box<Cookie>>>, tx: mpsc::Sender<String>) {
     let mut cookie_output = String::new();
     for (_, cookie) in cookie.iter() {
         if cookie.is_valid() {
