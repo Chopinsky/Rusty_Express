@@ -119,11 +119,17 @@ pub enum TaskType {
 pub fn initialize_with(size: usize) {
     unsafe {
         ONCE.call_once(|| {
-            // Make it
+            let (count, portion): (usize, usize) = if size < 2 {
+                (2, 1)
+            } else {
+                (size, size/2)
+            };
+
+            // Make the pool
             let pool = Some(Pool {
-                req_workers: Box::new(ThreadPool::new(size)),
-                resp_workers: Box::new(ThreadPool::new(2 * size)),
-                body_workers: Box::new(ThreadPool::new(size)),
+                req_workers: Box::new(ThreadPool::new(count)),
+                resp_workers: Box::new(ThreadPool::new(count)),
+                body_workers: Box::new(ThreadPool::new(portion)),
             });
 
             // Put it in the heap so it can outlive this call

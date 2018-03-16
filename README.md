@@ -18,7 +18,13 @@ features and more performance enhancement! That's why we need to start the 0.3.x
 with slight changes to the interface APIs. 
 
 Here're what to expect when updating from 0.2.x to 0.3.0:
-- sss
+- The route handler function's signature has changed, now the request and response objects
+are boxed! So now your route handler should have something similar to this:
+```rust
+pub fn handler(req: &Box<Request>, resp: &mut Box<Response>) {
+    /// work hard to generate the response here...
+}
+```
 - ddd
   
 
@@ -44,13 +50,13 @@ fn main() {
     server.set_pool_size(10);
 
     //Route definition
-    server.get(RequestPath::Exact("/"), simple_response);
+    server.get(RequestPath::Exact("/"), handler);
 
     //Listen to port 8080, server has started.
     server.listen(8080);
 }
 
-pub fn simple_response(req: &Request, resp: &mut Response) {
+pub fn handler(req: &Box<Request>, resp: &mut Box<Response>) {
     resp.send("Hello world from the rusty-express server!\n");
     resp.status(200);
 }

@@ -228,10 +228,6 @@ impl Router for Route {
     }
 
     fn other(&mut self, method: &str, uri: RequestPath, callback: Callback) {
-        if method.to_lowercase().eq(&"head"[..]) {
-            panic!("Can't...");
-        }
-
         let request_method = REST::OTHER(method.to_lowercase().to_owned());
         self.add_route(request_method, uri, callback);
     }
@@ -258,16 +254,13 @@ impl RouteHandler for Route {
 }
 
 fn handle_request_worker(callback: &Callback, req: &Box<Request>, resp: &mut Box<Response>) {
-    //Callback function will decide what to be written into the response
+    // callback function will decide what to be written into the response
     callback(req, resp);
 
+    // if a redirect response, set up as so.
     let mut redirect = resp.get_redirect_path();
     if !redirect.is_empty() {
         if !redirect.starts_with('/') { redirect.insert(0, '/'); }
-
-        //TODO: Never provide content directly?? Then move line below...
-        //resp.redirect("");
-        //handle_request_worker(&routes, &req, resp, redirect.clone());
 
         resp.header("Location", &redirect, true);
         resp.status(301);

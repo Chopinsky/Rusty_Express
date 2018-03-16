@@ -144,9 +144,10 @@ pub struct Response {
     status: u16,
     keep_alive: bool,
     content_type: String,
-    cookie: Arc<HashMap<String, Box<Cookie>>>,
+    cookie: Arc<HashMap<String, Cookie>>,
     header: HashMap<String, String>,
     body: Box<String>,
+    body_rx: Vec<mpsc::Sender<String>>,
     redirect: String,
 }
 
@@ -159,6 +160,7 @@ impl Response {
             cookie: Arc::new(HashMap::new()),
             header: HashMap::new(),
             body: Box::new(String::new()),
+            body_rx: Vec::new(),
             redirect: String::new(),
         }
     }
@@ -171,6 +173,7 @@ impl Response {
             cookie: Arc::new(HashMap::new()),
             header: default_header,
             body: Box::new(String::new()),
+            body_rx: Vec::new(),
             redirect: String::new(),
         }
     }
@@ -240,7 +243,7 @@ pub trait ResponseStates {
     fn to_keep_alive(&self) -> bool;
     fn get_redirect_path(&self) -> String;
     fn get_header(&self, key: &str) -> Option<&String>;
-    fn get_cookie(&self, key: &str) -> Option<&Box<Cookie>>;
+    fn get_cookie(&self, key: &str) -> Option<&Cookie>;
     fn get_content_type(&self) -> String;
     fn status_is_set(&self) -> bool;
     fn has_contents(&self, ignore_body: bool) -> bool;
@@ -263,7 +266,7 @@ impl ResponseStates for Response {
     }
 
     #[inline]
-    fn get_cookie(&self, key: &str) -> Option<&Box<Cookie>> {
+    fn get_cookie(&self, key: &str) -> Option<&Cookie> {
         self.cookie.get(key)
     }
 
@@ -379,7 +382,7 @@ impl ResponseWriter for Response {
 
         if let Some(cookie_set) = Arc::get_mut(&mut self.cookie) {
             let key = cookie.get_cookie_key();
-            cookie_set.insert(key, Box::new(cookie));
+            cookie_set.insert(key, cookie);
         }
     }
 
@@ -389,7 +392,7 @@ impl ResponseWriter for Response {
                 if !cookie.is_valid() { continue; }
 
                 let key = cookie.get_cookie_key();
-                cookie_set.insert(key, Box::new(cookie.clone()));
+                cookie_set.insert(key, cookie.clone());
             }
         }
     }
@@ -633,7 +636,7 @@ fn write_headers(header: &HashMap<String, String>, final_header: &mut Box<String
     }
 }
 
-fn write_header_cookie(cookie: Arc<HashMap<String, Box<Cookie>>>, tx: mpsc::Sender<String>) {
+fn write_header_cookie(cookie: Arc<HashMap<String, Cookie>>, tx: mpsc::Sender<String>) {
     let mut cookie_output = String::new();
     for (_, cookie) in cookie.iter() {
         if cookie.is_valid() {
