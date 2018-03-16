@@ -10,6 +10,7 @@ use std::io::prelude::*;
 use std::net::{TcpStream};
 use std::path::Path;
 use std::sync::{Arc, mpsc};
+use std::time::Duration;
 
 use chrono::prelude::*;
 use core::cookie::*;
@@ -175,29 +176,24 @@ impl Response {
     }
 
     fn resp_header(&self, ignore_body: bool) -> Box<String> {
+        // Get cookier parser to its own thread
         let (tx, rx) = mpsc::channel();
-
-        // other header field-value pairs
         if !self.cookie.is_empty() {
             let cookie = Arc::clone(&self.cookie);
-            let tx_cookie = mpsc::Sender::clone(&tx);
 
             shared_pool::run(move || {
-                write_header_cookie(cookie, tx_cookie);
+                write_header_cookie(cookie, tx);
             }, TaskType::Response);
-        }
 
-        // other header field-value pairs
-        let header_set = Arc::clone(&self.header);
-        shared_pool::run(move || {
-            // tx_header has been moved in, no need to drop specifically
-            write_headers(header_set, tx);
-        }, TaskType::Response);
+        } else {
+            drop(tx);
+        }
 
         let mut header =
             Box::new(write_header_status(self.status, self.has_contents()));
 
-        header.push_str(&format!("Server: Rusty-Express/{}\r\n", VERSION));
+        // other header field-value pairs
+        write_headers(&self.header, &mut header);
 
         if !self.content_type.is_empty() {
             header.push_str(&format!("Content-Type: {}\r\n", self.content_type));
@@ -228,7 +224,7 @@ impl Response {
             header.push_str(&format!("Connection: {}\r\n", connection));
         }
 
-        for received in rx {
+        if let Ok(received ) = rx.recv_timeout(Duration::from_millis(64)) {
             if !received.is_empty() {
                 header.push_str(&received);
             }
@@ -633,26 +629,12 @@ fn write_header_status(status: u16, has_contents: bool) -> String {
     }
 }
 
-fn write_headers(header: Arc<HashMap<String, String>>, tx: mpsc::Sender<String>) {
-    let mut headers = String::new();
+fn write_headers(header: &Arc<HashMap<String, String>>, final_header: &mut Box<String>) {
+    final_header.push_str(&format!("Server: Rusty-Express/{}\r\n", VERSION));
 
     for (field, value) in header.iter() {
-        //special cases that shall be set using given methods
-        let f = field.to_lowercase();
-        if f.eq("content-type")
-            || f.eq("date")
-            || f.eq("content-length") {
-
-            continue;
-        }
-
-        //otherwise, write to the header
-        headers.push_str(&format!("{}: {}\r\n", field, value));
+        final_header.push_str(&format!("{}: {}\r\n", field, value));
     }
-
-    tx.send(headers).unwrap_or_else(|e| {
-        eprintln!("Unable to write main response header: {}", e);
-    });
 }
 
 fn write_header_cookie(cookie: Arc<HashMap<String, Box<Cookie>>>, tx: mpsc::Sender<String>) {
