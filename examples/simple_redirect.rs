@@ -15,7 +15,7 @@ fn main() {
     server.listen(8080);
 }
 
-pub fn simple_response(req: &Request, resp: &mut Response) {
+pub fn simple_response(req: &Box<Request>, resp: &mut Box<Response>) {
     //this content will be skipped because of the redirection
     resp.send("Hello world from rusty server!\n");
 
@@ -23,11 +23,11 @@ pub fn simple_response(req: &Request, resp: &mut Response) {
     resp.redirect("/index");
 }
 
-pub fn simple_redirect(req: &Request, resp: &mut Response) {
+pub fn simple_redirect(req: &Box<Request>, resp: &mut Box<Response>) {
     resp.send("Now empowered with the redirect!\n");
 }
 
-pub fn simple_redir_fail(req: &Request, resp: &mut Response) {
+pub fn simple_redir_fail(req: &Box<Request>, resp: &mut Box<Response>) {
     //call redirect
     resp.redirect("/fail");
 }

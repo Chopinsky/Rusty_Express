@@ -12,22 +12,21 @@
 ## What is this
 A simple http server library written in Rust and provide Express-alike APIs.
 
-## Moving to version 0.3.0 
-Even though there are many things left undone for version 0.2.x, I'm planning on making slight
-changes to the interface APIs, which may no longer be compatible with your projects using 0.2.x. 
+## New versions: 0.3.x vs. 0.2.x 
+0.2.x versions are good experiments with this project. But we're growing fast with better
+features and more performance enhancement! That's why we need to start the 0.3.x versions
+with slight changes to the interface APIs. 
 
-So I'm going to publish 0.2.9 as the last version of the 0.2.x series. The upcoming 0.3.x series
-will be as awesome with slight interface API updates, and hopefully, better documentation and test
-coverage!
-
-Wohooo! 
+Here're what to expect when updating from 0.2.x to 0.3.0:
+- sss
+- ddd
   
 
 ## How to use
 In your project's `Cargo.toml`, add dependency:
 ```cargo
 [dependencies]
-rusty_express = "^0.2.9"
+rusty_express = "^0.3.0"
 ...
 ```
 

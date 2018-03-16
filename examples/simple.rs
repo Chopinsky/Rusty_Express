@@ -12,7 +12,7 @@ fn main() {
     server.listen(8080);
 }
 
-pub fn simple_response(req: &Request, resp: &mut Response) {
+pub fn simple_response(req: &Box<Request>, resp: &mut Box<Response>) {
 
     /*        Test: generate new Sessions
     //        if let Some(mut session) = Session::new() {

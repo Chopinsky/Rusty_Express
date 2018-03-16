@@ -30,7 +30,7 @@ pub enum RequestPath {
     WildCard(&'static str),
 }
 
-pub type Callback = fn(&Request, &mut Response);
+pub type Callback = fn(&Box<Request>, &mut Box<Response>);
 
 struct RegexRoute {
     pub regex: Regex,
@@ -238,11 +238,11 @@ impl Router for Route {
 }
 
 pub trait RouteHandler {
-    fn handle_request_method(&self, method: &REST, req: &mut Request, resp: &mut Response);
+    fn handle_request_method(&self, method: &REST, req: &mut Box<Request>, resp: &mut Box<Response>);
 }
 
 impl RouteHandler for Route {
-    fn handle_request_method(&self, method: &REST, req: &mut Request, resp: &mut Response) {
+    fn handle_request_method(&self, method: &REST, req: &mut Box<Request>, resp: &mut Box<Response>) {
         if let Some(routes) = self.store.get(method) {
             let mut params = HashMap::new();
             if let Some(callback) = routes.seek_path(&req.uri[..], &mut params) {
@@ -250,14 +250,14 @@ impl RouteHandler for Route {
                     req.create_param(params);
                 }
 
-                handle_request_worker(&callback, req, resp);
+                handle_request_worker(&callback, &req, resp);
                 return;
             }
         }
     }
 }
 
-fn handle_request_worker(callback: &Callback, req: &Request, resp: &mut Response) {
+fn handle_request_worker(callback: &Callback, req: &Box<Request>, resp: &mut Box<Response>) {
     //Callback function will decide what to be written into the response
     callback(req, resp);
 

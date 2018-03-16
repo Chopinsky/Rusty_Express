@@ -36,12 +36,12 @@ impl Model {
         Model { count: d }
     }
 
-    pub fn simple_response(_req: &Request, resp: &mut Response) {
+    pub fn simple_response(_req: &Box<Request>, resp: &mut Box<Response>) {
         resp.send("Hello world from rusty server!\n");
         resp.status(200);
     }
 
-    pub fn simple_index(_req: &Request, resp: &mut Response) {
+    pub fn simple_index(_req: &Box<Request>, resp: &mut Box<Response>) {
         resp.send("Hello world from the index page!\n");
     }
 
@@ -67,11 +67,11 @@ impl StatesProvider for Model {
         StatesInteraction::WithRequest
     }
 
-    fn on_request(&self, _: &mut Request) -> RequireStateUpdates { true }
+    fn on_request(&self, _: &mut Box<Request>) -> RequireStateUpdates { true }
 
-    fn on_response(&self, _: &mut Response) -> RequireStateUpdates { false }
+    fn on_response(&self, _: &mut Box<Response>) -> RequireStateUpdates { false }
 
-    fn update(&mut self, req: &Request, resp: Option<&Response>) {
+    fn update(&mut self, req: &Box<Request>, resp: Option<&Box<Response>>) {
         // Blocking way
         let count = self.count;
         self.set_count(count + 1);

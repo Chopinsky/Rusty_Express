@@ -50,9 +50,9 @@ pub type RequireStateUpdates = bool;
 
 pub trait StatesProvider {
     fn interaction_stage(&self) -> StatesInteraction;
-    fn on_request(&self, req: &mut Request) -> RequireStateUpdates;
-    fn on_response(&self, resp: &mut Response) -> RequireStateUpdates;
-    fn update(&mut self, req: &Request, resp: Option<&Response>);
+    fn on_request(&self, req: &mut Box<Request>) -> RequireStateUpdates;
+    fn on_response(&self, resp: &mut Box<Response>) -> RequireStateUpdates;
+    fn update(&mut self, req: &Box<Request>, resp: Option<&Box<Response>>);
 }
 
 pub struct EmptyState {}
@@ -68,15 +68,15 @@ impl StatesProvider for EmptyState {
     }
 
     #[inline]
-    fn on_request(&self, req: &mut Request) -> RequireStateUpdates {
+    fn on_request(&self, req: &mut Box<Request>) -> RequireStateUpdates {
         false
     }
 
     #[inline]
-    fn on_response(&self, resp: &mut Response) -> RequireStateUpdates {
+    fn on_response(&self, resp: &mut Box<Response>) -> RequireStateUpdates {
         false
     }
 
     #[inline]
-    fn update(&mut self, req: &Request, resp: Option<&Response>) { }
+    fn update(&mut self, req: &Box<Request>, resp: Option<&Box<Response>>) { }
 }

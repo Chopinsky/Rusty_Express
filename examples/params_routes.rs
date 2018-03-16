@@ -16,13 +16,13 @@ fn main() {
     server.listen(8080);
 }
 
-pub fn simple_response(req: &Request, resp: &mut Response) {
+pub fn simple_response(req: &Box<Request>, resp: &mut Box<Response>) {
     resp.send(&format!("Hello world from rusty server from {}!<br />", req.uri));
     resp.status(200);
     resp.set_content_type("text/html");
 }
 
-pub fn user_param_response(req: &Request, resp: &mut Response) {
+pub fn user_param_response(req: &Box<Request>, resp: &mut Box<Response>) {
     resp.send(&format!("Hello world from rusty server from {}<br />", req.uri));
 
     resp.send(&format!("<ul>"));
@@ -35,7 +35,7 @@ pub fn user_param_response(req: &Request, resp: &mut Response) {
     resp.set_content_type("text/html");
 }
 
-pub fn blog_param_response(req: &Request, resp: &mut Response) {
+pub fn blog_param_response(req: &Box<Request>, resp: &mut Box<Response>) {
     resp.send(&format!("Hello world from rusty server from {}<br />", req.uri));
 
     resp.send(&format!("<ul>"));

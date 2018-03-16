@@ -34,7 +34,7 @@ pub fn handle_connection_with_states<T: Send + Sync + Clone + StatesProvider>(
         metadata: Arc<ConnMetadata>,
         states: Arc<RwLock<T>>) -> Option<u8> {
 
-    let mut request = Request::new();
+    let mut request = Box::new(Request::new());
     if let Err(err) = handle_request(&stream, &mut request) {
         debug::print("Error on parsing request", 3);
         return write_to_stream(stream, &build_err_response(&err, &metadata), false);
@@ -83,7 +83,7 @@ pub fn handle_connection(
         router: Arc<Route>,
         metadata: Arc<ConnMetadata>) -> Option<u8> {
 
-    let mut request= Request::new();
+    let mut request= Box::new(Request::new());
     if let Err(err) = handle_request(&stream, &mut request) {
         debug::print("Error on parsing request", 3);
         return write_to_stream(stream, &build_err_response(&err, &metadata), false);
@@ -92,7 +92,7 @@ pub fn handle_connection(
     handle_response(stream, &mut request, &mut initialize_response(&metadata), &router, &metadata)
 }
 
-fn handle_response(stream: TcpStream, request: &mut Request, response: &mut Response,
+fn handle_response(stream: TcpStream, request: &mut Box<Request>, response: &mut Box<Response>,
                    router: &Arc<Route>, metadata: &Arc<ConnMetadata>) -> Option<u8> {
 
     let (override_method , ignore_body) = match &request.method {
@@ -106,15 +106,15 @@ fn handle_response(stream: TcpStream, request: &mut Request, response: &mut Resp
     write_to_stream(stream, &response, ignore_body)
 }
 
-fn initialize_response(metadata: &Arc<ConnMetadata>) -> Response {
+fn initialize_response(metadata: &Arc<ConnMetadata>) -> Box<Response> {
     let header = metadata.get_default_header();
     match header.is_empty() {
-        true => Response::new(),
-        _ => Response::new_with_default_header(header),
+        true => Box::new(Response::new()),
+        _ => Box::new(Response::new_with_default_header(header)),
     }
 }
 
-fn write_to_stream(stream: TcpStream, response: &Response, ignore_body: bool) -> Option<u8> {
+fn write_to_stream(stream: TcpStream, response: &Box<Response>, ignore_body: bool) -> Option<u8> {
     let mut buffer = BufWriter::new(&stream);
 
     response.serialize_header(&mut buffer, ignore_body);
@@ -136,7 +136,7 @@ fn write_to_stream(stream: TcpStream, response: &Response, ignore_body: bool) ->
     return Some(0);
 }
 
-fn handle_request(mut stream: &TcpStream, request: &mut Request) -> Result<(), ParseError> {
+fn handle_request(mut stream: &TcpStream, request: &mut Box<Request>) -> Result<(), ParseError> {
     let mut buffer = [0; 512];
 
     if let Err(e) = stream.read(&mut buffer){
@@ -156,7 +156,7 @@ fn handle_request(mut stream: &TcpStream, request: &mut Request) -> Result<(), P
     }
 }
 
-fn parse_request(request: &str, store: &mut Request) -> bool {
+fn parse_request(request: &str, store: &mut Box<Request>) -> bool {
     if request.is_empty() {
         return false;
     }
@@ -206,7 +206,7 @@ fn parse_request(request: &str, store: &mut Request) -> bool {
     true
 }
 
-fn parse_request_body(store: &mut Request, line: &str, is_body: bool) {
+fn parse_request_body(store: &mut Box<Request>, line: &str, is_body: bool) {
     //TODO: Better support for content-dispositions?
 
     if !is_body {
@@ -298,7 +298,7 @@ fn split_path(full_uri: &str, final_uri: &mut String, final_scheme: &mut HashMap
 /// field is the key of the map, which map to a single value of the key from the Cookie
 /// header field. Assuming no duplicate cookie keys, or the first cookie key-value pair
 /// will be stored.
-fn cookie_parser(store: &mut Request, cookie_body: &str) {
+fn cookie_parser(store: &mut Box<Request>, cookie_body: &str) {
     if cookie_body.is_empty() { return; }
 
     for set in cookie_body.trim().split(";").into_iter() {
@@ -335,8 +335,8 @@ fn scheme_parser(scheme: &str, scheme_result: &mut HashMap<String, Vec<String>>)
     }
 }
 
-fn build_err_response(err: &ParseError, metadata: &Arc<ConnMetadata>) -> Response {
-    let mut resp = Response::new();
+fn build_err_response(err: &ParseError, metadata: &Arc<ConnMetadata>) -> Box<Response> {
+    let mut resp = Box::new(Response::new());
     let status: u16 = match err {
         &ParseError::ReadStreamErr => 500,
         _ => 404,
