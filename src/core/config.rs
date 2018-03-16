@@ -49,13 +49,11 @@ impl ServerConfig {
     }
 
     pub fn use_default_header(&mut self, header: HashMap<String, String>) {
-        self.meta_data.header = Arc::new(header);
+        self.meta_data.header = Box::new(header);
     }
 
     pub fn set_default_header(&mut self, field: String, value: String, replace: bool) {
-        if let Some(header) = Arc::get_mut(&mut self.meta_data.header) {
-            (*header).add(&field[..], value, replace);
-        }
+        self.meta_data.header.add(&field[..], value, replace);
     }
 
     pub fn set_session_auto_clean(&mut self, auto_clean_period: Duration) {
@@ -114,28 +112,29 @@ impl ViewEngineParser for ServerConfig {
     }
 }
 
+//TODO: default pages should use a function call to get the results
 pub struct ConnMetadata {
-    header: Arc<HashMap<String, String>>,
-    default_pages: Arc<HashMap<u16, String>>,
+    header: Box<HashMap<String, String>>,
+    default_pages: Arc<Box<HashMap<u16, String>>>,
     state_interaction: StatesInteraction,
 }
 
 impl ConnMetadata {
     pub fn new() -> Self {
         ConnMetadata {
-            header: Arc::new(HashMap::new()),
-            default_pages: Arc::new(HashMap::new()),
+            header: Box::new(HashMap::new()),
+            default_pages: Arc::new(Box::new(HashMap::new())),
             state_interaction: StatesInteraction::None,
         }
     }
 
     #[inline]
-    pub fn get_default_header(&self) -> Arc<HashMap<String, String>> {
-        Arc::clone(&self.header)
+    pub fn get_default_header(&self) -> Box<HashMap<String, String>> {
+        self.header.clone()
     }
 
     #[inline]
-    pub fn get_default_pages(&self) -> Arc<HashMap<u16, String>> {
+    pub fn get_default_pages(&self) -> Arc<Box<HashMap<u16, String>>> {
         Arc::clone(&self.default_pages)
     }
 

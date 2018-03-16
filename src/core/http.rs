@@ -144,8 +144,8 @@ pub struct Response {
     status: u16,
     keep_alive: bool,
     content_type: String,
-    cookie: Arc<HashMap<String, Box<Cookie>>>,
-    header: Arc<HashMap<String, String>>,
+    cookie: Arc<Box<HashMap<String, Cookie>>>,
+    header: Box<HashMap<String, String>>,
     body: Box<String>,
     redirect: String,
 }
@@ -156,20 +156,20 @@ impl Response {
             status: 0,
             keep_alive: false,
             content_type: String::new(),
-            cookie: Arc::new(HashMap::new()),
-            header: Arc::new(HashMap::new()),
+            cookie: Arc::new(Box::new(HashMap::new())),
+            header: Box::new(HashMap::new()),
             body: Box::new(String::new()),
             redirect: String::new(),
         }
     }
 
-    pub fn new_with_default_header(default_header: Arc<HashMap<String, String>>) -> Self {
+    pub fn new_with_default_header(default_header: Box<HashMap<String, String>>) -> Self {
         Response {
             status: 0,
             keep_alive: false,
             content_type: String::new(),
-            cookie: Arc::new(HashMap::new()),
-            header: Arc::clone(&default_header),
+            cookie: Arc::new(Box::new(HashMap::new())),
+            header: default_header,
             body: Box::new(String::new()),
             redirect: String::new(),
         }
@@ -190,7 +190,7 @@ impl Response {
         }
 
         let mut header =
-            Box::new(write_header_status(self.status, self.has_contents()));
+            Box::new(write_header_status(self.status, self.has_contents(ignore_body)));
 
         // other header field-value pairs
         write_headers(&self.header, &mut header);
@@ -240,10 +240,10 @@ pub trait ResponseStates {
     fn to_keep_alive(&self) -> bool;
     fn get_redirect_path(&self) -> String;
     fn get_header(&self, key: &str) -> Option<&String>;
-    fn get_cookie(&self, key: &str) -> Option<&Box<Cookie>>;
+    fn get_cookie(&self, key: &str) -> Option<&Cookie>;
     fn get_content_type(&self) -> String;
     fn status_is_set(&self) -> bool;
-    fn has_contents(&self) -> bool;
+    fn has_contents(&self, ignore_body: bool) -> bool;
 }
 
 impl ResponseStates for Response {
@@ -263,7 +263,7 @@ impl ResponseStates for Response {
     }
 
     #[inline]
-    fn get_cookie(&self, key: &str) -> Option<&Box<Cookie>> {
+    fn get_cookie(&self, key: &str) -> Option<&Cookie> {
         self.cookie.get(key)
     }
 
@@ -280,8 +280,8 @@ impl ResponseStates for Response {
     }
 
     #[inline]
-    fn has_contents(&self) -> bool {
-        (!self.body.is_empty() && self.body.len() > 0)
+    fn has_contents(&self, ignore_body: bool) -> bool {
+        (ignore_body || !self.body.is_empty())
     }
 }
 
@@ -327,9 +327,7 @@ impl ResponseWriter for Response {
                 }
             },
             _ => {
-                if let Some(header) = Arc::get_mut(&mut self.header) {
-                    (*header).add(field, value.to_owned(), replace);
-                }
+                self.header.add(field, value.to_owned(), replace);
             },
         };
     }
@@ -383,7 +381,7 @@ impl ResponseWriter for Response {
 
         if let Some(cookie_set) = Arc::get_mut(&mut self.cookie) {
             let key = cookie.get_cookie_key();
-            cookie_set.insert(key, Box::new(cookie));
+            cookie_set.insert(key, cookie);
         }
     }
 
@@ -393,7 +391,7 @@ impl ResponseWriter for Response {
                 if !cookie.is_valid() { continue; }
 
                 let key = cookie.get_cookie_key();
-                cookie_set.insert(key, Box::new(cookie.clone()));
+                cookie_set.insert(key, cookie.clone());
             }
         }
     }
@@ -412,7 +410,7 @@ impl ResponseWriter for Response {
 
     fn check_and_update(&mut self, fallback: &HashMap<u16, String>) {
         //if contents have been provided, we're all good.
-        if self.has_contents() { return; }
+        if self.has_contents(false) { return; }
 
         if self.status == 0 || self.status == 404 {
             if let Some(file_path) = fallback.get(&404) {
@@ -453,7 +451,7 @@ impl StreamWriter for Response {
     }
 
     fn serialize_body(&self, buffer: &mut BufWriter<&TcpStream>) {
-        if self.has_contents() {
+        if self.has_contents(false) {
             //content has been explicitly set, use them
             if let Err(e) = buffer.write(self.body.as_bytes()) {
                 eprintln!("An error has taken place when writing the response header to the stream: {}", e);
@@ -629,7 +627,7 @@ fn write_header_status(status: u16, has_contents: bool) -> String {
     }
 }
 
-fn write_headers(header: &Arc<HashMap<String, String>>, final_header: &mut Box<String>) {
+fn write_headers(header: &Box<HashMap<String, String>>, final_header: &mut Box<String>) {
     final_header.push_str(&format!("Server: Rusty-Express/{}\r\n", VERSION));
 
     for (field, value) in header.iter() {
@@ -637,7 +635,7 @@ fn write_headers(header: &Arc<HashMap<String, String>>, final_header: &mut Box<S
     }
 }
 
-fn write_header_cookie(cookie: Arc<HashMap<String, Box<Cookie>>>, tx: mpsc::Sender<String>) {
+fn write_header_cookie(cookie: Arc<Box<HashMap<String, Cookie>>>, tx: mpsc::Sender<String>) {
     let mut cookie_output = String::new();
     for (_, cookie) in cookie.iter() {
         if cookie.is_valid() {
