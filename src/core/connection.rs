@@ -96,7 +96,10 @@ fn handle_response(stream: TcpStream, request: &mut Box<Request>, response: &mut
                    router: &Arc<Route>, metadata: &Arc<ConnMetadata>) -> Option<u8> {
 
     let (override_method , ignore_body) = match &request.method {
-        &REST::OTHER(ref others) if others.eq("head") => { (REST::GET, true) },
+        &REST::OTHER(ref others) if others.eq("head") => {
+            response.header_only(true);
+            (REST::GET, true)
+        },
         _ => { (request.method.to_owned(), false) },
     };
 
@@ -137,7 +140,7 @@ fn write_to_stream(stream: TcpStream, response: &Box<Response>, ignore_body: boo
 }
 
 fn handle_request(mut stream: &TcpStream, request: &mut Box<Request>) -> Result<(), ParseError> {
-    let mut buffer = [0; 512];
+    let mut buffer = [0; 1024];
 
     if let Err(e) = stream.read(&mut buffer){
         debug::print(&format!("Reading stream error -- {}", e), 3);

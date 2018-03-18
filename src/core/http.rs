@@ -146,6 +146,7 @@ pub struct Response {
     content_type: String,
     cookie: Arc<HashMap<String, Cookie>>,
     header: HashMap<String, String>,
+    header_only: bool,
     body: Box<String>,
     body_tx: Option<mpsc::Sender<Box<String>>>,
     body_rx: Option<mpsc::Receiver<Box<String>>>,
@@ -160,6 +161,7 @@ impl Response {
             content_type: String::new(),
             cookie: Arc::new(HashMap::new()),
             header: HashMap::new(),
+            header_only: false,
             body: Box::new(String::new()),
             body_tx: None,
             body_rx: None,
@@ -174,6 +176,7 @@ impl Response {
             content_type: String::new(),
             cookie: Arc::new(HashMap::new()),
             header: default_header,
+            header_only: false,
             body: Box::new(String::new()),
             body_tx: None,
             body_rx: None,
@@ -251,6 +254,7 @@ pub trait ResponseStates {
     fn get_content_type(&self) -> String;
     fn status_is_set(&self) -> bool;
     fn has_contents(&self, ignore_body: bool) -> bool;
+    fn is_header_only(&self) -> bool;
 }
 
 impl ResponseStates for Response {
@@ -290,15 +294,21 @@ impl ResponseStates for Response {
     fn has_contents(&self, ignore_body: bool) -> bool {
         (ignore_body || !self.body.is_empty())
     }
+
+    #[inline]
+    fn is_header_only(&self) -> bool {
+        self.header_only
+    }
 }
 
 pub trait ResponseWriter {
     fn status(&mut self, status: u16);
     fn header(&mut self, field: &str, value: &str, replace: bool);
+    fn header_only(&mut self, header_only: bool);
     fn send(&mut self, content: &str);
     fn send_file(&mut self, file_path: &str) -> u16;
     fn send_file_async(&mut self, file_loc: &str);
-    fn send_template(&mut self, file_path: &str, context: Box<EngineContext>);
+    fn send_template(&mut self, file_path: &str, context: Box<EngineContext>) -> u16;
     fn set_cookie(&mut self, cookie: Cookie);
     fn set_cookies(&mut self, cookie: &[Cookie]);
     fn clear_cookies(&mut self);
@@ -338,7 +348,14 @@ impl ResponseWriter for Response {
         };
     }
 
+    #[inline]
+    fn header_only(&mut self, header_only: bool) {
+        self.header_only = header_only;
+    }
+
     fn send(&mut self, content: &str) {
+        if self.header_only { return; }
+
         if !content.is_empty() {
             self.body.push_str(content);
         }
@@ -359,6 +376,8 @@ impl ResponseWriter for Response {
     /// ...
     fn send_file(&mut self, file_loc: &str) -> u16 {
         //TODO - use meta path
+
+        if self.header_only { return 200; }
 
         if let Some(file_path) = get_file_path(file_loc) {
             let status = read_from_file(&file_path, &mut self.body);
@@ -383,6 +402,8 @@ impl ResponseWriter for Response {
     }
 
     fn send_file_async(&mut self, file_loc: &str) {
+        if self.header_only { return; }
+
         // lazy init the tx-rx pair.
         if self.body_tx.is_none() {
             let (tx, rx) = mpsc::channel();
@@ -400,9 +421,13 @@ impl ResponseWriter for Response {
         }
     }
 
-    fn send_template(&mut self, file_loc: &str, context: Box<EngineContext>) {
+    fn send_template(&mut self, file_loc: &str, context: Box<EngineContext>) -> u16 {
+        if self.header_only { return 200; }
+
         //TODO - impl ServerConfig::template_parser
         //ServerConfig::template_parser();
+
+        200
     }
 
     fn set_cookie(&mut self, cookie: Cookie) {
