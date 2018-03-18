@@ -147,7 +147,8 @@ pub struct Response {
     cookie: Arc<HashMap<String, Cookie>>,
     header: HashMap<String, String>,
     body: Box<String>,
-    body_rx: Vec<mpsc::Sender<String>>,
+    body_tx: Option<mpsc::Sender<String>>,
+    body_rx: Option<mpsc::Receiver<String>>,
     redirect: String,
 }
 
@@ -160,7 +161,8 @@ impl Response {
             cookie: Arc::new(HashMap::new()),
             header: HashMap::new(),
             body: Box::new(String::new()),
-            body_rx: Vec::new(),
+            body_tx: None,
+            body_rx: None,
             redirect: String::new(),
         }
     }
@@ -173,7 +175,8 @@ impl Response {
             cookie: Arc::new(HashMap::new()),
             header: default_header,
             body: Box::new(String::new()),
-            body_rx: Vec::new(),
+            body_tx: None,
+            body_rx: None,
             redirect: String::new(),
         }
     }
@@ -207,8 +210,8 @@ impl Response {
             header.push_str(&format!("Date: {}\r\n", dt.format("%a, %e %b %Y %T GMT").to_string()));
         }
 
-        if !self.header.contains_key("content-length") {
-            //TODO: if using rx, need to move this to body writer, and don't append empty line in this function but in the body writer function.
+        if !self.header.contains_key("content-length") && self.body_rx.is_none() {
+            // Only generate content length header attribute if not using async send file
             if ignore_body || self.body.is_empty() {
                 header.push_str("Content-Length: 0\r\n");
             } else {
@@ -234,6 +237,7 @@ impl Response {
         }
 
         // write an empty line to end the header
+        //TODO: move the empty line divider to body parser, so we can add content-length.
         header.push_str("\r\n");
         header
     }
@@ -292,7 +296,8 @@ pub trait ResponseWriter {
     fn status(&mut self, status: u16);
     fn header(&mut self, field: &str, value: &str, replace: bool);
     fn send(&mut self, content: &str);
-    fn send_file(&mut self, file_path: &str);
+    fn send_file(&mut self, file_path: &str) -> u16;
+    fn send_file_async(&mut self, file_loc: &str);
     fn send_template(&mut self, file_path: &str, context: Box<EngineContext>);
     fn set_cookie(&mut self, cookie: Cookie);
     fn set_cookies(&mut self, cookie: &[Cookie]);
@@ -339,36 +344,54 @@ impl ResponseWriter for Response {
         }
     }
 
-    fn send_file(&mut self, file_loc: &str) {
-
+    /// Send a static file as part of the response to the client. Return the http
+    /// header status that can be set directly to the response object using:
+    ///
+    ///     resp.status(<returned_status_value_from_this_api>);
+    ///
+    /// For example, if the file is read and parsed successfully, we will return 200;
+    /// if we can't find the file, we will return 404; if there are errors when reading
+    /// the file from its location, we will return 500.
+    ///
+    /// side effect: if the file is read and parsed successfully, we will set the
+    /// content type based on file extension. You can always reset the value for
+    /// this auto-generated content type response attribute.
+    /// ...
+    fn send_file(&mut self, file_loc: &str) -> u16 {
         //TODO - use meta path
-        //TODO - send back rx, and write to stream from receiver
 
-        if file_loc.is_empty() {
-            eprintln!("Undefined file path to retrieve data from...");
-            return;
+        if let Some(file_path) = get_file_path(file_loc) {
+            let status = read_from_file(&file_path, &mut self.body);
+
+            if status == 200 && self.content_type.is_empty() {
+                let mime_type =
+                    if let Some(ext) = file_path.extension() {
+                        let file_extension = ext.to_string_lossy();
+                        default_mime_type_with_ext(&file_extension)
+                    } else {
+                        String::from("text/plain")
+                    };
+
+                self.set_content_type(&mime_type[..]);
+            }
+
+            return status;
         }
 
-        let file_path = Path::new(file_loc);
-        if !file_path.is_file() {
-            eprintln!("Can't locate requested file");
-            self.status(404);
-            return;
-        }
+        // if not getting the file path, then a 404
+        404
+    }
 
-        let status = read_from_file(&file_path, &mut self.body);
-        if !self.status_is_set() { self.status(status); }
+    fn send_file_async(&mut self, file_loc: &str) {
+        if let Some(file_path) = get_file_path(file_loc) {
+            // lazy init the tx-rx pair.
+            if self.body_tx.is_none() {
+                let (tx, rx) = mpsc::channel();
+                self.body_tx = Some(tx);
+                self.body_rx = Some(rx);
+            }
 
-        if self.status == 200 && self.content_type.is_empty() {
-            let mime_type =
-                if let Some(ext) = file_path.extension() {
-                    let file_extension = ext.to_string_lossy();
-                    default_mime_type_with_ext(&file_extension)
-                } else {
-                    String::from("text/plain")
-                };
-
-            self.set_content_type(&mime_type[..]);
+            //TODO: read the file with the shared_pool. Set the status later
         }
     }
 
@@ -483,6 +506,21 @@ fn get_default_page(buffer: &mut BufWriter<&TcpStream>, status: u16) {
             }
         },
     }
+}
+
+fn get_file_path(path: &str) -> Option<&Path> {
+    if path.is_empty() {
+        eprintln!("Undefined file path to retrieve data from...");
+        return None;
+    }
+
+    let file_path = Path::new(path);
+    if !file_path.is_file() {
+        eprintln!("Can't locate requested file");
+        return None;
+    }
+
+    Some(file_path)
 }
 
 fn read_from_file(file_path: &Path, buf: &mut Box<String>) -> u16 {
