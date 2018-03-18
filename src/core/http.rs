@@ -147,8 +147,8 @@ pub struct Response {
     cookie: Arc<HashMap<String, Cookie>>,
     header: HashMap<String, String>,
     body: Box<String>,
-    body_tx: Option<mpsc::Sender<String>>,
-    body_rx: Option<mpsc::Receiver<String>>,
+    body_tx: Option<mpsc::Sender<Box<String>>>,
+    body_rx: Option<mpsc::Receiver<Box<String>>>,
     redirect: String,
 }
 
@@ -230,7 +230,7 @@ impl Response {
             header.push_str(&format!("Connection: {}\r\n", connection));
         }
 
-        if let Ok(received ) = rx.recv_timeout(Duration::from_millis(64)) {
+        if let Ok(received) = rx.recv_timeout(Duration::from_millis(64)) {
             if !received.is_empty() {
                 header.push_str(&received);
             }
@@ -383,15 +383,20 @@ impl ResponseWriter for Response {
     }
 
     fn send_file_async(&mut self, file_loc: &str) {
-        if let Some(file_path) = get_file_path(file_loc) {
-            // lazy init the tx-rx pair.
-            if self.body_tx.is_none() {
-                let (tx, rx) = mpsc::channel();
-                self.body_tx = Some(tx);
-                self.body_rx = Some(rx);
-            }
+        // lazy init the tx-rx pair.
+        if self.body_tx.is_none() {
+            let (tx, rx) = mpsc::channel();
+            self.body_tx = Some(tx);
+            self.body_rx = Some(rx);
+        }
 
-            //TODO: read the file with the shared_pool. Set the status later
+        if let &Some(ref tx) = &self.body_tx {
+            let tx_clone = mpsc::Sender::clone(tx);
+            let path = file_loc.to_owned();
+
+            shared_pool::run(move || {
+                read_from_file_async(path, tx_clone);
+            }, TaskType::Body);
         }
     }
 
@@ -532,18 +537,28 @@ fn read_from_file(file_path: &Path, buf: &mut Box<String>) -> u16 {
                 eprintln!("Unable to read file: {}", e);
                 500
             },
-            Ok(size) if size > 0 => {
+            Ok(_) => {
                 //things are truly ok now
                 200
             },
-            _ => {
-                eprintln!("File stream finds nothing...");
-                404
-            }
         };
     } else {
         eprintln!("Unable to open requested file for path");
         404
+    }
+}
+
+fn read_from_file_async(file_loc: String, tx: mpsc::Sender<Box<String>>) {
+    if let Some(file_path) = get_file_path(&file_loc[..]) {
+        let mut buf: Box<String> = Box::new(String::new());
+        match read_from_file(file_path, &mut buf) {
+            404 | 500 if buf.len() > 0 => { buf.clear(); },
+            _ => { /* Nothing to do here */ },
+        }
+
+        if let Err(e) = tx.send(buf) {
+            eprintln!("Unable to write the file to the stream: {}", e);
+        }
     }
 }
 
