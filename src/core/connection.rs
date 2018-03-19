@@ -28,7 +28,7 @@ pub fn handle_connection_with_states<T: Send + Sync + Clone + StatesProvider>(
         states: Arc<RwLock<T>>) -> Option<u8> {
 
     let mut request = Box::new(Request::new());
-    let callback = match handle_request(&stream, &mut request, router) {
+    let handler = match handle_request(&stream, &mut request, router) {
         Err(err) => {
             debug::print("Error on parsing request", 3);
             return write_to_stream(stream, &build_err_response(&err, &metadata), false);
@@ -53,7 +53,7 @@ pub fn handle_connection_with_states<T: Send + Sync + Clone + StatesProvider>(
     };
 
     let mut response = initialize_response(&metadata);
-    let result = handle_response(stream, callback, &mut request, &mut response, &metadata);
+    let result = handle_response(stream, handler, &request, &mut response, &metadata);
 
     match metadata.get_state_interaction() {
         &StatesInteraction::WithRequest | &StatesInteraction::Both => {
@@ -80,7 +80,7 @@ pub fn handle_connection(
         metadata: Arc<ConnMetadata>) -> Option<u8> {
 
     let mut request= Box::new(Request::new());
-    let callback = match handle_request(&stream, &mut request, router) {
+    let handler = match handle_request(&stream, &mut request, router) {
         Err(err) => {
             debug::print("Error on parsing request", 3);
             return write_to_stream(stream, &build_err_response(&err, &metadata), false);
@@ -88,11 +88,12 @@ pub fn handle_connection(
         Ok(cb) => cb,
     };
 
-    handle_response(stream, callback, &mut request, &mut initialize_response(&metadata),  &metadata)
+    handle_response(stream, handler, &request,
+                    &mut initialize_response(&metadata),  &metadata)
 }
 
 fn handle_response(stream: TcpStream, callback: Callback,
-                   request: &mut Box<Request>, response: &mut Box<Response>,
+                   request: &Box<Request>, response: &mut Box<Response>,
                    metadata: &Arc<ConnMetadata>) -> Option<u8> {
 
     let (override_method , ignore_body) = match &request.method {
@@ -223,7 +224,8 @@ fn parse_request_base(line: &str, req: &mut Box<Request>, router: Arc<Route>)
     -> Option<mpsc::Receiver<(Option<Callback>, HashMap<String, String>)>> {
 
     let mut header_only = false;
-    
+    let mut raw_scheme = String::new();
+
     for (index, info) in line.split_whitespace().enumerate() {
         if index < 2 && info.is_empty() { return None; }
 
@@ -246,24 +248,25 @@ fn parse_request_base(line: &str, req: &mut Box<Request>, router: Arc<Route>)
 
                 req.method = base_method;
             },
-            1 => {
-                let mut raw_scheme= String::new();
-                split_path(info, &mut req.uri, &mut raw_scheme);
-                req.create_scheme(scheme_parser(raw_scheme));
-            },
+            1 => split_path(info, &mut req.uri, &mut raw_scheme),
             2 => req.write_header("http_version", info, true),
             _ => { break; },
         };
     }
 
     if !req.uri.is_empty() {
-        let (tx, rx) = mpsc::channel();
         let uri = req.uri.to_owned();
-        let req_method = req.method.clone();  //this should have been set at this point
+        let req_method = req.method.clone();
 
+        let (tx, rx) = mpsc::channel();
         shared_pool::run(move || {
             router.seek_handler(&req_method, &uri[..], header_only, tx);
         }, TaskType::Request);
+
+        // now do more work on non-essential parsing
+        if !raw_scheme.is_empty() {
+            req.create_scheme(scheme_parser(raw_scheme));
+        }
 
         return Some(rx);
     }

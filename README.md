@@ -12,7 +12,7 @@
 ## What is this
 A simple http server library written in Rust and provide Express-alike APIs.
 
-## New versions: 0.3.x vs. 0.2.x 
+## Migrate from 0.2.x to 0.3.0 
 0.2.x versions are good experiments with this project. But we're growing fast with better
 features and more performance enhancement! That's why we need to start the 0.3.x versions
 with slight changes to the interface APIs. 

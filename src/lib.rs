@@ -109,8 +109,8 @@ fn start_with<T: Send + Sync + Clone + StatesProvider + 'static>(
     let write_timeout = Some(Duration::from_millis(config.write_timeout as u64));
     let mut meta_data = config.get_meta_data();
 
-    let has_states_to_manage =
-        if let Ok(state) = managed_states.read() {
+    let has_states_to_manage = match managed_states.read() {
+        Ok(state) => {
             let stage = state.interaction_stage();
             meta_data.set_state_interaction(stage);
 
@@ -118,21 +118,19 @@ fn start_with<T: Send + Sync + Clone + StatesProvider + 'static>(
                 StatesInteraction::None => false,
                 _ => true
             }
-        } else {
-            false
-        };
+        },
+        _ => false,
+    };
 
-
-    let meta_arc = Arc::new(meta_data);
     let router = Arc::new(router.to_owned());
+    let meta_arc = Arc::new(meta_data);
 
     for stream in listener.incoming() {
         if let Ok(s) = stream {
             if server_states.is_terminating() {
                 // Told to close the connection, shut down the socket now.
                 &s.shutdown(Shutdown::Both).unwrap_or_else(|e| {
-                    debug::print(
-                        &format!("Unable to shut down the stream: {}", e)[..], 1);
+                    debug::print(&format!("Unable to shut down the stream: {}", e)[..], 1);
                 });
 
                 return;

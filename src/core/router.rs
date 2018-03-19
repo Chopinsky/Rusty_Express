@@ -223,13 +223,23 @@ impl Router for Route {
 }
 
 pub trait RouteHandler {
-    fn handle_request(callback: Callback, req: &mut Box<Request>, resp: &mut Box<Response>);
+    fn handle_request(callback: Callback, req: &Box<Request>, resp: &mut Box<Response>);
     fn seek_handler(&self, method: &REST, uri: &str, header_only: bool, tx: mpsc::Sender<(Option<Callback>, HashMap<String, String>)>);
 }
 
 impl RouteHandler for Route {
-    fn handle_request(callback: Callback, req: &mut Box<Request>, resp: &mut Box<Response>) {
-        handle_request_worker(&callback, &req, resp);
+    fn handle_request(callback: Callback, req: &Box<Request>, resp: &mut Box<Response>) {
+        // callback function will decide what to be written into the response
+        callback(req, resp);
+
+        // if a redirect response, set up as so.
+        let mut redirect = resp.get_redirect_path();
+        if !redirect.is_empty() {
+            if !redirect.starts_with('/') { redirect.insert(0, '/'); }
+
+            resp.header("Location", &redirect, true);
+            resp.status(301);
+        }
     }
 
     fn seek_handler(&self, method: &REST, uri: &str, header_only: bool,
@@ -250,20 +260,6 @@ impl RouteHandler for Route {
         if let Err(e) = tx.send((result, params)) {
             debug::print("Unable to find the route handler", 2);
         }
-    }
-}
-
-fn handle_request_worker(callback: &Callback, req: &Box<Request>, resp: &mut Box<Response>) {
-    // callback function will decide what to be written into the response
-    callback(req, resp);
-
-    // if a redirect response, set up as so.
-    let mut redirect = resp.get_redirect_path();
-    if !redirect.is_empty() {
-        if !redirect.starts_with('/') { redirect.insert(0, '/'); }
-
-        resp.header("Location", &redirect, true);
-        resp.status(301);
     }
 }
 
