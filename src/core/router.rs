@@ -9,6 +9,7 @@ use std::time::Duration;
 
 use core::http::{Request, RequestWriter, Response, ResponseStates, ResponseWriter};
 use regex::Regex;
+use support::debug;
 use support::common::MapUpdates;
 use support::TaskType;
 use support::{RouteTrie, shared_pool};
@@ -116,18 +117,6 @@ impl RouteMap {
             return Some(*callback);
         }
 
-        let (tx, rx) = mpsc::channel();
-        let search_in_wildcards = !self.wildcard.is_empty();
-
-        if search_in_wildcards {
-            let wildcard_routes = self.wildcard.to_owned();
-            let dest_path = uri.to_owned();
-
-            shared_pool::run(move || {
-                search_wildcard_router(&wildcard_routes, dest_path, tx);
-            }, TaskType::Request);
-        }
-
         if !self.explicit_with_params.is_empty() {
             let (callback, temp_params) =
                 search_params_router(&self.explicit_with_params, uri);
@@ -141,12 +130,8 @@ impl RouteMap {
             }
         }
 
-        if search_in_wildcards {
-            if let Ok(received) = rx.recv_timeout(Duration::from_millis(128)) {
-                if received.is_some() {
-                    return received;
-                }
-            }
+        if !self.wildcard.is_empty() {
+            return search_wildcard_router(&self.wildcard, uri);
         }
 
         None
@@ -228,27 +213,42 @@ impl Router for Route {
     }
 
     fn other(&mut self, method: &str, uri: RequestPath, callback: Callback) {
-        let request_method = REST::OTHER(method.to_lowercase().to_owned());
+        if method.is_empty() {
+            panic!("Must provide a valid method!");
+        }
+
+        let request_method = REST::OTHER(method.to_lowercase());
         self.add_route(request_method, uri, callback);
     }
 }
 
 pub trait RouteHandler {
-    fn handle_request_method(&self, method: &REST, req: &mut Box<Request>, resp: &mut Box<Response>);
+    fn handle_request(callback: Callback, req: &mut Box<Request>, resp: &mut Box<Response>);
+    fn seek_handler(&self, method: &REST, uri: &str, header_only: bool, tx: mpsc::Sender<(Option<Callback>, HashMap<String, String>)>);
 }
 
 impl RouteHandler for Route {
-    fn handle_request_method(&self, method: &REST, req: &mut Box<Request>, resp: &mut Box<Response>) {
-        if let Some(routes) = self.store.get(method) {
-            let mut params = HashMap::new();
-            if let Some(callback) = routes.seek_path(&req.uri[..], &mut params) {
-                if !params.is_empty() {
-                    req.create_param(params);
-                }
+    fn handle_request(callback: Callback, req: &mut Box<Request>, resp: &mut Box<Response>) {
+        handle_request_worker(&callback, &req, resp);
+    }
 
-                handle_request_worker(&callback, &req, resp);
-                return;
+    fn seek_handler(&self, method: &REST, uri: &str, header_only: bool,
+                    tx: mpsc::Sender<(Option<Callback>, HashMap<String, String>)>) {
+
+        let mut result = None;
+        let mut params = HashMap::new();
+
+        if let Some(routes) = self.store.get(method) {
+            result = routes.seek_path(uri, &mut params);
+        } else if header_only {
+            //if a header only request, fallback to search with REST::GET
+            if let Some(routes) = self.store.get(&REST::GET) {
+                result = routes.seek_path(uri, &mut params);
             }
+        }
+
+        if let Err(e) = tx.send((result, params)) {
+            debug::print("Unable to find the route handler", 2);
         }
     }
 }
@@ -267,7 +267,7 @@ fn handle_request_worker(callback: &Callback, req: &Box<Request>, resp: &mut Box
     }
 }
 
-fn search_wildcard_router(routes: &HashMap<String, RegexRoute>, uri: String, tx: mpsc::Sender<Option<Callback>>) {
+fn search_wildcard_router(routes: &HashMap<String, RegexRoute>, uri: &str) -> Option<Callback> {
     let mut result = None;
     for (_, route) in routes.iter() {
         if route.regex.is_match(&uri) {
@@ -276,9 +276,7 @@ fn search_wildcard_router(routes: &HashMap<String, RegexRoute>, uri: String, tx:
         }
     }
 
-    tx.send(result).unwrap_or_else(|e| {
-        eprintln!("Error on matching wild card routes: {}", e);
-    });
+    result
 }
 
 fn search_params_router(route_head: &RouteTrie, uri: &str) -> (Option<Callback>, Vec<(String, String)>) {
