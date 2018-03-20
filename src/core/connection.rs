@@ -2,14 +2,14 @@
 
 use std::collections::HashMap;
 use std::io::prelude::*;
-use std::io::BufWriter;
+use std::io::{BufWriter, Error};
 use std::net::{Shutdown, TcpStream};
 use std::sync::{Arc, RwLock, mpsc};
 use std::time::Duration;
 
 use core::config::ConnMetadata;
 use core::states::{StatesProvider, StatesInteraction};
-use core::http::{Request, RequestWriter, Response, ResponseStates, ResponseWriter, StreamWriter};
+use core::http::{Request, RequestWriter, Response, ResponseManager, ResponseStates, ResponseWriter};
 use core::router::{Callback, REST, Route, RouteHandler};
 use support::debug;
 use support::TaskType;
@@ -31,7 +31,7 @@ pub fn handle_connection_with_states<T: Send + Sync + Clone + StatesProvider>(
     let handler = match handle_request(&stream, &mut request, router) {
         Err(err) => {
             debug::print("Error on parsing request", 3);
-            return write_to_stream(stream, &build_err_response(&err, &metadata), false);
+            return write_to_stream(stream, &build_err_response(&err, &metadata));
         },
         Ok(cb) => cb,
     };
@@ -83,7 +83,7 @@ pub fn handle_connection(
     let handler = match handle_request(&stream, &mut request, router) {
         Err(err) => {
             debug::print("Error on parsing request", 3);
-            return write_to_stream(stream, &build_err_response(&err, &metadata), false);
+            return write_to_stream(stream, &build_err_response(&err, &metadata));
         },
         Ok(cb) => cb,
     };
@@ -96,18 +96,14 @@ fn handle_response(stream: TcpStream, callback: Callback,
                    request: &Box<Request>, response: &mut Box<Response>,
                    metadata: &Arc<ConnMetadata>) -> Option<u8> {
 
-    let (override_method , ignore_body) = match &request.method {
-        &REST::OTHER(ref others) if others.eq("head") => {
-            response.header_only(true);
-            (REST::GET, true)
-        },
-        _ => { (request.method.to_owned(), false) },
-    };
+    if request.method.eq(&REST::OTHER(String::from("HEAD"))) {
+        response.header_only(true);
+    }
 
     Route::handle_request(callback, request, response);
-    response.check_and_update(&metadata.get_default_pages());
+    response.validate_and_update(&metadata.get_default_pages());
 
-    write_to_stream(stream, &response, ignore_body)
+    write_to_stream(stream, &response)
 }
 
 fn initialize_response(metadata: &Arc<ConnMetadata>) -> Box<Response> {
@@ -118,23 +114,19 @@ fn initialize_response(metadata: &Arc<ConnMetadata>) -> Box<Response> {
     }
 }
 
-fn write_to_stream(stream: TcpStream, response: &Box<Response>, ignore_body: bool) -> Option<u8> {
+fn write_to_stream(stream: TcpStream, response: &Box<Response>) -> Option<u8> {
     let mut buffer = BufWriter::new(&stream);
 
-    response.serialize_header(&mut buffer, ignore_body);
-    if !ignore_body { response.serialize_body(&mut buffer); }
+    response.serialize_header(&mut buffer);
 
-    if let Err(e) = buffer.flush() {
-        debug::print(
-            &format!("An error has taken place when flushing the response to the stream: {}", e)[..], 1);
-        return Some(1);
+    if !response.is_header_only() {
+        // else, write the body to the stream
+        response.serialize_body(&mut buffer);
     }
 
-    if let Err(e) = stream.shutdown(Shutdown::Both) {
-        debug::print(
-            &format!("An error has taken place when flushing the response to the stream: {}", e)[..], 1);
-        return Some(1);
-    }
+    // flush the buffer and shutdown the connection: we're done
+    if let Err(e) = buffer.flush() { return write_to_stream_err(e); }
+    if let Err(e) = stream.shutdown(Shutdown::Both) { return write_to_stream_err(e); }
 
     // Otherwise we're good to leave.
     return Some(0);
@@ -238,11 +230,12 @@ fn parse_request_base(line: &str, req: &mut Box<Request>, router: Arc<Route>)
                     "DELETE" => REST::DELETE,
                     "OPTIONS" => REST::OPTIONS,
                     _ => {
-                        if info.to_lowercase().eq("header") {
+                        let others = info.to_uppercase();
+                        if others.eq("header") {
                             header_only = true;
                         }
 
-                        REST::OTHER(info.to_owned())
+                        REST::OTHER(others)
                     },
                 };
 
@@ -355,7 +348,7 @@ fn build_err_response(err: &ParseError, metadata: &Arc<ConnMetadata>) -> Box<Res
     };
 
     resp.status(status);
-    resp.check_and_update(&metadata.get_default_pages());
+    resp.validate_and_update(&metadata.get_default_pages());
     resp.keep_alive(false);
 
     if resp.get_content_type().is_empty() {
@@ -363,4 +356,12 @@ fn build_err_response(err: &ParseError, metadata: &Arc<ConnMetadata>) -> Box<Res
     }
 
     resp
+}
+
+fn write_to_stream_err(err: Error) -> Option<u8> {
+    debug::print(
+        &format!("An error has taken place when flushing the response to the stream: {}", err)[..],
+        1);
+
+    Some(1)
 }

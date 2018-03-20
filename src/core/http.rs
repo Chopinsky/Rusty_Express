@@ -22,6 +22,7 @@ use support::TaskType;
 
 static FOUR_OH_FOUR: &'static str = include_str!("../default/404.html");
 static FIVE_HUNDRED: &'static str = include_str!("../default/500.html");
+static NEW_LINE: &'static str = "\r\n";
 static VERSION: &'static str = "0.2.9";
 
 pub struct Request {
@@ -144,6 +145,7 @@ pub struct Response {
     status: u16,
     keep_alive: bool,
     content_type: String,
+    content_length: Option<String>,
     cookie: Arc<HashMap<String, Cookie>>,
     header: HashMap<String, String>,
     header_only: bool,
@@ -159,6 +161,7 @@ impl Response {
             status: 0,
             keep_alive: false,
             content_type: String::new(),
+            content_length: None,
             cookie: Arc::new(HashMap::new()),
             header: HashMap::new(),
             header_only: false,
@@ -174,6 +177,7 @@ impl Response {
             status: 0,
             keep_alive: false,
             content_type: String::new(),
+            content_length: None,
             cookie: Arc::new(HashMap::new()),
             header: default_header,
             header_only: false,
@@ -184,22 +188,24 @@ impl Response {
         }
     }
 
-    fn resp_header(&self, ignore_body: bool) -> Box<String> {
-        // Get cookier parser to its own thread
-        let (tx, rx) = mpsc::channel();
-        if !self.cookie.is_empty() {
-            let cookie = Arc::clone(&self.cookie);
+    fn resp_header(&self) -> Box<String> {
+        // Get cookie parser to its own thread
+        let receiver: Option<mpsc::Receiver<String>> = match self.cookie.is_empty() {
+            true => None,
+            false => {
+                let (tx, rx) = mpsc::channel();
+                let cookie = Arc::clone(&self.cookie);
 
-            shared_pool::run(move || {
-                write_header_cookie(cookie, tx);
-            }, TaskType::Response);
+                shared_pool::run(move || {
+                    write_header_cookie(cookie, tx);
+                }, TaskType::Response);
 
-        } else {
-            drop(tx);
-        }
+                Some(rx)
+            },
+        };
 
         let mut header =
-            Box::new(write_header_status(self.status, self.has_contents(ignore_body)));
+            Box::new(write_header_status(self.status, self.has_contents()));
 
         // other header field-value pairs
         write_headers(&self.header, &mut header);
@@ -208,14 +214,12 @@ impl Response {
             header.push_str(&format!("Content-Type: {}\r\n", self.content_type));
         }
 
-        if !self.header.contains_key("date") {
-            let dt = Utc::now();
-            header.push_str(&format!("Date: {}\r\n", dt.format("%a, %e %b %Y %T GMT").to_string()));
-        }
-
-        if !self.header.contains_key("content-length") && self.body_rx.is_none() {
-            // Only generate content length header attribute if not using async send file
-            if ignore_body || self.body.is_empty() {
+        if let &Some(ref length) = &self.content_length {
+            // explicit content length is set, use it here
+            header.push_str(&format!("Content-Length: {}\r\n", length));
+        } else if self.body_rx.is_none() {
+            // Only generate content length header attribute if not using async and no content-length set explicitly
+            if self.is_header_only() || self.body.is_empty() {
                 header.push_str("Content-Length: 0\r\n");
             } else {
                 header.push_str(&format!("Content-Length: {}\r\n", self.body.len()));
@@ -223,25 +227,24 @@ impl Response {
         }
 
         if !self.header.contains_key("connection") {
-            let connection =
-                if self.keep_alive {
-                    "keep-alive"
-                } else {
-                    "close"
-                };
+            let connection = match self.keep_alive {
+                true => "keep-alive",
+                _ => "close",
+            };
 
             header.push_str(&format!("Connection: {}\r\n", connection));
         }
 
-        if let Ok(received) = rx.recv_timeout(Duration::from_millis(64)) {
-            if !received.is_empty() {
-                header.push_str(&received);
+        if let Some(rec) = receiver {
+            if let Ok(content) = rec.recv_timeout(Duration::from_millis(64)) {
+                if !content.is_empty() {
+                    header.push_str(&content);
+                }
             }
         }
 
-        // write an empty line to end the header
-        //TODO: move the empty line divider to body parser, so we can add content-length.
-        header.push_str("\r\n");
+        // if header only, we're done, write the new line as the EOF
+        header.push_str(NEW_LINE);
         header
     }
 }
@@ -253,7 +256,7 @@ pub trait ResponseStates {
     fn get_cookie(&self, key: &str) -> Option<&Cookie>;
     fn get_content_type(&self) -> String;
     fn status_is_set(&self) -> bool;
-    fn has_contents(&self, ignore_body: bool) -> bool;
+    fn has_contents(&self) -> bool;
     fn is_header_only(&self) -> bool;
 }
 
@@ -291,8 +294,8 @@ impl ResponseStates for Response {
     }
 
     #[inline]
-    fn has_contents(&self, ignore_body: bool) -> bool {
-        (ignore_body || !self.body.is_empty())
+    fn has_contents(&self) -> bool {
+        (self.is_header_only() || !self.body.is_empty() || self.body_rx.is_some())
     }
 
     #[inline]
@@ -304,7 +307,6 @@ impl ResponseStates for Response {
 pub trait ResponseWriter {
     fn status(&mut self, status: u16);
     fn header(&mut self, field: &str, value: &str, replace: bool);
-    fn header_only(&mut self, header_only: bool);
     fn send(&mut self, content: &str);
     fn send_file(&mut self, file_path: &str) -> u16;
     fn send_file_async(&mut self, file_loc: &str);
@@ -313,7 +315,6 @@ pub trait ResponseWriter {
     fn set_cookies(&mut self, cookie: &[Cookie]);
     fn clear_cookies(&mut self);
     fn set_content_type(&mut self, content_type: &str);
-    fn check_and_update(&mut self, fallback: &HashMap<u16, String>);
     fn keep_alive(&mut self, to_keep: bool);
     fn redirect(&mut self, path: &str);
 }
@@ -337,6 +338,14 @@ impl ResponseWriter for Response {
 
         match &field.to_lowercase()[..] {
             "content-type" => self.content_type = value.to_owned(),
+            "content-length" => {
+                let val = value.parse::<u64>();
+                if let Ok(valid_len) = val {
+                    self.content_length = Some(value.to_owned());
+                } else {
+                    panic!("Content length must be a valid string from u64, but provided with: {}", value);
+                }
+            },
             "connection" => {
                 if value.to_lowercase().eq("keep-alive") {
                     self.keep_alive = true;
@@ -348,13 +357,8 @@ impl ResponseWriter for Response {
         };
     }
 
-    #[inline]
-    fn header_only(&mut self, header_only: bool) {
-        self.header_only = header_only;
-    }
-
     fn send(&mut self, content: &str) {
-        if self.header_only { return; }
+        if self.is_header_only() { return; }
 
         if !content.is_empty() {
             self.body.push_str(content);
@@ -377,7 +381,7 @@ impl ResponseWriter for Response {
     fn send_file(&mut self, file_loc: &str) -> u16 {
         //TODO - use meta path
 
-        if self.header_only { return 200; }
+        if self.is_header_only() { return 200; }
 
         if let Some(file_path) = get_file_path(file_loc) {
             let status = read_from_file(&file_path, &mut self.body);
@@ -402,7 +406,7 @@ impl ResponseWriter for Response {
     }
 
     fn send_file_async(&mut self, file_loc: &str) {
-        if self.header_only { return; }
+        if self.is_header_only() { return; }
 
         // lazy init the tx-rx pair.
         if self.body_tx.is_none() {
@@ -422,7 +426,7 @@ impl ResponseWriter for Response {
     }
 
     fn send_template(&mut self, file_loc: &str, context: Box<EngineContext>) -> u16 {
-        if self.header_only { return 200; }
+        if self.is_header_only() { return 200; }
 
         //TODO - impl ServerConfig::template_parser
         //ServerConfig::template_parser();
@@ -462,25 +466,6 @@ impl ResponseWriter for Response {
         }
     }
 
-    fn check_and_update(&mut self, fallback: &HashMap<u16, String>) {
-        //if contents have been provided, we're all good.
-        if self.has_contents(false) { return; }
-
-        if self.status == 0 || self.status == 404 {
-            if let Some(file_path) = fallback.get(&404) {
-                read_from_file(Path::new(file_path), &mut self.body);
-            } else {
-                self.body = Box::new(FOUR_OH_FOUR.to_owned());
-            }
-        } else {
-            if let Some(file_path) = fallback.get(&500) {
-                read_from_file(Path::new(file_path), &mut self.body);
-            } else {
-                self.body = Box::new(FIVE_HUNDRED.to_owned());
-            }
-        }
-    }
-
     fn keep_alive(&mut self, to_keep: bool) {
         self.keep_alive = to_keep;
     }
@@ -492,36 +477,97 @@ impl ResponseWriter for Response {
     }
 }
 
-pub trait StreamWriter {
-    fn serialize_header(&self, buffer: &mut BufWriter<&TcpStream>, ignore_body: bool);
+pub trait ResponseManager {
+    fn header_only(&mut self, header_only: bool);
+    fn validate_and_update(&mut self, fallback: &HashMap<u16, String>);
+    fn serialize_header(&self, buffer: &mut BufWriter<&TcpStream>);
     fn serialize_body(&self, buffer: &mut BufWriter<&TcpStream>);
 }
 
-impl StreamWriter for Response {
-    fn serialize_header(&self, buffer: &mut BufWriter<&TcpStream>, ignore_body: bool) {
-        if let Err(e) = buffer.write(self.resp_header(ignore_body).as_bytes()) {
+impl ResponseManager for Response {
+    #[inline]
+    fn header_only(&mut self, header_only: bool) {
+        self.header_only = header_only;
+    }
+
+    fn validate_and_update(&mut self, fallback: &HashMap<u16, String>) {
+        if self.body_tx.is_some() {
+            // must drop the tx or we will hang indefinitely
+            self.body_tx = None;
+        }
+
+        if self.status != 0 && (self.status < 200 || self.status == 204 || self.status == 304) {
+            self.header_only(true);
+        }
+
+        // if contents have been provided, we're all good.
+        if self.has_contents() { return; }
+
+        // if not setting the header only and not having a body, it's a failure
+        match self.status {
+            0 | 404 => {
+                if let Some(file_path) = fallback.get(&404) {
+                    read_from_file(Path::new(file_path), &mut self.body);
+                } else {
+                    self.body = Box::new(FOUR_OH_FOUR.to_owned());
+                }
+            },
+            _ => {
+                if let Some(file_path) = fallback.get(&500) {
+                    read_from_file(Path::new(file_path), &mut self.body);
+                } else {
+                    self.body = Box::new(FIVE_HUNDRED.to_owned());
+                }
+            },
+        }
+    }
+
+    fn serialize_header(&self, buffer: &mut BufWriter<&TcpStream>) {
+        if let Err(e) = buffer.write(self.resp_header().as_bytes()) {
             eprintln!("An error has taken place when writing the response header to the stream: {}", e);
         }
     }
 
     fn serialize_body(&self, buffer: &mut BufWriter<&TcpStream>) {
-        if self.has_contents(false) {
-            //content has been explicitly set, use them
-            if let Err(e) = buffer.write(self.body.as_bytes()) {
-                eprintln!("An error has taken place when writing the response header to the stream: {}", e);
-            }
+        if self.has_contents() {
+            // content has been explicitly set, use them
+            stream_response_body(self, buffer);
         } else {
-            match self.status {
-                //explicit error status
-                0 | 404 => get_default_page(buffer, 404),
-                500 => get_default_page(buffer, 500),
-                _ => { /* Nothing */ },
-            };
+            // this shouldn't happen, as we should have captured this in the check_and_update call
+            stream_default_body(self.status, buffer);
         }
     }
 }
 
-fn get_default_page(buffer: &mut BufWriter<&TcpStream>, status: u16) {
+fn stream_response_body(response: &Response, buffer: &mut BufWriter<&TcpStream>) {
+    if !response.body.is_empty() {
+        // the content length should have been set in the header, see function resp_header
+        if let Err(e) = buffer.write(response.body.as_bytes()) {
+            eprintln!("An error has taken place when writing the response header to the stream: {}", e);
+        }
+    }
+
+    if let Some(ref rx) = response.body_rx {
+        for received in rx {
+            if !received.is_empty() {
+                if let Err(e) = buffer.write(received.as_bytes()) {
+                    eprintln!("An error has taken place when writing the response header to the stream: {}", e);
+                }
+            }
+        }
+    }
+}
+
+fn stream_default_body(status: u16, buffer: &mut BufWriter<&TcpStream>) {
+    match status {
+        //explicit error status
+        0 | 404 => write_default_page(400, buffer),
+        500 => write_default_page(500, buffer),
+        _ => { /* Nothing */ },
+    };
+}
+
+fn write_default_page(status: u16, buffer: &mut BufWriter<&TcpStream>) {
     match status {
         500 => {
             /* return default 500 page */
@@ -708,6 +754,11 @@ fn write_header_status(status: u16, has_contents: bool) -> String {
 
 fn write_headers(header: &HashMap<String, String>, final_header: &mut Box<String>) {
     final_header.push_str(&format!("Server: Rusty-Express/{}\r\n", VERSION));
+
+    if !header.contains_key("date") {
+        let dt = Utc::now();
+        final_header.push_str(&format!("Date: {}\r\n", dt.format("%a, %e %b %Y %T GMT").to_string()));
+    }
 
     for (field, value) in header.iter() {
         final_header.push_str(&format!("{}: {}\r\n", field, value));

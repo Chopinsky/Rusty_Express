@@ -217,7 +217,7 @@ impl Router for Route {
             panic!("Must provide a valid method!");
         }
 
-        let request_method = REST::OTHER(method.to_lowercase());
+        let request_method = REST::OTHER(method.to_uppercase());
         self.add_route(request_method, uri, callback);
     }
 }
