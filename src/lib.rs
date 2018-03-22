@@ -103,7 +103,7 @@ fn start_with<T: Send + Sync + Clone + StatesProvider + 'static>(
         managed_states: Arc<RwLock<T>>) {
 
     let workers_pool = ThreadPool::new(config.pool_size);
-    shared_pool::initialize_with(config.pool_size);
+    shared_pool::initialize_with(vec![config.pool_size]);
 
     let read_timeout = Some(Duration::from_millis(config.read_timeout as u64));
     let write_timeout = Some(Duration::from_millis(config.write_timeout as u64));
@@ -154,6 +154,10 @@ fn start_with<T: Send + Sync + Clone + StatesProvider + 'static>(
             }
         }
     }
+
+    // must close the shared pool, since it's a static and won't drop with the end of the server,
+    // which could cause response executions still on-the-fly to crash.
+    shared_pool::close();
 }
 
 fn set_timeout(stream: &TcpStream, read: Option<Duration>, write: Option<Duration>) {

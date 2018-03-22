@@ -27,16 +27,18 @@ pub struct ThreadPool {
 }
 
 impl ThreadPool {
-    pub fn new(mut size: usize) -> ThreadPool {
-        if size < 1 { size = 1; }
+    pub fn new(size: usize) -> ThreadPool {
+        let pool_size = match size {
+            _ if size < 1 => 1,
+            _ => size,
+        };
 
         let (sender, receiver) = mpsc::channel();
         let receiver = Arc::new(Mutex::new(receiver));
 
-        let mut workers = Vec::with_capacity(size);
-
-        for id in 0..size {
-            workers.push(Worker::new(id, Arc::clone(&receiver)));
+        let mut workers = Vec::with_capacity(pool_size);
+        for id in 0..pool_size {
+            workers.push(Worker::new((id), Arc::clone(&receiver)));
         }
 
         ThreadPool {
@@ -45,11 +47,33 @@ impl ThreadPool {
         }
     }
 
-    pub fn execute<F>(&self, f: F)
-        where F: FnOnce() + Send + 'static
-    {
+    pub fn execute<F>(&self, f: F) where F: FnOnce() + Send + 'static {
         let job = Box::new(f);
-        self.sender.send(Message::NewJob(job)).unwrap();
+        self.sender.send(Message::NewJob(job)).unwrap_or_else(|err| {
+            println!("Unable to distribute the job: {}", err);
+        });
+    }
+
+    pub fn clear(&mut self) {
+        for _ in &mut self.workers {
+            self.sender.send(Message::Terminate).unwrap_or_else(|err| {
+                println!("Unable to send message: {}", err);
+            });
+        }
+
+        for worker in &mut self.workers {
+            if let Some(thread) = worker.thread.take() {
+                thread.join().expect("Couldn't join on the associated thread");
+            }
+        }
+    }
+}
+
+impl Drop for ThreadPool {
+    fn drop(&mut self) {
+        println!("Job done, sending terminate message to all workers.");
+
+        self.clear();
     }
 }
 
@@ -71,31 +95,20 @@ impl Worker {
     }
 
     fn launch(receiver: Arc<Mutex<mpsc::Receiver<Message>>>) {
+        let mut next_message: Option<Message> = None;
+
         loop {
             if let Ok(rx) = receiver.lock() {
                 if let Ok(message) = rx.recv() {
-                    if let Message::NewJob(job) = message {
-                        job.call_box();
-                    } else {
-                        break;
-                    }
+                    next_message = Some(message);
                 }
             }
-        }
-    }
-}
 
-impl Drop for ThreadPool {
-    fn drop(&mut self) {
-        println!("Job done, sending terminate message to all workers.");
-
-        for _ in &mut self.workers {
-            self.sender.send(Message::Terminate).unwrap();
-        }
-
-        for worker in &mut self.workers {
-            if let Some(thread) = worker.thread.take() {
-                thread.join().unwrap();
+            if let Some(msg) = next_message.take() {
+                match msg {
+                    Message::NewJob(job) => job.call_box(),
+                    Message::Terminate => break,
+                }
             }
         }
     }
@@ -116,20 +129,27 @@ pub enum TaskType {
     Body,
 }
 
-pub fn initialize_with(size: usize) {
+pub fn initialize_with(sizes: Vec<usize>) {
     unsafe {
         ONCE.call_once(|| {
-            let (count, portion): (usize, usize) = if size < 2 {
-                (2, 1)
-            } else {
-                (size, size/2)
+            let pool_sizes: Vec<usize> = sizes.iter().map(|val| {
+                match val {
+                    &0 => 1,
+                    _ => *val,
+                }
+            }).collect();
+
+            let (req_size, resp_size, body_size) = match pool_sizes.len() {
+                1 => (pool_sizes[0], pool_sizes[0], pool_sizes[0]),
+                3 => (pool_sizes[0], pool_sizes[1], pool_sizes[2]),
+                _ => panic!("Requiring vec sizes of 3 for each, or 1 for all"),
             };
 
             // Make the pool
             let pool = Some(Pool {
-                req_workers: Box::new(ThreadPool::new(count)),
-                resp_workers: Box::new(ThreadPool::new(count)),
-                body_workers: Box::new(ThreadPool::new(portion)),
+                req_workers: Box::new(ThreadPool::new(req_size)),
+                resp_workers: Box::new(ThreadPool::new(resp_size)),
+                body_workers: Box::new(ThreadPool::new(body_size)),
             });
 
             // Put it in the heap so it can outlive this call
@@ -152,6 +172,18 @@ pub fn run<F>(f: F, task: TaskType)
         } else {
             // otherwise, spawn to a new thread for the work;
             thread::spawn(f);
+        }
+    }
+}
+
+pub fn close() {
+    unsafe {
+        if let Some(mut pool) = POOL.take() {
+            pool.req_workers.clear();
+            pool.resp_workers.clear();
+            pool.body_workers.clear();
+
+            drop(pool);
         }
     }
 }

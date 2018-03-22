@@ -25,7 +25,7 @@ pub fn handler(req: &Box<Request>, resp: &mut Box<Response>) {
     /// work hard to generate the response here...
 }
 ```
-- ddd
+- 
   
 
 ## How to use
