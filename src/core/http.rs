@@ -17,6 +17,7 @@ use core::cookie::*;
 use core::router::REST;
 use core::config::{EngineContext, ServerConfig, ViewEngine, ViewEngineParser};
 use support::common::MapUpdates;
+use support::debug;
 use support::shared_pool;
 use support::TaskType;
 
@@ -30,6 +31,7 @@ pub struct Request {
     pub uri: String,
     cookie: HashMap<String, String>,
     scheme: HashMap<String, Vec<String>>,
+    fragment: String,
     params: HashMap<String, String>,
     header: HashMap<String, String>,
     body: Vec<String>,
@@ -42,6 +44,7 @@ impl Request {
             uri: String::new(),
             cookie: HashMap::new(),
             scheme: HashMap::new(),
+            fragment: String::new(),
             params: HashMap::new(),
             header: HashMap::new(),
             body: Vec::new(),
@@ -83,9 +86,16 @@ impl Request {
         }
     }
 
+    pub fn uri_fragment(&self) -> String {
+        self.fragment.clone()
+    }
+
     #[inline]
-    pub fn param(&self, key: &str) -> Option<&String> {
-        self.params.get(key)
+    pub fn param(&self, key: &str) -> Option<String> {
+        match self.params.get(key) {
+            Some(val) => Some(val.to_owned()),
+            _ => None,
+        }
     }
 
     #[inline]
@@ -524,7 +534,7 @@ impl ResponseManager for Response {
 
     fn serialize_header(&self, buffer: &mut BufWriter<&TcpStream>) {
         if let Err(e) = buffer.write(self.resp_header().as_bytes()) {
-            eprintln!("An error has taken place when writing the response header to the stream: {}", e);
+            debug::print(&format!("An error has taken place when writing the response header to the stream: {}", e), 3);
         }
     }
 
@@ -543,7 +553,9 @@ fn stream_response_body(response: &Response, buffer: &mut BufWriter<&TcpStream>)
     if !response.body.is_empty() {
         // the content length should have been set in the header, see function resp_header
         if let Err(e) = buffer.write(response.body.as_bytes()) {
-            eprintln!("An error has taken place when writing the response header to the stream: {}", e);
+            debug::print(
+                &format!("An error has taken place when writing the response header to the stream: {}", e),
+                1);
         }
     }
 
@@ -551,7 +563,9 @@ fn stream_response_body(response: &Response, buffer: &mut BufWriter<&TcpStream>)
         for received in rx {
             if !received.is_empty() {
                 if let Err(e) = buffer.write(received.as_bytes()) {
-                    eprintln!("An error has taken place when writing the response header to the stream: {}", e);
+                    debug::print(
+                        &format!("An error has taken place when writing the response header to the stream: {}", e),
+                        1);
                 }
             }
         }
@@ -572,13 +586,17 @@ fn write_default_page(status: u16, buffer: &mut BufWriter<&TcpStream>) {
         500 => {
             /* return default 500 page */
             if let Err(e) = buffer.write(FIVE_HUNDRED.as_bytes()) {
-                eprintln!("An error has taken place when writing the response body to the stream: {}", e);
+                debug::print(
+                    &format!("An error has taken place when writing the response body to the stream: {}", e),
+                    1);
             }
         },
         _ => {
             /* return default/override 404 page */
             if let Err(e) = buffer.write(FOUR_OH_FOUR.as_bytes()) {
-                eprintln!("An error has taken place when writing the response body to the stream: {}", e);
+                debug::print(
+                    &format!("An error has taken place when writing the response body to the stream: {}", e),
+                    1);
             }
         },
     }
@@ -586,13 +604,13 @@ fn write_default_page(status: u16, buffer: &mut BufWriter<&TcpStream>) {
 
 fn get_file_path(path: &str) -> Option<&Path> {
     if path.is_empty() {
-        eprintln!("Undefined file path to retrieve data from...");
+        debug::print("Undefined file path to retrieve data from...", 1);
         return None;
     }
 
     let file_path = Path::new(path);
     if !file_path.is_file() {
-        eprintln!("Can't locate requested file");
+        debug::print("Can't locate requested file", 1);
         return None;
     }
 
@@ -605,7 +623,7 @@ fn read_from_file(file_path: &Path, buf: &mut Box<String>) -> u16 {
         let mut buf_reader = BufReader::new(file);
         return match buf_reader.read_to_string(buf) {
             Err(e) => {
-                eprintln!("Unable to read file: {}", e);
+                debug::print(&format!("Unable to read file: {}", e), 1);
                 500
             },
             Ok(_) => {
@@ -614,7 +632,7 @@ fn read_from_file(file_path: &Path, buf: &mut Box<String>) -> u16 {
             },
         };
     } else {
-        eprintln!("Unable to open requested file for path");
+        debug::print("Unable to open requested file for path", 1);
         404
     }
 }
@@ -628,7 +646,7 @@ fn read_from_file_async(file_loc: String, tx: mpsc::Sender<Box<String>>) {
         }
 
         if let Err(e) = tx.send(buf) {
-            eprintln!("Unable to write the file to the stream: {}", e);
+            debug::print(&format!("Unable to write the file to the stream: {}", e), 1);
         }
     }
 }
@@ -774,7 +792,7 @@ fn write_header_cookie(cookie: Arc<HashMap<String, Cookie>>, tx: mpsc::Sender<St
     }
 
     tx.send(cookie_output).unwrap_or_else(|e| {
-        eprintln!("Unable to write response cookies: {}", e);
+        debug::print(&format!("Unable to write response cookies: {}", e), 1);
     });
 }
 

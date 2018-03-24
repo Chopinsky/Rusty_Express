@@ -33,8 +33,9 @@ use support::debug;
 use support::session::*;
 use support::{ThreadPool, shared_pool};
 
-//TODO: 1. handle errors with grace... use env::var("DEBUG") for debug logging
+//TODO: 1. handle errors with grace... use env::var("DEBUG") for debug logging... More updates with this...
 //TODO: 2. Impl middlewear
+//TODO: 3. support websocket!
 
 pub struct HttpServer {
     router: Route,

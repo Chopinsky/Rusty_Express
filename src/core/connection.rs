@@ -126,7 +126,9 @@ fn write_to_stream(stream: TcpStream, response: &Box<Response>) -> Option<u8> {
 
     // flush the buffer and shutdown the connection: we're done
     if let Err(e) = buffer.flush() { return write_to_stream_err(e); }
-    if let Err(e) = stream.shutdown(Shutdown::Both) { return write_to_stream_err(e); }
+    if let Err(e) = stream.shutdown(Shutdown::Both) {
+        return write_to_stream_err(e);
+    }
 
     // Otherwise we're good to leave.
     return Some(0);
@@ -158,7 +160,7 @@ fn parse_request(request: &str, store: &mut Box<Request>, router: Arc<Route>) ->
         return None;
     }
 
-    debug::print(&format!("\r\nPrint request: \r\n{}", request)[..], 2);
+    debug::print(&format!("\r\nPrint request: \r\n{}", request), 2);
 
     let mut lines = request.trim().lines();
     let base_line = match lines.nth(0) {
@@ -217,6 +219,7 @@ fn parse_request_base(line: &str, req: &mut Box<Request>, router: Arc<Route>)
 
     let mut header_only = false;
     let mut raw_scheme = String::new();
+    let mut raw_fragment = String::new();
 
     for (index, info) in line.split_whitespace().enumerate() {
         if index < 2 && info.is_empty() { return None; }
@@ -241,7 +244,7 @@ fn parse_request_base(line: &str, req: &mut Box<Request>, router: Arc<Route>)
 
                 req.method = base_method;
             },
-            1 => split_path(info, &mut req.uri, &mut raw_scheme),
+            1 => split_path(info, &mut req.uri, &mut raw_scheme, &mut raw_fragment),
             2 => req.write_header("http_version", info, true),
             _ => { break; },
         };
@@ -257,6 +260,10 @@ fn parse_request_base(line: &str, req: &mut Box<Request>, router: Arc<Route>)
         }, TaskType::Request);
 
         // now do more work on non-essential parsing
+        if !raw_fragment.is_empty() {
+
+        }
+
         if !raw_scheme.is_empty() {
             req.create_scheme(scheme_parser(raw_scheme));
         }
@@ -267,7 +274,7 @@ fn parse_request_base(line: &str, req: &mut Box<Request>, router: Arc<Route>)
     None
 }
 
-fn split_path(full_uri: &str, final_uri: &mut String, final_scheme: &mut String) {
+fn split_path(full_uri: &str, final_uri: &mut String, final_scheme: &mut String, final_frag: &mut String) {
     let uri = full_uri.trim();
     if uri.is_empty() {
         final_uri.push_str("/");
@@ -275,9 +282,21 @@ fn split_path(full_uri: &str, final_uri: &mut String, final_scheme: &mut String)
     }
 
     let mut uri_parts: Vec<&str> = uri.rsplitn(2, "/").collect();
+
+    // parse fragment out
+    if let Some(pos) = uri_parts[0].find("#") {
+        let (remains, frag) = uri_parts[0].split_at(pos);
+        uri_parts[0] = remains;
+
+        if !frag.is_empty() {
+            final_frag.push_str(frag);
+        }
+    }
+
+    // parse scheme out
     if let Some(pos) = uri_parts[0].find("?") {
-        let (last_uri_pc, scheme) = uri_parts[0].split_at(pos);
-        uri_parts[0] = last_uri_pc;
+        let (remains, scheme) = uri_parts[0].split_at(pos);
+        uri_parts[0] = remains;
 
         if uri_parts[1].is_empty() {
             final_uri.push_str(&format!("/{}", uri_parts[0])[..]);
