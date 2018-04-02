@@ -3,6 +3,7 @@
 use std::mem;
 use std::thread;
 use std::sync::{Arc, mpsc, Mutex, Once, ONCE_INIT};
+use support::debug;
 
 type Job = Box<FnBox + Send + 'static>;
 
@@ -38,7 +39,7 @@ impl ThreadPool {
 
         let mut workers = Vec::with_capacity(pool_size);
         for id in 0..pool_size {
-            workers.push(Worker::new((id), Arc::clone(&receiver)));
+            workers.push(Worker::new(id, Arc::clone(&receiver)));
         }
 
         ThreadPool {
@@ -50,14 +51,14 @@ impl ThreadPool {
     pub fn execute<F>(&self, f: F) where F: FnOnce() + Send + 'static {
         let job = Box::new(f);
         self.sender.send(Message::NewJob(job)).unwrap_or_else(|err| {
-            println!("Unable to distribute the job: {}", err);
+            debug::print(&format!("Unable to distribute the job: {}", err), 3);
         });
     }
 
     pub fn clear(&mut self) {
         for _ in &mut self.workers {
             self.sender.send(Message::Terminate).unwrap_or_else(|err| {
-                println!("Unable to send message: {}", err);
+                debug::print(&format!("Unable to send message: {}", err), 3);
             });
         }
 
@@ -71,8 +72,7 @@ impl ThreadPool {
 
 impl Drop for ThreadPool {
     fn drop(&mut self) {
-        println!("Job done, sending terminate message to all workers.");
-
+        debug::print("Job done, sending terminate message to all workers.", 3);
         self.clear();
     }
 }
