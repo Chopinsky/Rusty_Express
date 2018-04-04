@@ -15,7 +15,7 @@ use std::time::Duration;
 use chrono::prelude::*;
 use core::cookie::*;
 use core::router::REST;
-use core::config::{EngineContext, ServerConfig, ViewEngine, ViewEngineParser};
+use core::config::{EngineContext, PageGenerator, ServerConfig, ViewEngine, ViewEngineParser};
 use support::common::MapUpdates;
 use support::debug;
 use support::shared_pool;
@@ -489,7 +489,7 @@ impl ResponseWriter for Response {
 
 pub trait ResponseManager {
     fn header_only(&mut self, header_only: bool);
-    fn validate_and_update(&mut self, fallback: &HashMap<u16, String>);
+    fn validate_and_update(&mut self, fallback: &HashMap<u16, PageGenerator>);
     fn serialize_header(&self, buffer: &mut BufWriter<&TcpStream>);
     fn serialize_body(&self, buffer: &mut BufWriter<&TcpStream>);
 }
@@ -500,7 +500,7 @@ impl ResponseManager for Response {
         self.header_only = header_only;
     }
 
-    fn validate_and_update(&mut self, fallback: &HashMap<u16, String>) {
+    fn validate_and_update(&mut self, fallback: &HashMap<u16, PageGenerator>) {
         if self.body_tx.is_some() {
             // must drop the tx or we will hang indefinitely
             self.body_tx = None;
@@ -516,15 +516,17 @@ impl ResponseManager for Response {
         // if not setting the header only and not having a body, it's a failure
         match self.status {
             0 | 404 => {
-                if let Some(file_path) = fallback.get(&404) {
-                    read_from_file(Path::new(file_path), &mut self.body);
+                if let Some(page_generator) = fallback.get(&404) {
+                    //read_from_file(Path::new(file_path), &mut self.body);
+                    self.body = Box::new(page_generator());
                 } else {
                     self.body = Box::new(FOUR_OH_FOUR.to_owned());
                 }
             },
             _ => {
-                if let Some(file_path) = fallback.get(&500) {
-                    read_from_file(Path::new(file_path), &mut self.body);
+                if let Some(page_generator) = fallback.get(&500) {
+                    //read_from_file(Path::new(file_path), &mut self.body);
+                    self.body = Box::new(page_generator());
                 } else {
                     self.body = Box::new(FIVE_HUNDRED.to_owned());
                 }

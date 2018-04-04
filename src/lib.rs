@@ -10,7 +10,7 @@ mod support;
 
 pub mod prelude {
     pub use {HttpServer, ServerDef};
-    pub use core::config::{ServerConfig, ViewEngineDefinition, ViewEngine};
+    pub use core::config::{EngineContext, PageGenerator, ServerConfig, ViewEngineDefinition, ViewEngine};
     pub use core::cookie::*;
     pub use core::http::{Request, RequestWriter, Response, ResponseStates, ResponseWriter};
     pub use core::router::{REST, Route, Router, RequestPath};
@@ -33,9 +33,8 @@ use support::debug;
 use support::session::*;
 use support::{ThreadPool, shared_pool};
 
-//TODO: 1. handle errors with grace... use env::var("DEBUG") for debug logging... More updates with this...
+//TODO: 1. logger? or middlewear?
 //TODO: 2. Impl middlewear
-//TODO: 3. support websocket!
 
 pub struct HttpServer {
     router: Route,

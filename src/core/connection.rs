@@ -101,7 +101,7 @@ fn handle_response(stream: TcpStream, callback: Callback,
     }
 
     Route::handle_request(callback, request, response);
-    response.validate_and_update(&metadata.get_default_pages());
+    response.validate_and_update(&metadata.get_status_pages());
 
     write_to_stream(stream, &response)
 }
@@ -367,7 +367,7 @@ fn build_err_response(err: &ParseError, metadata: &Arc<ConnMetadata>) -> Box<Res
     };
 
     resp.status(status);
-    resp.validate_and_update(&metadata.get_default_pages());
+    resp.validate_and_update(&metadata.get_status_pages());
     resp.keep_alive(false);
 
     if resp.get_content_type().is_empty() {

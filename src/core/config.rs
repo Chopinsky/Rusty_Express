@@ -60,6 +60,14 @@ impl ServerConfig {
         self.session_auto_clean_period = std_to_chrono(auto_clean_period);
     }
 
+    pub fn set_status_page_generator(&mut self, status: u16, generator: PageGenerator) {
+        if status > 0 {
+            if let Some(generators) = Arc::get_mut(&mut self.meta_data.status_page_generators) {
+                generators.insert(status, generator);
+            }
+        }
+    }
+
     #[inline]
     pub fn reset_session_auto_clean(&mut self) {
         self.session_auto_clean_period = None;
@@ -112,10 +120,11 @@ impl ViewEngineParser for ServerConfig {
     }
 }
 
-//TODO: default pages should use a function call to get the results
+pub type PageGenerator = fn() -> String;
+
 pub struct ConnMetadata {
     header: Box<HashMap<String, String>>,
-    default_pages: Arc<Box<HashMap<u16, String>>>,
+    status_page_generators: Arc<Box<HashMap<u16, PageGenerator>>>,
     state_interaction: StatesInteraction,
 }
 
@@ -123,7 +132,7 @@ impl ConnMetadata {
     pub fn new() -> Self {
         ConnMetadata {
             header: Box::new(HashMap::new()),
-            default_pages: Arc::new(Box::new(HashMap::new())),
+            status_page_generators: Arc::new(Box::new(HashMap::new())),
             state_interaction: StatesInteraction::None,
         }
     }
@@ -134,8 +143,8 @@ impl ConnMetadata {
     }
 
     #[inline]
-    pub fn get_default_pages(&self) -> Arc<Box<HashMap<u16, String>>> {
-        Arc::clone(&self.default_pages)
+    pub fn get_status_pages(&self) -> Arc<Box<HashMap<u16, PageGenerator>>> {
+        Arc::clone(&self.status_page_generators)
     }
 
     #[inline]
@@ -153,7 +162,7 @@ impl Clone for ConnMetadata {
     fn clone(&self) -> Self {
         ConnMetadata {
             header: self.header.clone(),
-            default_pages: self.default_pages.clone(),
+            status_page_generators: self.status_page_generators.clone(),
             state_interaction: self.state_interaction.clone(),
         }
     }

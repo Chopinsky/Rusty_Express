@@ -1,17 +1,21 @@
 use std::env;
+use std::sync::{Once, ONCE_INIT};
 use chrono::prelude::{DateTime, Utc};
 
+static ONCE: Once = ONCE_INIT;
 static mut DEBUG_LEVEL: u8 = 0;
 
 pub fn initialize() {
-    if let Ok(debug_mode) = env::var("DEBUG_LEVEL") {
-        match &debug_mode[..] {
-            "1" => set_debug_level(1),
-            "2" => set_debug_level(2),
-            "3" => set_debug_level(3),
-            _ => set_debug_level(0),
+    ONCE.call_once(|| {
+        if let Ok(debug_mode) = env::var("DEBUG_LEVEL") {
+            match &debug_mode[..] {
+                "1" => set_debug_level(1),
+                "2" => set_debug_level(2),
+                "3" => set_debug_level(3),
+                _ => set_debug_level(0),
+            }
         }
-    }
+    });
 }
 
 pub fn print(info: &str, level: u8) {
@@ -21,8 +25,8 @@ pub fn print(info: &str, level: u8) {
 
     let now: DateTime<Utc> = Utc::now();
     match level {
-        0 => println!("{}: {}\r\n", now.format("%Y-%m-%d %H:%M:%S UTC").to_string(), info),
-        _ => eprintln!("{}: {}\r\n", now.format("%Y-%m-%d %H:%M:%S UTC").to_string(), info),
+        0 => println!("{}: {}\r\n", now.format("%Y-%m-%d %H:%M:%S GMT").to_string(), info),
+        _ => eprintln!("{}: {}\r\n", now.format("%Y-%m-%d %H:%M:%S GMT").to_string(), info),
     }
 }
 
