@@ -10,9 +10,11 @@
 [docsrs]: https://docs.rs/rusty_express
 
 ## What is this
-A simple http server library written in Rust and provide Express-alike APIs.
+A simple http server library written in Rust and provide Express-alike APIs. We consider
+version 0.3.0+ to be stable releases, but please do let us know if you've come across bugs
+that we should fix, or have met performance bottle necks that we shall try to improve.
 
-## Migrate from 0.2.x to 0.3.0 
+## Migrating from 0.2.x to 0.3.0 
 0.2.x versions are good experiments with this project. But we're growing fast with better
 features and more performance enhancement! That's why we need to start the 0.3.x versions
 with slight changes to the interface APIs. 

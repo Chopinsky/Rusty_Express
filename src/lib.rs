@@ -1,3 +1,22 @@
+//! Rusty Express is a simple server written in Rust and provide Express-alike APIs.
+//! This project aims to provide a http server solution which is easy to use, easy to
+//! scale, and is excellent on performance.
+//!
+//! # Examples
+//! extern crate rusty_express;
+//! use rusty_express::prelude::*;
+//!
+//! fn main() {
+//!    let mut server = HttpServer::new();
+//!     server.get(RequestPath::Explicit("/"), simple_response);
+//!    server.listen(8080);
+//! }
+//!
+//! pub fn simple_response(req: &Box<Request>, resp: &mut Box<Response>) {
+//!    resp.send(&format!("Hello world from rusty server from path: {}", req.uri));
+//!    resp.status(200);
+//! }
+
 #[macro_use]
 extern crate lazy_static;
 extern crate regex;

@@ -1,6 +1,6 @@
 [package]
 name = "rusty_express"
-description = "A simple server written in Rust and provide Express-alike APIs. Many things are changing and I'm working on completing more features. Please visit the project repository to submit issues or feature requests."
+description = "A simple server written in Rust and provide Express-alike APIs. Version 0.3.0 is a stable version, as many features have been implemented and ready to use. Please visit the project repository to submit issues or feature requests."
 readme = "README.md"
 documentation = "https://docs.rs/rusty_express/"
 repository = "https://github.com/Chopinsky/Rusty_Express.git"
