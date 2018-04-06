@@ -13,9 +13,9 @@ use std::sync::{Arc, mpsc};
 use std::time::Duration;
 
 use chrono::prelude::*;
-use core::cookie::*;
-use core::router::REST;
-use core::config::{EngineContext, PageGenerator, ServerConfig, ViewEngine, ViewEngineParser};
+use super::cookie::*;
+use super::router::REST;
+use super::config::{EngineContext, PageGenerator, ServerConfig, ViewEngine, ViewEngineParser};
 use support::common::MapUpdates;
 use support::debug;
 use support::shared_pool;
@@ -25,6 +25,8 @@ static FOUR_OH_FOUR: &'static str = include_str!("../default/404.html");
 static FIVE_HUNDRED: &'static str = include_str!("../default/500.html");
 static NEW_LINE: &'static str = "\r\n";
 static VERSION: &'static str = "0.2.9";
+
+//TODO: internal registered cache?
 
 pub struct Request {
     pub method: REST,

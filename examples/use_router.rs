@@ -3,20 +3,17 @@
 
 extern crate rusty_express;
 
-use std::sync::{Arc, RwLock};
-use std::thread;
 use rusty_express::prelude::*;
-
-//lazy_static! {
-//    static ref COUNT: RwLock<u64> = RwLock::new(0);
-//}
 
 fn main() {
     // define http server now
     let mut server = HttpServer::new();
 
     // working with the generic data model
-    let model = Model::new(100);
+    let model = Model::new();
+
+    // then delegate the model management to the ServerContext
+    ServerContext::set_context(Box::new(model));
 
     // Define router separately
     let mut router = Route::new();
@@ -24,33 +21,56 @@ fn main() {
     router.get(RequestPath::Explicit("/index"), Model::simple_index);
 
     server.def_router(router);
-    server.listen_and_manage(8080, Arc::new(RwLock::new(model)));
+    server.listen(8080);
 }
 
 struct Model {
-    count: i32
+    count: u32
 }
 
 impl Model {
-    pub fn new(d: i32) -> Self {
-        Model { count: d }
-    }
+    pub fn simple_response(req: &Box<Request>, resp: &mut Box<Response>) {
+        Model::work_with_context(req, resp);
 
-    pub fn simple_response(_req: &Box<Request>, resp: &mut Box<Response>) {
         resp.send("Hello world from rusty server!\n");
         resp.status(200);
     }
 
-    pub fn simple_index(_req: &Box<Request>, resp: &mut Box<Response>) {
+    pub fn simple_index(req: &Box<Request>, resp: &mut Box<Response>) {
+        Model::work_with_context(req, resp);
+
         resp.send("Hello world from the index page!\n");
+        // the status 200 is inferred
     }
 
-    fn get_count(&self) -> i32 {
+    #[inline]
+    pub fn new() -> Self {
+        Model { count: 0 }
+    }
+
+    #[inline]
+    pub fn new_with(d: u32) -> Self {
+        Model { count: d }
+    }
+
+    #[inline]
+    fn add_one(&mut self) { self.count += 1; }
+
+    #[inline]
+    fn get_count(&self) -> u32 {
         self.count
     }
 
-    fn set_count(&mut self, val: i32) {
-        self.count = val;
+    fn work_with_context(req: &Box<Request>, resp: &mut Box<Response>) {
+        if let Err(e) = ServerContext::update_context(req, resp) {
+            // Error handling...
+            eprintln!("Error on updating the server context: {}", e);
+        }
+
+        if let Err(e) = ServerContext::process_with_context(req, resp) {
+            // Error handling...
+            eprintln!("Error on updating the server context: {}", e);
+        }
     }
 }
 
@@ -62,29 +82,14 @@ impl Clone for Model {
     }
 }
 
-impl StatesProvider for Model {
-    fn interaction_stage(&self) -> StatesInteraction {
-        StatesInteraction::WithRequest
+impl ContextProvider for Model {
+    fn update(&mut self, req: &Box<Request>, resp: &mut Box<Response>) -> Result<(), &'static str> {
+        self.add_one();
+        Ok(())
     }
 
-    fn on_request(&self, _: &mut Box<Request>) -> RequireStateUpdates { true }
-
-    fn on_response(&self, _: &mut Box<Response>) -> RequireStateUpdates { false }
-
-    fn update(&mut self, req: &Box<Request>, resp: Option<&Box<Response>>) {
-        // Blocking way
-        let count = self.count;
-        self.set_count(count + 1);
-
-        if let None = resp {
-            println!("Visit counts: {}", self.get_count());
-        }
-
-        // Non-Blocking way
-        thread::spawn(move || {
-//            if let Ok(mut count) = COUNT.write() {
-//                *count = *count + 1;
-//            }
-        });
+    fn process(&self, _req: &Box<Request>, _resp: &mut Box<Response>) -> Result<(), &'static str> {
+        println!("Visit count: {}", self.count);
+        Ok(())
     }
 }

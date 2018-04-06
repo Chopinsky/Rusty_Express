@@ -1,3 +1,5 @@
+#![allow(deprecated)]
+
 //! Rusty Express is a simple server written in Rust and provide Express-alike APIs.
 //! This project aims to provide a http server solution which is easy to use, easy to
 //! scale, and is excellent on performance.
@@ -30,6 +32,8 @@ mod support;
 pub mod prelude {
     pub use {HttpServer, ServerDef};
     pub use core::config::{EngineContext, PageGenerator, ServerConfig, ViewEngineDefinition, ViewEngine};
+    pub use core::context::ContextProvider;
+    pub use core::context as ServerContext;
     pub use core::cookie::*;
     pub use core::http::{Request, RequestWriter, Response, ResponseStates, ResponseWriter};
     pub use core::router::{REST, Route, Router, RequestPath};
@@ -54,6 +58,7 @@ use support::{ThreadPool, shared_pool};
 
 //TODO: 1. logger? or middlewear?
 //TODO: 2. Impl middlewear
+//TODO: 3. remove States Management related features on 0.3.4
 
 pub struct HttpServer {
     router: Route,

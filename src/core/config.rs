@@ -1,5 +1,6 @@
 #![allow(unused_variables)]
 #![allow(dead_code)]
+#![allow(deprecated)]
 
 use std::collections::HashMap;
 use std::cmp;
@@ -8,7 +9,7 @@ use std::time::Duration;
 
 use chrono;
 use num_cpus;
-use core::states::StatesInteraction;
+use super::states::StatesInteraction;
 use support::common::*;
 
 lazy_static! {

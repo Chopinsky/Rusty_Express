@@ -1,4 +1,5 @@
 #![allow(unused_variables)]
+#![allow(deprecated)]
 
 use std::collections::HashMap;
 use std::io::prelude::*;
@@ -15,12 +16,15 @@ use support::debug;
 use support::TaskType;
 use support::shared_pool;
 
+// TODO: implement managed context --> Idea: Rx and Tx to update the context??
+
 #[derive(PartialEq, Eq, Clone, Copy)]
 enum ParseError {
     EmptyRequestErr,
     ReadStreamErr,
 }
 
+#[deprecated(since = "0.3.0", note = "This feature will be removed in 0.3.4")]
 pub fn handle_connection_with_states<T: Send + Sync + Clone + StatesProvider>(
         stream: TcpStream,
         router: Arc<Route>,
