@@ -84,10 +84,6 @@ impl HttpServer {
     }
 
     pub fn listen(&mut self, port: u16) {
-        self.listen_and_manage(port, Arc::new(RwLock::new(EmptyState {})));
-    }
-
-    pub fn listen_and_manage<T: Send + Sync + Clone + StatesProvider + 'static>(&mut self, port: u16, state: Arc<RwLock<T>>) {
         debug::initialize();
 
         let server_address = SocketAddr::from(([127, 0, 0, 1], port));
@@ -105,8 +101,13 @@ impl HttpServer {
             }
         }
 
-        start_with(&listener, &self.router, &self.config, &self.states, state);
+        start_with(&listener, &self.router, &self.config, &self.states);
         println!("Shutting down...");
+    }
+
+    #[deprecated(since = "0.3.0", note = "This feature will be removed in 0.3.3")]
+    pub fn listen_and_manage<T: Send + Sync + Clone + StatesProvider + 'static>(&mut self, port: u16, state: Arc<RwLock<T>>) {
+        self.listen(port);
     }
 
     pub fn try_to_terminate(&mut self) {
@@ -119,35 +120,20 @@ impl HttpServer {
     }
 }
 
-fn start_with<T: Send + Sync + Clone + StatesProvider + 'static>(
+fn start_with(
         listener: &TcpListener,
         router: &Route,
         config: &ServerConfig,
-        server_states: &ServerStates,
-        managed_states: Arc<RwLock<T>>) {
+        server_states: &ServerStates) {
 
     let workers_pool = ThreadPool::new(config.pool_size);
     shared_pool::initialize_with(vec![config.pool_size]);
 
     let read_timeout = Some(Duration::from_millis(config.read_timeout as u64));
     let write_timeout = Some(Duration::from_millis(config.write_timeout as u64));
-    let mut meta_data = config.get_meta_data();
-
-    let has_states_to_manage = match managed_states.read() {
-        Ok(state) => {
-            let stage = state.interaction_stage();
-            meta_data.set_state_interaction(stage);
-
-            match stage {
-                StatesInteraction::None => false,
-                _ => true
-            }
-        },
-        _ => false,
-    };
 
     let router = Arc::new(router.to_owned());
-    let meta_arc = Arc::new(meta_data);
+    let meta_arc = Arc::new(config.get_meta_data());
 
     for stream in listener.incoming() {
         if let Ok(s) = stream {
@@ -164,18 +150,10 @@ fn start_with<T: Send + Sync + Clone + StatesProvider + 'static>(
             let router_ptr = Arc::clone(&router);
             let meta_ptr = Arc::clone(&meta_arc);
 
-            if has_states_to_manage {
-                let states_ptr = Arc::clone(&managed_states);
-                workers_pool.execute(move || {
-                    set_timeout(&s, read_timeout, write_timeout);
-                    handle_connection_with_states(s, router_ptr, meta_ptr, states_ptr);
-                });
-            } else {
-                workers_pool.execute(move || {
-                    set_timeout(&s, read_timeout, write_timeout);
-                    handle_connection(s, router_ptr, meta_ptr);
-                });
-            }
+            workers_pool.execute(move || {
+                set_timeout(&s, read_timeout, write_timeout);
+                handle_connection(s, router_ptr, meta_ptr);
+            });
         }
     }
 

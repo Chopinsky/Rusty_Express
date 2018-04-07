@@ -7,7 +7,7 @@ use std::io::Error;
 use std::sync::mpsc;
 use std::time::Duration;
 
-use core::http::{Request, RequestWriter, Response, ResponseStates, ResponseWriter};
+use super::http::{Request, RequestWriter, Response, ResponseStates, ResponseWriter};
 use regex::Regex;
 use support::debug;
 use support::common::MapUpdates;

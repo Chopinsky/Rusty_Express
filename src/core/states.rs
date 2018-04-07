@@ -38,7 +38,7 @@ impl ServerStates {
 }
 
 #[derive(PartialEq, Eq, Clone, Copy)]
-#[deprecated(since = "0.3.0", note = "This feature will be removed in 0.3.4")]
+#[deprecated(since = "0.3.0", note = "This feature will be removed in 0.3.3")]
 pub enum StatesInteraction {
     WithRequest,
     WithResponse,
@@ -46,10 +46,10 @@ pub enum StatesInteraction {
     None,
 }
 
-#[deprecated(since = "0.3.0", note = "This feature will be removed in 0.3.4")]
+#[deprecated(since = "0.3.0", note = "This feature will be removed in 0.3.3")]
 pub type RequireStateUpdates = bool;
 
-#[deprecated(since = "0.3.0", note = "This feature will be removed in 0.3.4")]
+#[deprecated(since = "0.3.0", note = "This feature will be removed in 0.3.3")]
 pub trait StatesProvider {
     fn interaction_stage(&self) -> StatesInteraction;
     fn on_request(&self, req: &mut Box<Request>) -> RequireStateUpdates;
@@ -57,15 +57,15 @@ pub trait StatesProvider {
     fn update(&mut self, req: &Box<Request>, resp: Option<&Box<Response>>);
 }
 
-#[deprecated(since = "0.3.0", note = "This feature will be removed in 0.3.4")]
+#[deprecated(since = "0.3.0", note = "This feature will be removed in 0.3.3")]
 pub struct EmptyState {}
 
-#[deprecated(since = "0.3.0", note = "This feature will be removed in 0.3.4")]
+#[deprecated(since = "0.3.0", note = "This feature will be removed in 0.3.3")]
 impl Clone for EmptyState {
     fn clone(&self) -> Self { EmptyState {} }
 }
 
-#[deprecated(since = "0.3.0", note = "This feature will be removed in 0.3.4")]
+#[deprecated(since = "0.3.0", note = "This feature will be removed in 0.3.3")]
 impl StatesProvider for EmptyState {
     #[inline]
     fn interaction_stage(&self) -> StatesInteraction {

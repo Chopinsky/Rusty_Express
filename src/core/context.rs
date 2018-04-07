@@ -1,10 +1,10 @@
 #![allow(dead_code)]
 
-use std::sync::{Arc, RwLock};
+use std::sync::RwLock;
 use super::http::{Request, Response};
 
 lazy_static! {
-    static ref CONTEXT: Arc<RwLock<Box<ServerContextProvider>>> = Arc::new(RwLock::new(Box::new(EmptyContext {})));
+    static ref CONTEXT: RwLock<Box<ServerContextProvider>> = RwLock::new(Box::new(EmptyContext {}));
 }
 
 pub type ServerContextProvider = ContextProvider + Sync + Send + 'static;

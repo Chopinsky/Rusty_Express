@@ -13,7 +13,7 @@ use super::states::StatesInteraction;
 use support::common::*;
 
 lazy_static! {
-    static ref VIEW_ENGINES: Arc<RwLock<HashMap<String, Box<ViewEngine>>>> = Arc::new(RwLock::new(HashMap::new()));
+    static ref VIEW_ENGINES: RwLock<HashMap<String, Box<ViewEngine>>> = RwLock::new(HashMap::new());
 }
 
 pub struct ServerConfig {

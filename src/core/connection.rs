@@ -8,10 +8,10 @@ use std::net::{Shutdown, TcpStream};
 use std::sync::{Arc, RwLock, mpsc};
 use std::time::Duration;
 
-use core::config::ConnMetadata;
-use core::states::{StatesProvider, StatesInteraction};
-use core::http::{Request, RequestWriter, Response, ResponseManager, ResponseStates, ResponseWriter};
-use core::router::{Callback, REST, Route, RouteHandler};
+use super::config::ConnMetadata;
+use super::states::{StatesProvider, StatesInteraction};
+use super::http::{Request, RequestWriter, Response, ResponseManager, ResponseStates, ResponseWriter};
+use super::router::{Callback, REST, Route, RouteHandler};
 use support::debug;
 use support::TaskType;
 use support::shared_pool;
@@ -24,59 +24,59 @@ enum ParseError {
     ReadStreamErr,
 }
 
-#[deprecated(since = "0.3.0", note = "This feature will be removed in 0.3.4")]
-pub fn handle_connection_with_states<T: Send + Sync + Clone + StatesProvider>(
-        stream: TcpStream,
-        router: Arc<Route>,
-        metadata: Arc<ConnMetadata>,
-        states: Arc<RwLock<T>>) -> Option<u8> {
-
-    let mut request = Box::new(Request::new());
-    let handler = match handle_request(&stream, &mut request, router) {
-        Err(err) => {
-            debug::print("Error on parsing request", 3);
-            return write_to_stream(stream, &build_err_response(&err, &metadata));
-        },
-        Ok(cb) => cb,
-    };
-
-    match metadata.get_state_interaction() {
-        &StatesInteraction::WithRequest | &StatesInteraction::Both => {
-            let require_updates = match states.read() {
-                Ok(s) => s.on_request(&mut request),
-                _ => false,
-            };
-
-            if require_updates {
-                if let Ok(mut s) = states.write() {
-                    s.update(&request, None);
-                }
-            }
-        },
-        _ => { /* Nothing */ },
-    };
-
-    let mut response = initialize_response(&metadata);
-    let result = handle_response(stream, handler, &request, &mut response, &metadata);
-
-    match metadata.get_state_interaction() {
-        &StatesInteraction::WithRequest | &StatesInteraction::Both => {
-            let require_updates = match states.read() {
-                Ok(s) => s.on_response(&mut response),
-                _ => false,
-            };
-
-            if require_updates {
-                if let Ok(mut s) = states.write() {
-                    s.update(&request, Some(&response));
-                }
-            }
-        },
-        _ => { /* Nothing */ },
-    };
-
-    result
-}
+//TODO: still good for implementing middlewear
+//pub fn handle_connection_with_states<T: Send + Sync + Clone + StatesProvider>(
+//        stream: TcpStream,
+//        router: Arc<Route>,
+//        metadata: Arc<ConnMetadata>,
+//        states: Arc<RwLock<T>>) -> Option<u8> {
+//
+//    let mut request = Box::new(Request::new());
+//    let handler = match handle_request(&stream, &mut request, router) {
+//        Err(err) => {
+//            debug::print("Error on parsing request", 3);
+//            return write_to_stream(stream, &build_err_response(&err, &metadata));
+//        },
+//        Ok(cb) => cb,
+//    };
+//
+//    match metadata.get_state_interaction() {
+//        &StatesInteraction::WithRequest | &StatesInteraction::Both => {
+//            let require_updates = match states.read() {
+//                Ok(s) => s.on_request(&mut request),
+//                _ => false,
+//            };
+//
+//            if require_updates {
+//                if let Ok(mut s) = states.write() {
+//                    s.update(&request, None);
+//                }
+//            }
+//        },
+//        _ => { /* Nothing */ },
+//    };
+//
+//    let mut response = initialize_response(&metadata);
+//    let result = handle_response(stream, handler, &request, &mut response, &metadata);
+//
+//    match metadata.get_state_interaction() {
+//        &StatesInteraction::WithRequest | &StatesInteraction::Both => {
+//            let require_updates = match states.read() {
+//                Ok(s) => s.on_response(&mut response),
+//                _ => false,
+//            };
+//
+//            if require_updates {
+//                if let Ok(mut s) = states.write() {
+//                    s.update(&request, Some(&response));
+//                }
+//            }
+//        },
+//        _ => { /* Nothing */ },
+//    };
+//
+//    result
+//}
 
 pub fn handle_connection(
         stream: TcpStream,
