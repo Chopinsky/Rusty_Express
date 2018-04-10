@@ -2,6 +2,10 @@ use std::collections::HashMap;
 use std::time::Duration;
 use chrono;
 
+use super::debug;
+use std::io::{BufWriter, Write};
+use std::net::TcpStream;
+
 pub fn chrono_to_std(duration: chrono::Duration) -> Option<Duration> {
     Some(Duration::from_millis(duration.num_milliseconds() as u64))
 }
@@ -31,5 +35,13 @@ impl<T> MapUpdates<T> for HashMap<String, T> {
             self.entry(f).or_insert(value);
             None
         }
+    }
+}
+
+pub fn write_to_buff(buffer: &mut BufWriter<&TcpStream>, content: &[u8]) {
+    if let Err(e) = buffer.write(content) {
+        debug::print(
+            &format!("An error has taken place when writing the response header to the stream: {}", e),
+            1);
     }
 }

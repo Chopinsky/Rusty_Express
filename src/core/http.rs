@@ -8,7 +8,7 @@ use std::fs::File;
 use std::io::{BufReader, BufWriter};
 use std::io::prelude::*;
 use std::net::{TcpStream};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, mpsc};
 use std::time::Duration;
 
@@ -16,15 +16,12 @@ use chrono::prelude::*;
 use super::cookie::*;
 use super::router::REST;
 use super::config::{EngineContext, PageGenerator, ServerConfig, ViewEngine, ViewEngineParser};
-use support::common::MapUpdates;
-use support::debug;
-use support::shared_pool;
-use support::TaskType;
+use support::{common::MapUpdates, common::write_to_buff, debug, shared_pool, TaskType};
 
 static FOUR_OH_FOUR: &'static str = include_str!("../default/404.html");
 static FIVE_HUNDRED: &'static str = include_str!("../default/500.html");
-static NEW_LINE: &'static str = "\r\n";
 static VERSION: &'static str = "0.2.9";
+static TIMEOUT: Duration = Duration::from_millis(64);
 
 //TODO: internal registered cache?
 
@@ -229,7 +226,7 @@ impl Response {
         if let &Some(ref length) = &self.content_length {
             // explicit content length is set, use it here
             header.push_str(&format!("Content-Length: {}\r\n", length));
-        } else if self.body_rx.is_none() {
+        } else {
             // Only generate content length header attribute if not using async and no content-length set explicitly
             if self.is_header_only() || self.body.is_empty() {
                 header.push_str("Content-Length: 0\r\n");
@@ -247,8 +244,8 @@ impl Response {
             header.push_str(&format!("Connection: {}\r\n", connection));
         }
 
-        if let Some(rec) = receiver {
-            if let Ok(content) = rec.recv_timeout(Duration::from_millis(64)) {
+        if let Some(rx) = receiver {
+            if let Ok(content) = rx.recv_timeout(TIMEOUT) {
                 if !content.is_empty() {
                     header.push_str(&content);
                 }
@@ -256,8 +253,19 @@ impl Response {
         }
 
         // if header only, we're done, write the new line as the EOF
-        header.push_str(NEW_LINE);
         header
+    }
+
+    fn set_ext_mime_header(&mut self, path: &PathBuf) {
+        let mime_type =
+            if let Some(ext) = path.extension() {
+                let file_extension = ext.to_string_lossy();
+                default_mime_type_with_ext(&file_extension)
+            } else {
+                String::from("text/plain")
+            };
+
+        self.set_content_type(&mime_type);
     }
 }
 
@@ -397,17 +405,8 @@ impl ResponseWriter for Response {
 
         if let Some(file_path) = get_file_path(file_loc) {
             let status = read_from_file(&file_path, &mut self.body);
-
             if status == 200 && self.content_type.is_empty() {
-                let mime_type =
-                    if let Some(ext) = file_path.extension() {
-                        let file_extension = ext.to_string_lossy();
-                        default_mime_type_with_ext(&file_extension)
-                    } else {
-                        String::from("text/plain")
-                    };
-
-                self.set_content_type(&mime_type[..]);
+                self.set_ext_mime_header(&file_path);
             }
 
             return status;
@@ -427,13 +426,15 @@ impl ResponseWriter for Response {
             self.body_rx = Some(rx);
         }
 
-        if let &Some(ref tx) = &self.body_tx {
-            let tx_clone = mpsc::Sender::clone(tx);
-            let path = file_loc.to_owned();
+        if let Some(path) = get_file_path(&file_loc) {
+            self.set_ext_mime_header(&path);
 
-            shared_pool::run(move || {
-                read_from_file_async(path, tx_clone);
-            }, TaskType::Body);
+            if let &Some(ref tx) = &self.body_tx {
+                let tx_clone = mpsc::Sender::clone(tx);
+                shared_pool::run(move || {
+                    read_from_file_async(path, tx_clone);
+                }, TaskType::Response);
+            }
         }
     }
 
@@ -512,6 +513,15 @@ impl ResponseManager for Response {
             self.header_only(true);
         }
 
+        if !self.is_header_only() && self.body_rx.is_some() {
+            // try to receive the async bodies
+            if let Some(ref rx) = self.body_rx {
+                for received in rx {
+                    self.body.push_str(&received);
+                }
+            }
+        }
+
         // if contents have been provided, we're all good.
         if self.has_contents() { return; }
 
@@ -537,9 +547,7 @@ impl ResponseManager for Response {
     }
 
     fn serialize_header(&self, buffer: &mut BufWriter<&TcpStream>) {
-        if let Err(e) = buffer.write(self.resp_header().as_bytes()) {
-            debug::print(&format!("An error has taken place when writing the response header to the stream: {}", e), 3);
-        }
+        write_to_buff(buffer, self.resp_header().as_bytes());
     }
 
     fn serialize_body(&self, buffer: &mut BufWriter<&TcpStream>) {
@@ -556,23 +564,7 @@ impl ResponseManager for Response {
 fn stream_response_body(response: &Response, buffer: &mut BufWriter<&TcpStream>) {
     if !response.body.is_empty() {
         // the content length should have been set in the header, see function resp_header
-        if let Err(e) = buffer.write(response.body.as_bytes()) {
-            debug::print(
-                &format!("An error has taken place when writing the response header to the stream: {}", e),
-                1);
-        }
-    }
-
-    if let Some(ref rx) = response.body_rx {
-        for received in rx {
-            if !received.is_empty() {
-                if let Err(e) = buffer.write(received.as_bytes()) {
-                    debug::print(
-                        &format!("An error has taken place when writing the response header to the stream: {}", e),
-                        1);
-                }
-            }
-        }
+        write_to_buff(buffer, response.body.as_bytes());
     }
 }
 
@@ -589,24 +581,16 @@ fn write_default_page(status: u16, buffer: &mut BufWriter<&TcpStream>) {
     match status {
         500 => {
             /* return default 500 page */
-            if let Err(e) = buffer.write(FIVE_HUNDRED.as_bytes()) {
-                debug::print(
-                    &format!("An error has taken place when writing the response body to the stream: {}", e),
-                    1);
-            }
+            write_to_buff(buffer, FIVE_HUNDRED.as_bytes());
         },
         _ => {
             /* return default/override 404 page */
-            if let Err(e) = buffer.write(FOUR_OH_FOUR.as_bytes()) {
-                debug::print(
-                    &format!("An error has taken place when writing the response body to the stream: {}", e),
-                    1);
-            }
+            write_to_buff(buffer, FOUR_OH_FOUR.as_bytes());
         },
     }
 }
 
-fn get_file_path(path: &str) -> Option<&Path> {
+fn get_file_path(path: &str) -> Option<PathBuf> {
     if path.is_empty() {
         debug::print("Undefined file path to retrieve data from...", 1);
         return None;
@@ -618,10 +602,10 @@ fn get_file_path(path: &str) -> Option<&Path> {
         return None;
     }
 
-    Some(file_path)
+    Some(file_path.to_path_buf())
 }
 
-fn read_from_file(file_path: &Path, buf: &mut Box<String>) -> u16 {
+fn read_from_file(file_path: &PathBuf, buf: &mut Box<String>) -> u16 {
     // try open the file
     if let Ok(file) = File::open(file_path) {
         let mut buf_reader = BufReader::new(file);
@@ -641,17 +625,15 @@ fn read_from_file(file_path: &Path, buf: &mut Box<String>) -> u16 {
     }
 }
 
-fn read_from_file_async(file_loc: String, tx: mpsc::Sender<Box<String>>) {
-    if let Some(file_path) = get_file_path(&file_loc[..]) {
-        let mut buf: Box<String> = Box::new(String::new());
-        match read_from_file(file_path, &mut buf) {
-            404 | 500 if buf.len() > 0 => { buf.clear(); },
-            _ => { /* Nothing to do here */ },
-        }
+fn read_from_file_async(file_path: PathBuf, tx: mpsc::Sender<Box<String>>) {
+    let mut buf: Box<String> = Box::new(String::new());
+    match read_from_file(&file_path, &mut buf) {
+        404 | 500 if buf.len() > 0 => { buf.clear(); },
+        _ => { /* Nothing to do here */ },
+    }
 
-        if let Err(e) = tx.send(buf) {
-            debug::print(&format!("Unable to write the file to the stream: {}", e), 1);
-        }
+    if let Err(e) = tx.send(buf) {
+        debug::print(&format!("Unable to write the file to the stream: {}", e), 1);
     }
 }
 
@@ -799,4 +781,3 @@ fn write_header_cookie(cookie: Arc<HashMap<String, Cookie>>, tx: mpsc::Sender<St
         debug::print(&format!("Unable to write response cookies: {}", e), 1);
     });
 }
-

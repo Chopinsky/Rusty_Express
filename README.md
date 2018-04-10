@@ -23,6 +23,7 @@ features and more performance enhancement! That's why we need to start the 0.3.x
 with slight changes to the interface APIs. 
 
 Here're what to expect when updating from 0.2.x to 0.3.0:
+
 - The route handler function's signature has changed, now the request and response objects
 are boxed! So now your route handler should have something similar to this:
 ```rust
@@ -30,7 +31,10 @@ pub fn handler(req: &Box<Request>, resp: &mut Box<Response>) {
     /// work hard to generate the response here...
 }
 ```
-- 
+
+- The `StateProvider` trait is deprecated (and de-factor no-op in 0.3.0), and it will be removed in 
+the 0.3.3 release. Please switch to use the `ServerContext` features instead. You can find how to 
+use the `ServerContext` in this example: [Server with defined router](https://github.com/Chopinsky/Rusty_Express/blob/master/examples/use_router.rs)
   
 
 ## How to use

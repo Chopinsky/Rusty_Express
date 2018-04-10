@@ -1,22 +1,18 @@
 #![allow(unused_variables)]
-#![allow(deprecated)]
 
 use std::collections::HashMap;
 use std::io::prelude::*;
 use std::io::{BufWriter, Error};
 use std::net::{Shutdown, TcpStream};
-use std::sync::{Arc, RwLock, mpsc};
+use std::sync::{Arc, mpsc};
 use std::time::Duration;
 
 use super::config::ConnMetadata;
-use super::states::{StatesProvider, StatesInteraction};
 use super::http::{Request, RequestWriter, Response, ResponseManager, ResponseStates, ResponseWriter};
 use super::router::{Callback, REST, Route, RouteHandler};
-use support::debug;
-use support::TaskType;
-use support::shared_pool;
+use support::{common::write_to_buff, debug, shared_pool, TaskType};
 
-// TODO: implement managed context --> Idea: Rx and Tx to update the context??
+static HEADER_END: [u8; 2] = [13, 10];
 
 #[derive(PartialEq, Eq, Clone, Copy)]
 enum ParseError {
@@ -121,7 +117,10 @@ fn initialize_response(metadata: &Arc<ConnMetadata>) -> Box<Response> {
 fn write_to_stream(stream: TcpStream, response: &Box<Response>) -> Option<u8> {
     let mut buffer = BufWriter::new(&stream);
 
+    // Serialize the header to the stream
     response.serialize_header(&mut buffer);
+    // Blank line to indicate the end of the response header
+    write_to_buff(&mut buffer, &HEADER_END);
 
     if !response.is_header_only() {
         // else, write the body to the stream
@@ -238,7 +237,7 @@ fn parse_request_base(line: &str, req: &mut Box<Request>, router: Arc<Route>)
                     "OPTIONS" => REST::OPTIONS,
                     _ => {
                         let others = info.to_uppercase();
-                        if others.eq("header") {
+                        if others.eq("HEADER") {
                             header_only = true;
                         }
 
@@ -249,7 +248,7 @@ fn parse_request_base(line: &str, req: &mut Box<Request>, router: Arc<Route>)
                 req.method = base_method;
             },
             1 => split_path(info, &mut req.uri, &mut raw_scheme, &mut raw_fragment),
-            2 => req.write_header("http_version", info, true),
+            2 => req.write_header("HTTP_VERSION", info, true),
             _ => { break; },
         };
     }
@@ -260,7 +259,7 @@ fn parse_request_base(line: &str, req: &mut Box<Request>, router: Arc<Route>)
 
         let (tx, rx) = mpsc::channel();
         shared_pool::run(move || {
-            router.seek_handler(&req_method, &uri[..], header_only, tx);
+            router.seek_handler(&req_method, &uri, header_only, tx);
         }, TaskType::Request);
 
         // now do more work on non-essential parsing

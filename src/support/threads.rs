@@ -2,9 +2,11 @@
 
 use std::mem;
 use std::thread;
-use std::sync::{Arc, mpsc, Mutex, Once, ONCE_INIT};
+use std::time::Duration;
+use std::sync::{mpsc, Arc, Mutex, Once, ONCE_INIT};
 use support::debug;
 
+static TIMEOUT: Duration = Duration::from_millis(200);
 type Job = Box<FnBox + Send + 'static>;
 
 trait FnBox {
@@ -50,9 +52,11 @@ impl ThreadPool {
 
     pub fn execute<F>(&self, f: F) where F: FnOnce() + Send + 'static {
         let job = Box::new(f);
-        self.sender.send(Message::NewJob(job)).unwrap_or_else(|err| {
+
+        if let Err(err) = self.sender.send(Message::NewJob(job)) {
+            print!("Failed: {}", err);
             debug::print(&format!("Unable to distribute the job: {}", err), 3);
-        });
+        };
     }
 
     pub fn clear(&mut self) {
@@ -85,7 +89,22 @@ struct Worker {
 impl Worker {
     fn new(id: usize, receiver: Arc<Mutex<mpsc::Receiver<Message>>>) -> Worker {
         let thread = thread::spawn(move || {
-            Worker::launch(receiver);
+            let mut new_assignment = None;
+
+            loop {
+                if let Ok(rx) = receiver.lock() {
+                    if let Ok(message) = rx.recv() {
+                        new_assignment = Some(message);
+                    }
+                }
+
+                if let Some(message) = new_assignment.take() {
+                    match message {
+                        Message::NewJob(job) => job.call_box(),
+                        Message::Terminate => break,
+                    }
+                }
+            }
         });
 
         Worker {
@@ -93,41 +112,20 @@ impl Worker {
             thread: Some(thread),
         }
     }
-
-    fn launch(receiver: Arc<Mutex<mpsc::Receiver<Message>>>) {
-        let mut next_message: Option<Message> = None;
-
-        loop {
-            if let Ok(rx) = receiver.lock() {
-                if let Ok(message) = rx.recv() {
-                    next_message = Some(message);
-                }
-            }
-
-            if let Some(msg) = next_message.take() {
-                match msg {
-                    Message::NewJob(job) => job.call_box(),
-                    Message::Terminate => break,
-                }
-            }
-        }
-    }
 }
 
 struct Pool {
-    req_workers: Box<ThreadPool>,
-    resp_workers: Box<ThreadPool>,
-    body_workers: Box<ThreadPool>,
+    req_workers: Mutex<Box<ThreadPool>>,
+    resp_workers: Mutex<Box<ThreadPool>>,
 }
-
-static ONCE: Once = ONCE_INIT;
-static mut POOL: Option<Pool> = None;
 
 pub enum TaskType {
     Request,
     Response,
-    Body,
 }
+
+static ONCE: Once = ONCE_INIT;
+static mut POOL: Option<Pool> = None;
 
 pub fn initialize_with(sizes: Vec<usize>) {
     unsafe {
@@ -139,17 +137,16 @@ pub fn initialize_with(sizes: Vec<usize>) {
                 }
             }).collect();
 
-            let (req_size, resp_size, body_size) = match pool_sizes.len() {
-                1 => (pool_sizes[0], pool_sizes[0], pool_sizes[0]),
-                3 => (pool_sizes[0], pool_sizes[1], pool_sizes[2]),
-                _ => panic!("Requiring vec sizes of 3 for each, or 1 for all"),
+            let (req_size, resp_size) = match pool_sizes.len() {
+                1 => (pool_sizes[0], pool_sizes[0]),
+                2 => (pool_sizes[0], pool_sizes[1]),
+                _ => panic!("Requiring vec sizes of 2 for each, or 1 for all"),
             };
 
             // Make the pool
             let pool = Some(Pool {
-                req_workers: Box::new(ThreadPool::new(req_size)),
-                resp_workers: Box::new(ThreadPool::new(resp_size)),
-                body_workers: Box::new(ThreadPool::new(body_size)),
+                req_workers: Mutex::new(Box::new(ThreadPool::new(req_size))),
+                resp_workers: Mutex::new(Box::new(ThreadPool::new(2 * resp_size))),
             });
 
             // Put it in the heap so it can outlive this call
@@ -161,29 +158,42 @@ pub fn initialize_with(sizes: Vec<usize>) {
 pub fn run<F>(f: F, task: TaskType)
     where F: FnOnce() + Send + 'static {
 
+    //TODO: update thread_pool
+
     unsafe {
         if let Some(ref pool) = POOL {
             // if pool has been created
             match task {
-                TaskType::Request => pool.req_workers.execute(f),
-                TaskType::Response => pool.resp_workers.execute(f),
-                TaskType::Body => pool.body_workers.execute(f),
+                TaskType::Request => {
+                    if let Ok(workers) = pool.req_workers.lock() {
+                        workers.execute(f);
+                        return;
+                    }
+                },
+                TaskType::Response => {
+                    if let Ok(workers) = pool.resp_workers.lock() {
+                        workers.execute(f);
+                        return;
+                    }
+                },
             };
-        } else {
-            // otherwise, spawn to a new thread for the work;
-            thread::spawn(f);
         }
+
+        // otherwise, spawn to a new thread for the work;
+        thread::spawn(f);
     }
 }
 
 pub fn close() {
     unsafe {
-        if let Some(mut pool) = POOL.take() {
-            pool.req_workers.clear();
-            pool.resp_workers.clear();
-            pool.body_workers.clear();
+        if let Some(pool) = POOL.take() {
+            if let Ok(mut workers) = pool.req_workers.lock() {
+                workers.clear();
+            }
 
-            drop(pool);
+            if let Ok(mut workers) = pool.resp_workers.lock() {
+                workers.clear();
+            }
         }
     }
 }
