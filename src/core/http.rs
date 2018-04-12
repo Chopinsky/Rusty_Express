@@ -152,7 +152,6 @@ impl RequestWriter for Request {
 
 pub struct Response {
     status: u16,
-    keep_alive: bool,
     content_type: String,
     content_length: Option<String>,
     cookie: Arc<HashMap<String, Cookie>>,
@@ -168,7 +167,6 @@ impl Response {
     pub fn new() -> Self {
         Response {
             status: 0,
-            keep_alive: false,
             content_type: String::new(),
             content_length: None,
             cookie: Arc::new(HashMap::new()),
@@ -184,7 +182,6 @@ impl Response {
     pub fn new_with_default_header(default_header: HashMap<String, String>) -> Self {
         Response {
             status: 0,
-            keep_alive: false,
             content_type: String::new(),
             content_length: None,
             cookie: Arc::new(HashMap::new()),
@@ -236,12 +233,7 @@ impl Response {
         }
 
         if !self.header.contains_key("connection") {
-            let connection = match self.keep_alive {
-                true => "keep-alive",
-                _ => "close",
-            };
-
-            header.push_str(&format!("Connection: {}\r\n", connection));
+            header.push_str("Connection: close\r\n");
         }
 
         if let Some(rx) = receiver {
@@ -270,7 +262,6 @@ impl Response {
 }
 
 pub trait ResponseStates {
-    fn to_keep_alive(&self) -> bool;
     fn get_redirect_path(&self) -> String;
     fn get_header(&self, key: &str) -> Option<&String>;
     fn get_cookie(&self, key: &str) -> Option<&Cookie>;
@@ -281,11 +272,6 @@ pub trait ResponseStates {
 }
 
 impl ResponseStates for Response {
-    #[inline]
-    fn to_keep_alive(&self) -> bool {
-        self.keep_alive
-    }
-
     #[inline]
     fn get_redirect_path(&self) -> String {
         self.redirect.to_owned()
@@ -335,7 +321,6 @@ pub trait ResponseWriter {
     fn set_cookies(&mut self, cookie: &[Cookie]);
     fn clear_cookies(&mut self);
     fn set_content_type(&mut self, content_type: &str);
-    fn keep_alive(&mut self, to_keep: bool);
     fn redirect(&mut self, path: &str);
 }
 
@@ -356,7 +341,8 @@ impl ResponseWriter for Response {
     fn header(&mut self, field: &str, value: &str, replace: bool) {
         if field.is_empty() || value.is_empty() { return; }
 
-        match &field.to_lowercase()[..] {
+        let key = field.to_lowercase();
+        match &key {
             "content-type" => self.content_type = value.to_owned(),
             "content-length" => {
                 let val = value.parse::<u64>();
@@ -366,13 +352,8 @@ impl ResponseWriter for Response {
                     panic!("Content length must be a valid string from u64, but provided with: {}", value);
                 }
             },
-            "connection" => {
-                if value.to_lowercase().eq("keep-alive") {
-                    self.keep_alive = true;
-                }
-            },
             _ => {
-                self.header.add(field, value.to_owned(), replace);
+                self.header.add(key, value.to_owned(), replace);
             },
         };
     }
@@ -477,10 +458,6 @@ impl ResponseWriter for Response {
         if !content_type.is_empty() {
             self.content_type = content_type.to_owned();
         }
-    }
-
-    fn keep_alive(&mut self, to_keep: bool) {
-        self.keep_alive = to_keep;
     }
 
     /// Can only redirect to internal path, no outsource path, sorry for the hackers (FYI, you can
