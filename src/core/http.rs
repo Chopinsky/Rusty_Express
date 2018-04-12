@@ -152,6 +152,7 @@ impl RequestWriter for Request {
 
 pub struct Response {
     status: u16,
+    keep_alive: bool,
     content_type: String,
     content_length: Option<String>,
     cookie: Arc<HashMap<String, Cookie>>,
@@ -167,6 +168,7 @@ impl Response {
     pub fn new() -> Self {
         Response {
             status: 0,
+            keep_alive: false,
             content_type: String::new(),
             content_length: None,
             cookie: Arc::new(HashMap::new()),
@@ -182,6 +184,7 @@ impl Response {
     pub fn new_with_default_header(default_header: HashMap<String, String>) -> Self {
         Response {
             status: 0,
+            keep_alive: false,
             content_type: String::new(),
             content_length: None,
             cookie: Arc::new(HashMap::new()),
@@ -233,6 +236,13 @@ impl Response {
         }
 
         if !self.header.contains_key("connection") {
+//TODO: only allow keep_alive if in the request header
+//           let connection = match self.keep_alive {
+//               true => "keep-alive",
+//               _ => "close",
+//           };
+//           header.push_str(&format!("Connection: {}\r\n", connection));
+            
             header.push_str("Connection: close\r\n");
         }
 
@@ -262,6 +272,7 @@ impl Response {
 }
 
 pub trait ResponseStates {
+    fn to_keep_alive(&self) -> bool;
     fn get_redirect_path(&self) -> String;
     fn get_header(&self, key: &str) -> Option<&String>;
     fn get_cookie(&self, key: &str) -> Option<&Cookie>;
@@ -272,6 +283,12 @@ pub trait ResponseStates {
 }
 
 impl ResponseStates for Response {
+    #[inline]
+    fn to_keep_alive(&self) -> bool {
+        //TODO: check request header before allowing this? No?
+        self.keep_alive
+    }
+    
     #[inline]
     fn get_redirect_path(&self) -> String {
         self.redirect.to_owned()
@@ -320,6 +337,7 @@ pub trait ResponseWriter {
     fn set_cookie(&mut self, cookie: Cookie);
     fn set_cookies(&mut self, cookie: &[Cookie]);
     fn clear_cookies(&mut self);
+    fn keep_alive(&mut self, to_keep: bool);
     fn set_content_type(&mut self, content_type: &str);
     fn redirect(&mut self, path: &str);
 }
@@ -350,6 +368,11 @@ impl ResponseWriter for Response {
                     self.content_length = Some(value.to_owned());
                 } else {
                     panic!("Content length must be a valid string from u64, but provided with: {}", value);
+                }
+            },
+            "connection" => {
+                if value.eq("keep-alive") {
+                    self.keep_alive = true;
                 }
             },
             _ => {
@@ -454,6 +477,10 @@ impl ResponseWriter for Response {
         }
     }
 
+    fn keep_alive(&mut self, to_keep: bool) {
+        self.keep_alive = to_keep;
+    }
+    
     fn set_content_type(&mut self, content_type: &str) {
         if !content_type.is_empty() {
             self.content_type = content_type.to_owned();
