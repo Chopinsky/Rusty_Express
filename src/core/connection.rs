@@ -129,6 +129,8 @@ fn write_to_stream(stream: TcpStream, response: &Box<Response>) -> Option<u8> {
 
     // flush the buffer and shutdown the connection: we're done
     if let Err(e) = buffer.flush() { return write_to_stream_err(e); }
+    
+    //TODO: don't shut down just yet: act based on the request headers
     if let Err(e) = stream.shutdown(Shutdown::Both) {
         return write_to_stream_err(e);
     }
