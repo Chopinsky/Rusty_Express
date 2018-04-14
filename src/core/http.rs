@@ -217,7 +217,7 @@ impl Response {
             Box::new(write_header_status(self.status, self.has_contents()));
 
         // other header field-value pairs
-        write_headers(&self.header, &mut header);
+        write_headers(&self.header, &mut header, self.keep_alive);
 
         if !self.content_type.is_empty() {
             header.push_str(&format!("Content-Type: {}\r\n", self.content_type));
@@ -236,13 +236,13 @@ impl Response {
         }
 
         if !self.header.contains_key("connection") {
-//TODO: only allow keep_alive if in the request header
-//           let connection = match self.keep_alive {
-//               true => "keep-alive",
-//               _ => "close",
-//           };
-//           header.push_str(&format!("Connection: {}\r\n", connection));
-            
+            //TODO: only allow keep_alive if in the request header
+            //let connection = match self.keep_alive {
+            //   true => "keep-alive",
+            //   _ => "close",
+            //};
+            //header.push_str(&format!("Connection: {}\r\n", connection));
+
             header.push_str("Connection: close\r\n");
         }
 
@@ -360,7 +360,7 @@ impl ResponseWriter for Response {
         if field.is_empty() || value.is_empty() { return; }
 
         let key = field.to_lowercase();
-        match &key {
+        match &key[..] {
             "content-type" => self.content_type = value.to_owned(),
             "content-length" => {
                 let val = value.parse::<u64>();
@@ -376,7 +376,7 @@ impl ResponseWriter for Response {
                 }
             },
             _ => {
-                self.header.add(key, value.to_owned(), replace);
+                self.header.add(&key[..], value.to_owned(), replace);
             },
         };
     }
@@ -499,6 +499,7 @@ pub trait ResponseManager {
     fn validate_and_update(&mut self, fallback: &HashMap<u16, PageGenerator>);
     fn serialize_header(&self, buffer: &mut BufWriter<&TcpStream>);
     fn serialize_body(&self, buffer: &mut BufWriter<&TcpStream>);
+    fn serialize_trunked_body(&self, buffer: &mut BufWriter<&TcpStream>);
 }
 
 impl ResponseManager for Response {
@@ -562,6 +563,10 @@ impl ResponseManager for Response {
             // this shouldn't happen, as we should have captured this in the check_and_update call
             stream_default_body(self.status, buffer);
         }
+    }
+
+    fn serialize_trunked_body(&self, buffer: &mut BufWriter<&TcpStream>) {
+        //TODO
     }
 }
 
@@ -760,7 +765,7 @@ fn write_header_status(status: u16, has_contents: bool) -> String {
     }
 }
 
-fn write_headers(header: &HashMap<String, String>, final_header: &mut Box<String>) {
+fn write_headers(header: &HashMap<String, String>, final_header: &mut Box<String>, keep_alive: bool) {
     final_header.push_str(&format!("Server: Rusty-Express/{}\r\n", VERSION));
 
     if !header.contains_key("date") {
@@ -768,8 +773,13 @@ fn write_headers(header: &HashMap<String, String>, final_header: &mut Box<String
         final_header.push_str(&format!("Date: {}\r\n", dt.format("%a, %e %b %Y %T GMT").to_string()));
     }
 
+    let transfer = String::from("transfer-encoding");
     for (field, value) in header.iter() {
-        final_header.push_str(&format!("{}: {}\r\n", field, value));
+        if keep_alive && field.eq(&transfer) && !value.contains("chunked") {
+            final_header.push_str(&format!("{}: {}, chunked\r\n", field, value));
+        } else {
+            final_header.push_str(&format!("{}: {}\r\n", field, value));
+        }
     }
 }
 

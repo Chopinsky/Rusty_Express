@@ -1,4 +1,5 @@
 #![allow(unused_variables)]
+#![allow(unused_imports)]
 
 use std::collections::HashMap;
 use std::io::prelude::*;
@@ -104,6 +105,8 @@ fn handle_response(stream: TcpStream, callback: Callback,
     response.validate_and_update(&metadata.get_status_pages());
 
     write_to_stream(stream, &response)
+
+    //TODO: if keep-alive, loop with read -> write
 }
 
 fn initialize_response(metadata: &Arc<ConnMetadata>) -> Box<Response> {
@@ -122,18 +125,26 @@ fn write_to_stream(stream: TcpStream, response: &Box<Response>) -> Option<u8> {
     // Blank line to indicate the end of the response header
     write_to_buff(&mut buffer, &HEADER_END);
 
-    if !response.is_header_only() {
-        // else, write the body to the stream
-        response.serialize_body(&mut buffer);
+    // If header only, we're done
+    if response.is_header_only() {
+        if let Err(e) = buffer.flush() { return write_to_stream_err(e); }
+        return Some(0);
     }
 
-    // flush the buffer and shutdown the connection: we're done
-    if let Err(e) = buffer.flush() { return write_to_stream_err(e); }
+    if !response.to_keep_alive() {
+        // else, write the body to the stream
+        response.serialize_body(&mut buffer);
+
+        // flush the buffer and shutdown the connection: we're done
+        if let Err(e) = buffer.flush() { return write_to_stream_err(e); }
+    } else {
+        //TODO: keep alive, stream trunked body instead: with read timeout
+    }
     
     //TODO: don't shut down just yet: act based on the request headers
-    if let Err(e) = stream.shutdown(Shutdown::Both) {
-        return write_to_stream_err(e);
-    }
+    //if let Err(e) = stream.shutdown(Shutdown::Both) {
+    //    return write_to_stream_err(e);
+    //}
 
     // Otherwise we're good to leave.
     return Some(0);
