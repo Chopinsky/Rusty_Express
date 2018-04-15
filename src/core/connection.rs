@@ -97,6 +97,11 @@ fn handle_response(stream: TcpStream, callback: Callback,
                    request: &Box<Request>, response: &mut Box<Response>,
                    metadata: &Arc<ConnMetadata>) -> Option<u8> {
 
+    match request.header("connection") {
+        Some(ref val) if val.to_lowercase().eq("close") => response.can_keep_alive(false),
+        _ => response.can_keep_alive(true),
+    };
+
     if request.method.eq(&REST::OTHER(String::from("HEAD"))) {
         response.header_only(true);
     }
@@ -140,11 +145,6 @@ fn write_to_stream(stream: TcpStream, response: &Box<Response>) -> Option<u8> {
     } else {
         //TODO: keep alive, stream trunked body instead: with read timeout
     }
-    
-    //TODO: don't shut down just yet: act based on the request headers
-    //if let Err(e) = stream.shutdown(Shutdown::Both) {
-    //    return write_to_stream_err(e);
-    //}
 
     // Otherwise we're good to leave.
     return Some(0);

@@ -20,7 +20,7 @@ use support::{common::MapUpdates, common::write_to_buff, debug, shared_pool, Tas
 
 static FOUR_OH_FOUR: &'static str = include_str!("../default/404.html");
 static FIVE_HUNDRED: &'static str = include_str!("../default/500.html");
-static VERSION: &'static str = "0.2.9";
+static VERSION: &'static str = "0.3.0";
 static TIMEOUT: Duration = Duration::from_millis(64);
 
 //TODO: internal registered cache?
@@ -152,6 +152,7 @@ impl RequestWriter for Request {
 
 pub struct Response {
     status: u16,
+    can_keep_alive: bool,
     keep_alive: bool,
     content_type: String,
     content_length: Option<String>,
@@ -168,6 +169,7 @@ impl Response {
     pub fn new() -> Self {
         Response {
             status: 0,
+            can_keep_alive: true,
             keep_alive: false,
             content_type: String::new(),
             content_length: None,
@@ -184,6 +186,7 @@ impl Response {
     pub fn new_with_default_header(default_header: HashMap<String, String>) -> Self {
         Response {
             status: 0,
+            can_keep_alive: true,
             keep_alive: false,
             content_type: String::new(),
             content_length: None,
@@ -217,7 +220,7 @@ impl Response {
             Box::new(write_header_status(self.status, self.has_contents()));
 
         // other header field-value pairs
-        write_headers(&self.header, &mut header, self.keep_alive);
+        write_headers(&self.header, &mut header, self.keep_alive && self.can_keep_alive);
 
         if !self.content_type.is_empty() {
             header.push_str(&format!("Content-Type: {}\r\n", self.content_type));
@@ -236,14 +239,12 @@ impl Response {
         }
 
         if !self.header.contains_key("connection") {
-            //TODO: only allow keep_alive if in the request header
-            //let connection = match self.keep_alive {
-            //   true => "keep-alive",
-            //   _ => "close",
-            //};
-            //header.push_str(&format!("Connection: {}\r\n", connection));
+            let connection = match self.keep_alive {
+               true if self.can_keep_alive => "keep-alive",
+               _ => "close",
+            };
 
-            header.push_str("Connection: close\r\n");
+            header.push_str(&format!("Connection: {}\r\n", connection));
         }
 
         if let Some(rx) = receiver {
@@ -285,7 +286,6 @@ pub trait ResponseStates {
 impl ResponseStates for Response {
     #[inline]
     fn to_keep_alive(&self) -> bool {
-        //TODO: check request header before allowing this? No?
         self.keep_alive
     }
     
@@ -337,6 +337,7 @@ pub trait ResponseWriter {
     fn set_cookie(&mut self, cookie: Cookie);
     fn set_cookies(&mut self, cookie: &[Cookie]);
     fn clear_cookies(&mut self);
+    fn can_keep_alive(&mut self, can_keep_alive: bool);
     fn keep_alive(&mut self, to_keep: bool);
     fn set_content_type(&mut self, content_type: &str);
     fn redirect(&mut self, path: &str);
@@ -371,8 +372,10 @@ impl ResponseWriter for Response {
                 }
             },
             "connection" => {
-                if value.eq("keep-alive") {
+                if value.to_lowercase().eq("keep-alive") && self.can_keep_alive {
                     self.keep_alive = true;
+                } else {
+                    self.keep_alive = false;
                 }
             },
             _ => {
@@ -477,8 +480,17 @@ impl ResponseWriter for Response {
         }
     }
 
+    #[inline]
+    fn can_keep_alive(&mut self, can_keep_alive: bool) {
+        self.can_keep_alive = can_keep_alive;
+    }
+
     fn keep_alive(&mut self, to_keep: bool) {
-        self.keep_alive = to_keep;
+        if self.can_keep_alive && to_keep {
+            self.keep_alive = true;
+        } else {
+            self.keep_alive = false;
+        }
     }
     
     fn set_content_type(&mut self, content_type: &str) {
