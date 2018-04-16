@@ -23,6 +23,8 @@ static FIVE_HUNDRED: &'static str = include_str!("../default/500.html");
 static VERSION: &'static str = "0.3.0";
 static TIMEOUT: Duration = Duration::from_millis(64);
 
+pub type Subscriber = fn(String, &Box<Request>, &Box<Response>);
+
 //TODO: internal registered cache?
 
 pub struct Request {
@@ -163,6 +165,8 @@ pub struct Response {
     body_tx: Option<mpsc::Sender<Box<String>>>,
     body_rx: Option<mpsc::Receiver<Box<String>>>,
     redirect: String,
+    notifier: Option<(Arc<mpsc::Sender<String>>, mpsc::Receiver<String>)>,
+    subscriber: Option<(mpsc::Sender<String>, Arc<mpsc::Receiver<String>>)>,
 }
 
 impl Response {
@@ -180,24 +184,15 @@ impl Response {
             body_tx: None,
             body_rx: None,
             redirect: String::new(),
+            notifier: None,
+            subscriber: None,
         }
     }
 
     pub fn new_with_default_header(default_header: HashMap<String, String>) -> Self {
-        Response {
-            status: 0,
-            can_keep_alive: true,
-            keep_alive: false,
-            content_type: String::new(),
-            content_length: None,
-            cookie: Arc::new(HashMap::new()),
-            header: default_header,
-            header_only: false,
-            body: Box::new(String::new()),
-            body_tx: None,
-            body_rx: None,
-            redirect: String::new(),
-        }
+        let mut response = Response::new();
+        response.header = default_header;
+        response
     }
 
     fn resp_header(&self) -> Box<String> {
@@ -281,6 +276,7 @@ pub trait ResponseStates {
     fn status_is_set(&self) -> bool;
     fn has_contents(&self) -> bool;
     fn is_header_only(&self) -> bool;
+    fn get_channels(&mut self) -> Result<(Arc<mpsc::Sender<String>>, Arc<mpsc::Receiver<String>>), &'static str>;
 }
 
 impl ResponseStates for Response {
@@ -324,6 +320,30 @@ impl ResponseStates for Response {
     #[inline]
     fn is_header_only(&self) -> bool {
         self.header_only
+    }
+
+    /// get_channels will create the channels for communicating between the chunk generator threads and
+    /// the main stream. Listen to the receiver for any client communications, and use the sender to
+    /// send any ensuing responses.
+    fn get_channels(&mut self) -> Result<(Arc<mpsc::Sender<String>>, Arc<mpsc::Receiver<String>>), &'static str> {
+        if self.notifier.is_none() {
+            let (tx, rx): (mpsc::Sender<String>, mpsc::Receiver<String>) = mpsc::channel();
+            self.notifier = Some((Arc::new(tx), rx));
+        }
+
+        if self.subscriber.is_none() {
+            let (tx, rx): (mpsc::Sender<String>, mpsc::Receiver<String>) = mpsc::channel();
+            self.subscriber = Some((tx, Arc::new(rx)));
+        }
+
+        if let Some(ref n) = self.notifier {
+            if let Some(ref s) = self.subscriber {
+                return Ok((Arc::clone(&n.0), Arc::clone(&s.1)));
+            }
+        }
+
+        debug::print("Unable to create channels", 1);
+        Err("Unable to create channels")
     }
 }
 

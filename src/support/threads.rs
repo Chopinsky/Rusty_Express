@@ -26,7 +26,7 @@ enum Message {
 
 pub struct ThreadPool {
     workers: Vec<Worker>,
-    sender: mpsc::Sender<Message>,
+    sender: Mutex<mpsc::Sender<Message>>,
 }
 
 impl ThreadPool {
@@ -46,24 +46,28 @@ impl ThreadPool {
 
         ThreadPool {
             workers,
-            sender,
+            sender: Mutex::new(sender),
         }
     }
 
     pub fn execute<F>(&self, f: F) where F: FnOnce() + Send + 'static {
         let job = Box::new(f);
 
-        if let Err(err) = self.sender.send(Message::NewJob(job)) {
-            print!("Failed: {}", err);
-            debug::print(&format!("Unable to distribute the job: {}", err), 3);
-        };
+        if let Ok(sender) = self.sender.lock() {
+            if let Err(err) = sender.send(Message::NewJob(job)) {
+                print!("Failed: {}", err);
+                debug::print(&format!("Unable to distribute the job: {}", err), 3);
+            };
+        }
     }
 
     pub fn clear(&mut self) {
-        for _ in &mut self.workers {
-            self.sender.send(Message::Terminate).unwrap_or_else(|err| {
-                debug::print(&format!("Unable to send message: {}", err), 3);
-            });
+        if let Ok(sender) = self.sender.lock() {
+            for _ in &mut self.workers {
+                sender.send(Message::Terminate).unwrap_or_else(|err| {
+                    debug::print(&format!("Unable to send message: {}", err), 3);
+                });
+            }
         }
 
         for worker in &mut self.workers {
@@ -115,8 +119,8 @@ impl Worker {
 }
 
 struct Pool {
-    req_workers: Mutex<Box<ThreadPool>>,
-    resp_workers: Mutex<Box<ThreadPool>>,
+    req_workers: Box<ThreadPool>,
+    resp_workers: Box<ThreadPool>,
 }
 
 pub enum TaskType {
@@ -145,8 +149,8 @@ pub fn initialize_with(sizes: Vec<usize>) {
 
             // Make the pool
             let pool = Some(Pool {
-                req_workers: Mutex::new(Box::new(ThreadPool::new(req_size))),
-                resp_workers: Mutex::new(Box::new(ThreadPool::new(2 * resp_size))),
+                req_workers: Box::new(ThreadPool::new(req_size)),
+                resp_workers: Box::new(ThreadPool::new(2 * resp_size)),
             });
 
             // Put it in the heap so it can outlive this call
@@ -157,24 +161,17 @@ pub fn initialize_with(sizes: Vec<usize>) {
 
 pub fn run<F>(f: F, task: TaskType)
     where F: FnOnce() + Send + 'static {
-
-    //TODO: update thread_pool
-
     unsafe {
         if let Some(ref pool) = POOL {
             // if pool has been created
             match task {
                 TaskType::Request => {
-                    if let Ok(workers) = pool.req_workers.lock() {
-                        workers.execute(f);
-                        return;
-                    }
+                    pool.req_workers.execute(f);
+                    return;
                 },
                 TaskType::Response => {
-                    if let Ok(workers) = pool.resp_workers.lock() {
-                        workers.execute(f);
-                        return;
-                    }
+                    pool.resp_workers.execute(f);
+                    return;
                 },
             };
         }
@@ -186,14 +183,9 @@ pub fn run<F>(f: F, task: TaskType)
 
 pub fn close() {
     unsafe {
-        if let Some(pool) = POOL.take() {
-            if let Ok(mut workers) = pool.req_workers.lock() {
-                workers.clear();
-            }
-
-            if let Ok(mut workers) = pool.resp_workers.lock() {
-                workers.clear();
-            }
+        if let Some(mut pool) = POOL.take() {
+            pool.req_workers.clear();
+            pool.resp_workers.clear();
         }
     }
 }
