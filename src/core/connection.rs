@@ -3,15 +3,16 @@
 
 use std::collections::HashMap;
 use std::io::prelude::*;
-use std::io::{BufWriter, Error};
+use std::io::{BufReader, BufWriter, Error};
 use std::net::{Shutdown, TcpStream};
 use std::sync::{Arc, mpsc};
 use std::time::Duration;
+use std::thread;
 
 use super::config::ConnMetadata;
 use super::http::{Request, RequestWriter, Response, ResponseManager, ResponseStates, ResponseWriter};
 use super::router::{Callback, REST, Route, RouteHandler};
-use support::{common::write_to_buff, debug, shared_pool, TaskType};
+use support::{common::write_to_buff, common::flush_buffer, debug, shared_pool, TaskType};
 
 static HEADER_END: [u8; 2] = [13, 10];
 
@@ -84,7 +85,7 @@ pub fn handle_connection(
     let handler = match handle_request(&stream, &mut request, router) {
         Err(err) => {
             debug::print("Error on parsing request", 3);
-            return write_to_stream(stream, &build_err_response(&err, &metadata));
+            return write_to_stream(&stream, &build_err_response(&err, &metadata));
         },
         Ok(cb) => cb,
     };
@@ -109,9 +110,7 @@ fn handle_response(stream: TcpStream, callback: Callback,
     Route::handle_request(callback, request, response);
     response.validate_and_update(&metadata.get_status_pages());
 
-    write_to_stream(stream, &response)
-
-    //TODO: if keep-alive, loop with read -> write
+    write_to_stream(&stream, &response)
 }
 
 fn initialize_response(metadata: &Arc<ConnMetadata>) -> Box<Response> {
@@ -122,38 +121,40 @@ fn initialize_response(metadata: &Arc<ConnMetadata>) -> Box<Response> {
     }
 }
 
-fn write_to_stream(stream: TcpStream, response: &Box<Response>) -> Option<u8> {
-    let mut buffer = BufWriter::new(&stream);
+fn write_to_stream(stream: &TcpStream, response: &Box<Response>) -> Option<u8> {
+    let mut writer = BufWriter::new(stream);
 
     // Serialize the header to the stream
-    response.serialize_header(&mut buffer);
+    response.serialize_header(&mut writer);
+
     // Blank line to indicate the end of the response header
-    write_to_buff(&mut buffer, &HEADER_END);
+    write_to_buff(&mut writer, &HEADER_END);
 
     // If header only, we're done
     if response.is_header_only() {
-        if let Err(e) = buffer.flush() { return write_to_stream_err(e); }
-        return Some(0);
+        return flush_buffer(&mut writer);
     }
 
     if !response.to_keep_alive() {
         // else, write the body to the stream
-        response.serialize_body(&mut buffer);
+        response.serialize_body(&mut writer);
 
         // flush the buffer and shutdown the connection: we're done
-        if let Err(e) = buffer.flush() { return write_to_stream_err(e); }
-    } else {
-        //TODO: keep alive, stream trunked body instead: with read timeout
+        return flush_buffer(&mut writer);
+    }
+
+    if let Ok(clone) = stream.try_clone() {
+        response.serialize_trunked_body(clone, &mut writer);
     }
 
     // Otherwise we're good to leave.
-    return Some(0);
+    Some(0)
 }
 
 fn handle_request(mut stream: &TcpStream, request: &mut Box<Request>, router: Arc<Route>) -> Result<Callback, ParseError> {
     let mut buffer = [0; 1024];
 
-    if let Err(e) = stream.read(&mut buffer){
+    if let Err(e) = stream.read(&mut buffer) {
         debug::print(&format!("Reading stream error -- {}", e), 3);
         Err(ParseError::ReadStreamErr)
     } else {
@@ -391,12 +392,4 @@ fn build_err_response(err: &ParseError, metadata: &Arc<ConnMetadata>) -> Box<Res
     }
 
     resp
-}
-
-fn write_to_stream_err(err: Error) -> Option<u8> {
-    debug::print(
-        &format!("An error has taken place when flushing the response to the stream: {}", err)[..],
-        1);
-
-    Some(1)
 }

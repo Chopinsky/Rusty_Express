@@ -36,7 +36,7 @@ pub mod prelude {
     pub use core::context::ContextProvider;
     pub use core::context as ServerContext;
     pub use core::cookie::*;
-    pub use core::http::{Subscriber, Request, RequestWriter, Response, ResponseStates, ResponseWriter};
+    pub use core::http::{Request, RequestWriter, Response, ResponseStates, ResponseWriter};
     pub use core::router::{REST, Route, Router, RequestPath};
 
     #[cfg(feature = "session")]

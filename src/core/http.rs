@@ -11,19 +11,18 @@ use std::net::{TcpStream};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, mpsc};
 use std::time::Duration;
+use std::thread;
 
 use chrono::prelude::*;
 use super::cookie::*;
 use super::router::REST;
 use super::config::{EngineContext, PageGenerator, ServerConfig, ViewEngine, ViewEngineParser};
-use support::{common::MapUpdates, common::write_to_buff, debug, shared_pool, TaskType};
+use support::{common::MapUpdates, common::write_to_buff, common::flush_buffer, debug, shared_pool, TaskType};
 
 static FOUR_OH_FOUR: &'static str = include_str!("../default/404.html");
 static FIVE_HUNDRED: &'static str = include_str!("../default/500.html");
 static VERSION: &'static str = "0.3.0";
 static TIMEOUT: Duration = Duration::from_millis(64);
-
-pub type Subscriber = fn(String, &Box<Request>, &Box<Response>);
 
 //TODO: internal registered cache?
 
@@ -165,8 +164,8 @@ pub struct Response {
     body_tx: Option<mpsc::Sender<Box<String>>>,
     body_rx: Option<mpsc::Receiver<Box<String>>>,
     redirect: String,
-    notifier: Option<(Arc<mpsc::Sender<String>>, mpsc::Receiver<String>)>,
-    subscriber: Option<(mpsc::Sender<String>, Arc<mpsc::Receiver<String>>)>,
+    notifier: Option<(Arc<mpsc::Sender<Box<String>>>, mpsc::Receiver<Box<String>>)>,
+    subscriber: Option<(mpsc::Sender<Box<String>>, Arc<mpsc::Receiver<Box<String>>>)>,
 }
 
 impl Response {
@@ -276,7 +275,7 @@ pub trait ResponseStates {
     fn status_is_set(&self) -> bool;
     fn has_contents(&self) -> bool;
     fn is_header_only(&self) -> bool;
-    fn get_channels(&mut self) -> Result<(Arc<mpsc::Sender<String>>, Arc<mpsc::Receiver<String>>), &'static str>;
+    fn get_channels(&mut self) -> Result<(Arc<mpsc::Sender<Box<String>>>, Arc<mpsc::Receiver<Box<String>>>), &'static str>;
 }
 
 impl ResponseStates for Response {
@@ -325,14 +324,14 @@ impl ResponseStates for Response {
     /// get_channels will create the channels for communicating between the chunk generator threads and
     /// the main stream. Listen to the receiver for any client communications, and use the sender to
     /// send any ensuing responses.
-    fn get_channels(&mut self) -> Result<(Arc<mpsc::Sender<String>>, Arc<mpsc::Receiver<String>>), &'static str> {
+    fn get_channels(&mut self) -> Result<(Arc<mpsc::Sender<Box<String>>>, Arc<mpsc::Receiver<Box<String>>>), &'static str> {
         if self.notifier.is_none() {
-            let (tx, rx): (mpsc::Sender<String>, mpsc::Receiver<String>) = mpsc::channel();
+            let (tx, rx): (mpsc::Sender<Box<String>>, mpsc::Receiver<Box<String>>) = mpsc::channel();
             self.notifier = Some((Arc::new(tx), rx));
         }
 
         if self.subscriber.is_none() {
-            let (tx, rx): (mpsc::Sender<String>, mpsc::Receiver<String>) = mpsc::channel();
+            let (tx, rx): (mpsc::Sender<Box<String>>, mpsc::Receiver<Box<String>>) = mpsc::channel();
             self.subscriber = Some((tx, Arc::new(rx)));
         }
 
@@ -531,7 +530,7 @@ pub trait ResponseManager {
     fn validate_and_update(&mut self, fallback: &HashMap<u16, PageGenerator>);
     fn serialize_header(&self, buffer: &mut BufWriter<&TcpStream>);
     fn serialize_body(&self, buffer: &mut BufWriter<&TcpStream>);
-    fn serialize_trunked_body(&self, buffer: &mut BufWriter<&TcpStream>);
+    fn serialize_trunked_body(&self, clone: TcpStream, buffer: &mut BufWriter<&TcpStream>);
 }
 
 impl ResponseManager for Response {
@@ -589,24 +588,53 @@ impl ResponseManager for Response {
 
     fn serialize_body(&self, buffer: &mut BufWriter<&TcpStream>) {
         if self.has_contents() {
-            // content has been explicitly set, use them
-            stream_response_body(self, buffer);
+            // the content length should have been set in the header, see function resp_header
+            write_to_buff(buffer, self.body.as_bytes());
         } else {
             // this shouldn't happen, as we should have captured this in the check_and_update call
             stream_default_body(self.status, buffer);
         }
     }
 
-    fn serialize_trunked_body(&self, buffer: &mut BufWriter<&TcpStream>) {
-        //TODO
+    fn serialize_trunked_body(&self, mut clone: TcpStream, buffer: &mut BufWriter<&TcpStream>) {
+        if self.has_contents() {
+            // the content length should have been set in the header, see function resp_header
+            stream_trunk(&self.body, buffer);
+        }
+
+        //TODO: now iterates and wait
+        //self.subscriber
+        //self.notifier
+
+        // set read time-out to 16 seconds
+        if let Err(e) = clone.set_read_timeout(Some(Duration::from_secs(16))) {
+            debug::print(
+                &format!("Failed to establish a reading channel on a keep-alive stream: {}", e), 1);
+            return;
+        }
+
+        let handler = thread::spawn(move || {
+            let mut buffer = [0; 1024];
+            loop {
+                if let Err(e) = clone.read(&mut buffer) {
+                    debug::print(
+                        &format!("Unable to continue reading from a keep-alive stream: {}", e), 1);
+                    break;
+                }
+
+                //TODO: send the string to notifiers
+            }
+        });
+
+        //TODO: listen to the subscribers and write to the stream!
     }
 }
 
-fn stream_response_body(response: &Response, buffer: &mut BufWriter<&TcpStream>) {
-    if !response.body.is_empty() {
-        // the content length should have been set in the header, see function resp_header
-        write_to_buff(buffer, response.body.as_bytes());
-    }
+fn stream_trunk(content: &Box<String>, buffer: &mut BufWriter<&TcpStream>) {
+    // the content length should have been set in the header, see function resp_header
+    write_to_buff(buffer, format!("{}\r\n", content.len()).as_bytes());
+    write_to_buff(buffer, format!("{}\r\n", content).as_bytes());
+    flush_buffer(buffer);
 }
 
 fn stream_default_body(status: u16, buffer: &mut BufWriter<&TcpStream>) {
