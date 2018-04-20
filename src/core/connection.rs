@@ -7,7 +7,6 @@ use std::io::{BufReader, BufWriter, Error};
 use std::net::{Shutdown, TcpStream};
 use std::sync::{Arc, mpsc};
 use std::time::Duration;
-use std::thread;
 
 use super::config::ConnMetadata;
 use super::http::{Request, RequestWriter, Response, ResponseManager, ResponseStates, ResponseWriter};
@@ -85,7 +84,7 @@ pub fn handle_connection(
     let handler = match handle_request(&stream, &mut request, router) {
         Err(err) => {
             debug::print("Error on parsing request", 3);
-            return write_to_stream(&stream, &build_err_response(&err, &metadata));
+            return write_to_stream(&stream, &mut build_err_response(&err, &metadata));
         },
         Ok(cb) => cb,
     };
@@ -110,7 +109,7 @@ fn handle_response(stream: TcpStream, callback: Callback,
     Route::handle_request(callback, request, response);
     response.validate_and_update(&metadata.get_status_pages());
 
-    write_to_stream(&stream, &response)
+    write_to_stream(&stream, response)
 }
 
 fn initialize_response(metadata: &Arc<ConnMetadata>) -> Box<Response> {
@@ -121,7 +120,7 @@ fn initialize_response(metadata: &Arc<ConnMetadata>) -> Box<Response> {
     }
 }
 
-fn write_to_stream(stream: &TcpStream, response: &Box<Response>) -> Option<u8> {
+fn write_to_stream(stream: &TcpStream, response: &mut Box<Response>) -> Option<u8> {
     let mut writer = BufWriter::new(stream);
 
     // Serialize the header to the stream
@@ -139,12 +138,21 @@ fn write_to_stream(stream: &TcpStream, response: &Box<Response>) -> Option<u8> {
         // else, write the body to the stream
         response.serialize_body(&mut writer);
 
-        // flush the buffer and shutdown the connection: we're done
+        // flush the buffer and shutdown the connection: we're done; no need for explicit shutdown
+        // the stream as it's dropped automatically on out-of-the-scope.
         return flush_buffer(&mut writer);
     }
 
     if let Ok(clone) = stream.try_clone() {
+        // serialize_trunked_body will block until all the keep-alive i/o are done
         response.serialize_trunked_body(clone, &mut writer);
+    }
+
+    // trunked keep-alive i/o is done, shut down the stream for good since copies
+    // can be listening on read/write
+    if let Err(err) = stream.shutdown(Shutdown::Both) {
+        debug::print(&format!("Encountered errors while shutting down the trunked body stream: {}", err), 1);
+        return Some(1);
     }
 
     // Otherwise we're good to leave.

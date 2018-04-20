@@ -9,7 +9,7 @@ use std::io::{BufReader, BufWriter};
 use std::io::prelude::*;
 use std::net::{TcpStream};
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, mpsc};
+use std::sync::{Arc, Mutex, mpsc};
 use std::time::Duration;
 use std::thread;
 
@@ -335,9 +335,9 @@ impl ResponseStates for Response {
             self.subscriber = Some((tx, Arc::new(rx)));
         }
 
-        if let Some(ref n) = self.notifier {
-            if let Some(ref s) = self.subscriber {
-                return Ok((Arc::clone(&n.0), Arc::clone(&s.1)));
+        if let Some(ref notifier) = self.notifier {
+            if let Some(ref sub) = self.subscriber {
+                return Ok((Arc::clone(&notifier.0), Arc::clone(&sub.1)));
             }
         }
 
@@ -530,7 +530,7 @@ pub trait ResponseManager {
     fn validate_and_update(&mut self, fallback: &HashMap<u16, PageGenerator>);
     fn serialize_header(&self, buffer: &mut BufWriter<&TcpStream>);
     fn serialize_body(&self, buffer: &mut BufWriter<&TcpStream>);
-    fn serialize_trunked_body(&self, clone: TcpStream, buffer: &mut BufWriter<&TcpStream>);
+    fn serialize_trunked_body(&mut self, clone: TcpStream, buffer: &mut BufWriter<&TcpStream>);
 }
 
 impl ResponseManager for Response {
@@ -596,38 +596,72 @@ impl ResponseManager for Response {
         }
     }
 
-    fn serialize_trunked_body(&self, mut clone: TcpStream, buffer: &mut BufWriter<&TcpStream>) {
+    fn serialize_trunked_body(&mut self, stream_clone: TcpStream, buffer: &mut BufWriter<&TcpStream>) {
         if self.has_contents() {
             // the content length should have been set in the header, see function resp_header
             stream_trunk(&self.body, buffer);
         }
 
-        //TODO: now iterates and wait
-        //self.subscriber
-        //self.notifier
-
         // set read time-out to 16 seconds
-        if let Err(e) = clone.set_read_timeout(Some(Duration::from_secs(16))) {
+        if let Err(e) = stream_clone.set_read_timeout(Some(Duration::from_secs(16))) {
             debug::print(
                 &format!("Failed to establish a reading channel on a keep-alive stream: {}", e), 1);
             return;
         }
 
-        let handler = thread::spawn(move || {
-            let mut buffer = [0; 1024];
-            loop {
-                if let Err(e) = clone.read(&mut buffer) {
-                    debug::print(
-                        &format!("Unable to continue reading from a keep-alive stream: {}", e), 1);
+        if let Some(sub) = self.subscriber.take() {
+            // spawn a new thread to listen to the read stream for any new communications
+            broadcast_new_communications( Arc::new(Mutex::new(sub.0)), stream_clone);
+        }
+
+        let timeout = Duration::from_secs(16);
+        if let Some(ref notifier) = self.notifier {
+            // listen to any replies from the server routes
+            for reply in notifier.1.recv_timeout(timeout) {
+                stream_trunk(&reply, buffer);
+                if reply.is_empty() {
+                    // if a 0-length reply, then we're done after the reply and shall break out
                     break;
                 }
-
-                //TODO: send the string to notifiers
             }
-        });
-
-        //TODO: listen to the subscribers and write to the stream!
+        }
     }
+}
+
+fn broadcast_new_communications(sender: Arc<Mutex<mpsc::Sender<Box<String>>>>, mut stream_clone: TcpStream) {
+    thread::spawn(move || {
+        let mut buffer = [0; 1024];
+
+        loop {
+            if let Err(e) = stream_clone.take_error() {
+                debug::print(
+                    &format!("Keep-alive stream can't continue: {}", e), 1);
+                break;
+            }
+
+            if let Err(e) = stream_clone.read(&mut buffer) {
+                debug::print(
+                    &format!("Unable to continue reading from a keep-alive stream: {}", e), 1);
+                break;
+            }
+
+            if let Ok(s) = sender.lock() {
+                if let Ok(result) = String::from_utf8(buffer.to_vec()) {
+                    if result.is_empty() {
+                        continue;
+                    }
+
+                    if let Err(err) = s.send(Box::new(result)) {
+                        // this could be caused by shutting down the stream from the main thread, so more of
+                        // the informative level of the message.
+                        debug::print(
+                            &format!("Unable to broadcast the communications: {}", err), 2);
+                        break;
+                    }
+                }
+            }
+        }
+    });
 }
 
 fn stream_trunk(content: &Box<String>, buffer: &mut BufWriter<&TcpStream>) {
