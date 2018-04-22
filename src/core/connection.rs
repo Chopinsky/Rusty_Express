@@ -286,7 +286,7 @@ fn parse_request_base(line: &str, req: &mut Box<Request>, router: Arc<Route>)
 
         // now do more work on non-essential parsing
         if !raw_fragment.is_empty() {
-
+            req.set_fragment(raw_fragment);
         }
 
         if !raw_scheme.is_empty() {

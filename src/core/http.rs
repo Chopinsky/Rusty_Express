@@ -112,6 +112,7 @@ pub trait RequestWriter {
     fn create_cookie(&mut self, cookie: HashMap<String, String>);
     fn set_param(&mut self, key: &str, val: &str);
     fn create_param(&mut self, params: HashMap<String, String>);
+    fn set_fragment(&mut self, fragment: String);
     fn extend_body(&mut self, content: &str);
 }
 
@@ -144,6 +145,11 @@ impl RequestWriter for Request {
     #[inline]
     fn create_param(&mut self, params: HashMap<String, String>) {
         self.params = params;
+    }
+
+    #[inline]
+    fn set_fragment(&mut self, fragment: String) {
+        self.fragment = fragment;
     }
 
     fn extend_body(&mut self, content: &str) {

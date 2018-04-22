@@ -14,6 +14,8 @@ use support::common::MapUpdates;
 use support::TaskType;
 use support::{RouteTrie, shared_pool};
 
+//TODO: authorized routes -> authFunc
+
 #[derive(PartialEq, Eq, Hash, Clone)]
 pub enum REST {
     GET,
