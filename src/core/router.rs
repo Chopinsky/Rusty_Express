@@ -34,6 +34,7 @@ pub enum RequestPath {
 }
 
 pub type Callback = fn(&Box<Request>, &mut Box<Response>);
+pub type AuthFunc = fn(&Box<Request>) -> bool;
 
 struct RegexRoute {
     pub regex: Regex,
@@ -152,12 +153,14 @@ impl Clone for RouteMap {
 
 pub struct Route {
     store: Box<HashMap<REST, RouteMap>>,
+    auth_func: Option<AuthFunc>,
 }
 
 impl Route {
     pub fn new() -> Self {
         Route {
             store: Box::from(HashMap::new()),
+            auth_func: None,
         }
     }
 
@@ -180,6 +183,7 @@ impl Clone for Route {
     fn clone(&self) -> Self {
         Route {
             store: self.store.clone(),
+            auth_func: self.auth_func.clone(),
         }
     }
 }

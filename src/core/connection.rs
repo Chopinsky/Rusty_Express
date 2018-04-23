@@ -165,6 +165,7 @@ fn handle_request(mut stream: &TcpStream, request: &mut Box<Request>, router: Ar
     if let Err(e) = stream.read(&mut buffer) {
         debug::print(&format!("Reading stream error -- {}", e), 3);
         Err(ParseError::ReadStreamErr)
+
     } else {
         let request_raw = String::from_utf8_lossy(&buffer[..]);
         if request_raw.is_empty() {
@@ -172,6 +173,7 @@ fn handle_request(mut stream: &TcpStream, request: &mut Box<Request>, router: Ar
         }
 
         let callback = parse_request(&request_raw, request, router);
+
         if let Some(callback) = callback {
             Ok(callback)
         } else {
@@ -204,7 +206,7 @@ fn parse_request(request: &str, store: &mut Box<Request>, router: Arc<Route>) ->
             continue;
         }
 
-        parse_request_body(store, line, is_body);
+        parse_request_headers(store, line, is_body);
     }
 
     if let Some(receiver) = rx {
@@ -220,9 +222,7 @@ fn parse_request(request: &str, store: &mut Box<Request>, router: Arc<Route>) ->
     None
 }
 
-fn parse_request_body(store: &mut Box<Request>, line: &str, is_body: bool) {
-    //TODO: Better support for content-dispositions?
-
+fn parse_request_headers(store: &mut Box<Request>, line: &str, is_body: bool) {
     if !is_body {
         let header_info: Vec<&str> = line.trim().splitn(2, ':').collect();
 

@@ -12,6 +12,8 @@ use num_cpus;
 use super::states::StatesInteraction;
 use support::common::*;
 
+//TODO: load config from file, e.g. config.toml
+
 lazy_static! {
     static ref VIEW_ENGINES: RwLock<HashMap<String, Box<ViewEngine>>> = RwLock::new(HashMap::new());
 }
@@ -149,11 +151,13 @@ impl ConnMetadata {
     }
 
     #[inline]
+    #[deprecated(since = "0.3.0", note = "This feature will be removed in 0.3.3")]
     pub fn set_state_interaction(&mut self, interaction: StatesInteraction) {
         self.state_interaction = interaction;
     }
 
     #[inline]
+    #[deprecated(since = "0.3.0", note = "This feature will be removed in 0.3.3")]
     pub fn get_state_interaction(&self) -> &StatesInteraction {
         &self.state_interaction
     }
@@ -168,5 +172,3 @@ impl Clone for ConnMetadata {
         }
     }
 }
-
-//TODO: load config from file, e.g. config.toml
