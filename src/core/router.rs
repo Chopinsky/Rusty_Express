@@ -34,7 +34,7 @@ pub enum RequestPath {
 }
 
 pub type Callback = fn(&Box<Request>, &mut Box<Response>);
-pub type AuthFunc = fn(&Box<Request>) -> bool;
+pub type AuthFunc = fn(&Box<Request>, String) -> bool;
 
 struct RegexRoute {
     pub regex: Regex,
@@ -162,6 +162,16 @@ impl Route {
             store: Box::from(HashMap::new()),
             auth_func: None,
         }
+    }
+
+    #[inline]
+    pub fn get_auth_func(&self) -> Option<AuthFunc> {
+        self.auth_func.clone()
+    }
+
+    #[inline]
+    pub fn set_auth_func(&mut self, auth_func: Option<AuthFunc>) {
+        self.auth_func = auth_func;
     }
 
     fn add_route(&mut self, method: REST, uri: RequestPath, callback: Callback) {

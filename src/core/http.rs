@@ -577,6 +577,14 @@ impl ResponseManager for Response {
                     self.body = Box::new(FOUR_OH_FOUR.to_owned());
                 }
             },
+            403 => {
+                if let Some(page_generator) = fallback.get(&403) {
+                    //read_from_file(Path::new(file_path), &mut self.body);
+                    self.body = Box::new(page_generator());
+                } else {
+                    self.body = Box::new(FIVE_HUNDRED.to_owned());
+                }
+            },
             _ => {
                 if let Some(page_generator) = fallback.get(&500) {
                     //read_from_file(Path::new(file_path), &mut self.body);

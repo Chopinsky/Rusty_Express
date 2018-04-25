@@ -10,7 +10,7 @@ use std::time::Duration;
 
 use super::config::ConnMetadata;
 use super::http::{Request, RequestWriter, Response, ResponseManager, ResponseStates, ResponseWriter};
-use super::router::{Callback, REST, Route, RouteHandler};
+use super::router::{AuthFunc, Callback, REST, Route, RouteHandler};
 use support::{common::write_to_buff, common::flush_buffer, debug, shared_pool, TaskType};
 
 static HEADER_END: [u8; 2] = [13, 10];
@@ -19,6 +19,7 @@ static HEADER_END: [u8; 2] = [13, 10];
 enum ParseError {
     EmptyRequestErr,
     ReadStreamErr,
+    AccessDenied,
 }
 
 //TODO: still good for implementing middlewear
@@ -81,6 +82,7 @@ pub fn handle_connection(
         metadata: Arc<ConnMetadata>) -> Option<u8> {
 
     let mut request= Box::new(Request::new());
+
     let handler = match handle_request(&stream, &mut request, router) {
         Err(err) => {
             debug::print("Error on parsing request", 3);
@@ -90,7 +92,7 @@ pub fn handle_connection(
     };
 
     handle_response(stream, handler, &request,
-                    &mut initialize_response(&metadata),  &metadata)
+                    &mut initialize_response(&metadata), &metadata)
 }
 
 fn handle_response(stream: TcpStream, callback: Callback,
@@ -167,12 +169,26 @@ fn handle_request(mut stream: &TcpStream, request: &mut Box<Request>, router: Ar
         Err(ParseError::ReadStreamErr)
 
     } else {
+        let auth_func = router.get_auth_func();
         let request_raw = String::from_utf8_lossy(&buffer[..]);
+
         if request_raw.is_empty() {
             return Err(ParseError::EmptyRequestErr);
         }
 
-        let callback = parse_request(&request_raw, request, router);
+        let callback =
+            parse_request(&request_raw, request, router);
+
+        let has_access = if let Some(auth) = auth_func {
+            let route_path = request.uri.to_owned();
+            auth(&request, route_path)
+        } else {
+            true
+        };
+
+        if !has_access {
+            return Err(ParseError::AccessDenied);
+        }
 
         if let Some(callback) = callback {
             Ok(callback)
@@ -388,6 +404,7 @@ fn build_err_response(err: &ParseError, metadata: &Arc<ConnMetadata>) -> Box<Res
     let mut resp = Box::new(Response::new());
     let status: u16 = match err {
         &ParseError::ReadStreamErr => 500,
+        &ParseError::AccessDenied => 403,
         _ => 404,
     };
 
