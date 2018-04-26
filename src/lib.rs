@@ -218,28 +218,34 @@ impl ServerDef for HttpServer {
 }
 
 impl Router for HttpServer {
-    fn get(&mut self, uri: RequestPath, callback: Callback) {
+    fn get(&mut self, uri: RequestPath, callback: Callback) -> &mut Route {
         self.router.get(uri, callback);
+        &mut self.router
     }
 
-    fn post(&mut self, uri: RequestPath, callback: Callback) {
+    fn post(&mut self, uri: RequestPath, callback: Callback) -> &mut Route {
         self.router.post(uri, callback);
+        &mut self.router
     }
 
-    fn put(&mut self, uri: RequestPath, callback: Callback) {
+    fn put(&mut self, uri: RequestPath, callback: Callback) -> &mut Route {
         self.router.put(uri, callback);
+        &mut self.router
     }
 
-    fn delete(&mut self, uri: RequestPath, callback: Callback) {
+    fn delete(&mut self, uri: RequestPath, callback: Callback) -> &mut Route {
         self.router.delete(uri, callback);
+        &mut self.router
     }
 
-    fn options(&mut self, uri: RequestPath, callback: Callback) {
+    fn options(&mut self, uri: RequestPath, callback: Callback) -> &mut Route {
         self.router.options(uri, callback);
+        &mut self.router
     }
 
-    fn other(&mut self, method: &str, uri: RequestPath, callback: Callback) {
+    fn other(&mut self, method: &str, uri: RequestPath, callback: Callback) -> &mut Route {
         self.router.other(method, uri, callback);
+        &mut self.router
     }
 }
 

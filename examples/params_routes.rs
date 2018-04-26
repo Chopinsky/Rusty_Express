@@ -8,10 +8,10 @@ fn main() {
     server.set_pool_size(12);
 
     //define router directly
-    server.get(RequestPath::Explicit("/"), simple_response);
-    server.get(RequestPath::ExplicitWithParams("/api/user/:id"), user_param_response);
-    server.get(RequestPath::ExplicitWithParams("/api/user/:id1/friend/:id2"), user_param_response);
-    server.get(RequestPath::ExplicitWithParams("/api/blog/:id/:dates"), blog_param_response);
+    server.get(RequestPath::Explicit("/"), simple_response)
+          .get(RequestPath::ExplicitWithParams("/api/user/:id"), user_param_response)
+          .get(RequestPath::ExplicitWithParams("/api/user/:id1/friend/:id2"), user_param_response)
+          .get(RequestPath::ExplicitWithParams("/api/blog/:id/:dates"), blog_param_response);
 
     server.listen(8080);
 }

@@ -8,9 +8,9 @@ fn main() {
     server.set_pool_size(8);
 
     //define router directly
-    server.get(RequestPath::Explicit("/"), simple_response);
-    server.get(RequestPath::Explicit("/index"), simple_redirect);
-    server.get(RequestPath::Explicit("/fail_check"), simple_redir_fail);
+    server.get(RequestPath::Explicit("/"), simple_response)
+          .get(RequestPath::Explicit("/index"), simple_redirect)
+          .get(RequestPath::Explicit("/fail_check"), simple_redir_fail);
 
     server.listen(8080);
 }

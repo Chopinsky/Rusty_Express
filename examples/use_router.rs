@@ -17,8 +17,8 @@ fn main() {
 
     // Define router separately
     let mut router = Route::new();
-    router.get(RequestPath::Explicit("/"), Model::simple_response);
-    router.get(RequestPath::Explicit("/index"), Model::simple_index);
+    router.get(RequestPath::Explicit("/"), Model::simple_response)
+          .get(RequestPath::Explicit("/index"), Model::simple_index);
 
     server.def_router(router);
     server.listen(8080);

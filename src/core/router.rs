@@ -199,42 +199,48 @@ impl Clone for Route {
 }
 
 pub trait Router {
-    fn get(&mut self, uri: RequestPath, callback: Callback);
-    fn post(&mut self, uri: RequestPath, callback: Callback);
-    fn put(&mut self, uri: RequestPath, callback: Callback);
-    fn delete(&mut self, uri: RequestPath, callback: Callback);
-    fn options(&mut self, uri: RequestPath, callback: Callback);
-    fn other(&mut self, method: &str, uri: RequestPath, callback: Callback);
+    fn get(&mut self, uri: RequestPath, callback: Callback) -> &mut Route;
+    fn post(&mut self, uri: RequestPath, callback: Callback) -> &mut Route;
+    fn put(&mut self, uri: RequestPath, callback: Callback) -> &mut Route;
+    fn delete(&mut self, uri: RequestPath, callback: Callback) -> &mut Route;
+    fn options(&mut self, uri: RequestPath, callback: Callback) -> &mut Route;
+    fn other(&mut self, method: &str, uri: RequestPath, callback: Callback) -> &mut Route;
 }
 
 impl Router for Route {
-    fn get(&mut self, uri: RequestPath, callback: Callback) {
+    fn get(&mut self, uri: RequestPath, callback: Callback) -> &mut Route {
         self.add_route(REST::GET, uri, callback);
+        self
     }
 
-    fn post(&mut self, uri: RequestPath, callback: Callback) {
+    fn post(&mut self, uri: RequestPath, callback: Callback) -> &mut Route {
         self.add_route(REST::POST, uri, callback);
+        self
     }
 
-    fn put(&mut self, uri: RequestPath, callback: Callback) {
+    fn put(&mut self, uri: RequestPath, callback: Callback) -> &mut Route {
         self.add_route(REST::PUT, uri, callback);
+        self
     }
 
-    fn delete(&mut self, uri: RequestPath, callback: Callback) {
+    fn delete(&mut self, uri: RequestPath, callback: Callback) -> &mut Route {
         self.add_route(REST::DELETE, uri, callback);
+        self
     }
 
-    fn options(&mut self, uri: RequestPath, callback: Callback) {
+    fn options(&mut self, uri: RequestPath, callback: Callback) -> &mut Route {
         self.add_route(REST::OPTIONS, uri, callback);
+        self
     }
 
-    fn other(&mut self, method: &str, uri: RequestPath, callback: Callback) {
+    fn other(&mut self, method: &str, uri: RequestPath, callback: Callback) -> &mut Route {
         if method.is_empty() {
             panic!("Must provide a valid method!");
         }
 
         let request_method = REST::OTHER(method.to_uppercase());
         self.add_route(request_method, uri, callback);
+        self
     }
 }
 
