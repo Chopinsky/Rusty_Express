@@ -143,7 +143,7 @@ fn start_with(
                     debug::print(&format!("Unable to shut down the stream: {}", e)[..], 1);
                 });
 
-                return;
+                break;
             }
 
             // clone Arc-pointers

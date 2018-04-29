@@ -126,7 +126,7 @@ fn write_to_stream(stream: &TcpStream, response: &mut Box<Response>) -> Option<u
     let mut writer = BufWriter::new(stream);
 
     // Serialize the header to the stream
-    response.serialize_header(&mut writer);
+    response.write_header(&mut writer);
 
     // Blank line to indicate the end of the response header
     write_to_buff(&mut writer, &HEADER_END);
@@ -138,7 +138,7 @@ fn write_to_stream(stream: &TcpStream, response: &mut Box<Response>) -> Option<u
 
     if !response.to_keep_alive() {
         // else, write the body to the stream
-        response.serialize_body(&mut writer);
+        response.write_body(&mut writer);
 
         // flush the buffer and shutdown the connection: we're done; no need for explicit shutdown
         // the stream as it's dropped automatically on out-of-the-scope.
@@ -147,7 +147,7 @@ fn write_to_stream(stream: &TcpStream, response: &mut Box<Response>) -> Option<u
 
     if let Ok(clone) = stream.try_clone() {
         // serialize_trunked_body will block until all the keep-alive i/o are done
-        response.serialize_trunked_body(clone, &mut writer);
+        response.write_trunked_body(clone, &mut writer);
     }
 
     // trunked keep-alive i/o is done, shut down the stream for good since copies
@@ -169,15 +169,14 @@ fn handle_request(mut stream: &TcpStream, request: &mut Box<Request>, router: Ar
         Err(ParseError::ReadStreamErr)
 
     } else {
-        let auth_func = router.get_auth_func();
         let request_raw = String::from_utf8_lossy(&buffer[..]);
 
         if request_raw.is_empty() {
             return Err(ParseError::EmptyRequestErr);
         }
 
-        let callback =
-            parse_request(&request_raw, request, router);
+        let auth_func = router.get_auth_func();
+        let callback = parse_request(&request_raw, request, router);
 
         let has_access = if let Some(auth) = auth_func {
             let route_path = request.uri.to_owned();

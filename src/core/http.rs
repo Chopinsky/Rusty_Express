@@ -436,7 +436,7 @@ impl ResponseWriter for Response {
         if self.is_header_only() { return 200; }
 
         if let Some(file_path) = get_file_path(file_loc) {
-            let status = read_from_file(&file_path, &mut self.body);
+            let status = open_file(&file_path, &mut self.body);
             if status == 200 && self.content_type.is_empty() {
                 self.set_ext_mime_header(&file_path);
             }
@@ -464,7 +464,7 @@ impl ResponseWriter for Response {
             if let &Some(ref tx) = &self.body_tx {
                 let tx_clone = mpsc::Sender::clone(tx);
                 shared_pool::run(move || {
-                    read_from_file_async(path, tx_clone);
+                    open_file_async(path, tx_clone);
                 }, TaskType::Response);
             }
         }
@@ -534,9 +534,9 @@ impl ResponseWriter for Response {
 pub trait ResponseManager {
     fn header_only(&mut self, header_only: bool);
     fn validate_and_update(&mut self, fallback: &HashMap<u16, PageGenerator>);
-    fn serialize_header(&self, buffer: &mut BufWriter<&TcpStream>);
-    fn serialize_body(&self, buffer: &mut BufWriter<&TcpStream>);
-    fn serialize_trunked_body(&mut self, clone: TcpStream, buffer: &mut BufWriter<&TcpStream>);
+    fn write_header(&self, buffer: &mut BufWriter<&TcpStream>);
+    fn write_body(&self, buffer: &mut BufWriter<&TcpStream>);
+    fn write_trunked_body(&mut self, clone: TcpStream, buffer: &mut BufWriter<&TcpStream>);
 }
 
 impl ResponseManager for Response {
@@ -571,7 +571,6 @@ impl ResponseManager for Response {
         match self.status {
             0 | 404 => {
                 if let Some(page_generator) = fallback.get(&404) {
-                    //read_from_file(Path::new(file_path), &mut self.body);
                     self.body = Box::new(page_generator());
                 } else {
                     self.body = Box::new(FOUR_OH_FOUR.to_owned());
@@ -579,7 +578,6 @@ impl ResponseManager for Response {
             },
             403 => {
                 if let Some(page_generator) = fallback.get(&403) {
-                    //read_from_file(Path::new(file_path), &mut self.body);
                     self.body = Box::new(page_generator());
                 } else {
                     self.body = Box::new(FIVE_HUNDRED.to_owned());
@@ -587,7 +585,6 @@ impl ResponseManager for Response {
             },
             _ => {
                 if let Some(page_generator) = fallback.get(&500) {
-                    //read_from_file(Path::new(file_path), &mut self.body);
                     self.body = Box::new(page_generator());
                 } else {
                     self.body = Box::new(FIVE_HUNDRED.to_owned());
@@ -596,11 +593,11 @@ impl ResponseManager for Response {
         }
     }
 
-    fn serialize_header(&self, buffer: &mut BufWriter<&TcpStream>) {
+    fn write_header(&self, buffer: &mut BufWriter<&TcpStream>) {
         write_to_buff(buffer, self.resp_header().as_bytes());
     }
 
-    fn serialize_body(&self, buffer: &mut BufWriter<&TcpStream>) {
+    fn write_body(&self, buffer: &mut BufWriter<&TcpStream>) {
         if self.has_contents() {
             // the content length should have been set in the header, see function resp_header
             write_to_buff(buffer, self.body.as_bytes());
@@ -610,7 +607,7 @@ impl ResponseManager for Response {
         }
     }
 
-    fn serialize_trunked_body(&mut self, stream_clone: TcpStream, buffer: &mut BufWriter<&TcpStream>) {
+    fn write_trunked_body(&mut self, stream_clone: TcpStream, buffer: &mut BufWriter<&TcpStream>) {
         if self.has_contents() {
             // the content length should have been set in the header, see function resp_header
             stream_trunk(&self.body, buffer);
@@ -722,7 +719,7 @@ fn get_file_path(path: &str) -> Option<PathBuf> {
     Some(file_path.to_path_buf())
 }
 
-fn read_from_file(file_path: &PathBuf, buf: &mut Box<String>) -> u16 {
+fn open_file(file_path: &PathBuf, buf: &mut Box<String>) -> u16 {
     // try open the file
     if let Ok(file) = File::open(file_path) {
         let mut buf_reader = BufReader::new(file);
@@ -742,9 +739,9 @@ fn read_from_file(file_path: &PathBuf, buf: &mut Box<String>) -> u16 {
     }
 }
 
-fn read_from_file_async(file_path: PathBuf, tx: mpsc::Sender<Box<String>>) {
+fn open_file_async(file_path: PathBuf, tx: mpsc::Sender<Box<String>>) {
     let mut buf: Box<String> = Box::new(String::new());
-    match read_from_file(&file_path, &mut buf) {
+    match open_file(&file_path, &mut buf) {
         404 | 500 if buf.len() > 0 => { buf.clear(); },
         _ => { /* Nothing to do here */ },
     }
