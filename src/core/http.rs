@@ -20,6 +20,7 @@ use super::config::{EngineContext, PageGenerator, ServerConfig, ViewEngine, View
 use support::{common::MapUpdates, common::write_to_buff, common::flush_buffer, debug, shared_pool, TaskType};
 
 static FOUR_OH_FOUR: &'static str = include_str!("../default/404.html");
+static FOUR_OH_ONE: &'static str = include_str!("../default/401.html");
 static FIVE_HUNDRED: &'static str = include_str!("../default/500.html");
 static VERSION: &'static str = "0.3.0";
 static TIMEOUT: Duration = Duration::from_millis(64);
@@ -576,11 +577,11 @@ impl ResponseManager for Response {
                     self.body = Box::new(FOUR_OH_FOUR.to_owned());
                 }
             },
-            403 => {
-                if let Some(page_generator) = fallback.get(&403) {
+            401 => {
+                if let Some(page_generator) = fallback.get(&401) {
                     self.body = Box::new(page_generator());
                 } else {
-                    self.body = Box::new(FIVE_HUNDRED.to_owned());
+                    self.body = Box::new(FOUR_OH_ONE.to_owned());
                 }
             },
             _ => {

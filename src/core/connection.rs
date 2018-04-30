@@ -403,7 +403,7 @@ fn build_err_response(err: &ParseError, metadata: &Arc<ConnMetadata>) -> Box<Res
     let mut resp = Box::new(Response::new());
     let status: u16 = match err {
         &ParseError::ReadStreamErr => 500,
-        &ParseError::AccessDenied => 403,
+        &ParseError::AccessDenied => 401,
         _ => 404,
     };
 
