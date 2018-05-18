@@ -473,6 +473,17 @@ impl ResponseWriter for Response {
 
     fn send_template(&mut self, file_loc: &str, context: Box<EngineContext>) -> u16 {
         if self.is_header_only() { return 200; }
+        if file_loc.is_empty() { return 404; }
+
+        if let Some(path) = get_file_path(file_loc) {
+            if !path.is_file() { return 404; }
+
+            let mut content = Box::new(String::new());
+            open_file(&path, &mut content);
+
+        } else {
+            return 404;
+        }
 
         //TODO - impl ServerConfig::template_parser
         //ServerConfig::template_parser();
