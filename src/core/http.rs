@@ -438,7 +438,12 @@ impl ResponseWriter for Response {
 
         if let Some(file_path) = get_file_path(file_loc) {
             let status = open_file(&file_path, &mut self.body);
-            if status == 200 && self.content_type.is_empty() {
+
+            if status != 200 && status != 0 {
+                // if not opening the file correctly, reset the body for error page
+                self.body = Box::new(String::new());
+            } else if status == 200 && self.content_type.is_empty() {
+                // if read the file good and not set the mime yet, set the mime
                 self.set_ext_mime_header(&file_path);
             }
 
@@ -478,17 +483,34 @@ impl ResponseWriter for Response {
         if let Some(path) = get_file_path(file_loc) {
             if !path.is_file() { return 404; }
 
+            let mut ext = String::new();
+            if let Some(os_ext) = path.extension() {
+                if let Some(str_ext) = os_ext.to_str() {
+                    ext = str_ext.to_owned();
+                }
+            }
+
+            if ext.is_empty() {
+                return 404;
+            }
+
             let mut content = Box::new(String::new());
             open_file(&path, &mut content);
+            
+            // Now render the conent with the engine
+            let status = ServerConfig::template_parser(&ext[..], &mut content, context);
+            if status == 0 || status == 200 {
+                self.body = content;
+                if self.content_type.is_empty() {
+                    // if read the file good and not set the mime yet, set the mime
+                    self.set_ext_mime_header(&path);
+                }
+            }
 
+            status
         } else {
-            return 404;
+            404
         }
-
-        //TODO - impl ServerConfig::template_parser
-        //ServerConfig::template_parser();
-
-        200
     }
 
     fn set_cookie(&mut self, cookie: Cookie) {

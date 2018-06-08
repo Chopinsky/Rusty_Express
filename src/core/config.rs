@@ -84,7 +84,7 @@ impl ServerConfig {
     }
 }
 
-pub type ViewEngine = fn(Box<String>, Box<EngineContext>, &mut Box<String>) -> u16;
+pub type ViewEngine = fn(&mut Box<String>, Box<EngineContext>) -> u16;
 
 pub struct EngineContext {
     value: String,
@@ -106,16 +106,16 @@ impl ViewEngineDefinition for ServerConfig {
 }
 
 pub trait ViewEngineParser {
-    fn template_parser(extension: &str, content: Box<String>, context: Box<EngineContext>, output: &mut Box<String>) -> u16;
+    fn template_parser(extension: &str, content: &mut Box<String>, context: Box<EngineContext>) -> u16;
 }
 
 impl ViewEngineParser for ServerConfig {
-    fn template_parser(extension: &str, content: Box<String>, context: Box<EngineContext>, output: &mut Box<String>) -> u16 {
+    fn template_parser(extension: &str, content: &mut Box<String>, context: Box<EngineContext>) -> u16 {
         if extension.is_empty() { return 0; }
 
         if let Ok(template_engines) = VIEW_ENGINES.read() {
             if let Some(engine) = template_engines.get(extension) {
-                return engine(content, context, output);
+                return engine(content, context);
             }
         }
 
