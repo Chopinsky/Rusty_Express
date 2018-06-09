@@ -19,6 +19,7 @@ use support::{RouteTrie, shared_pool};
 #[derive(PartialEq, Eq, Hash, Clone)]
 pub enum REST {
     GET,
+    PATCH,
     POST,
     PUT,
     DELETE,
@@ -199,7 +200,9 @@ impl Clone for Route {
 }
 
 pub trait Router {
+    //TODO: add "all" to the router
     fn get(&mut self, uri: RequestPath, callback: Callback) -> &mut Route;
+    fn patch(&mut self, uri: RequestPath, callback: Callback) -> &mut Route;
     fn post(&mut self, uri: RequestPath, callback: Callback) -> &mut Route;
     fn put(&mut self, uri: RequestPath, callback: Callback) -> &mut Route;
     fn delete(&mut self, uri: RequestPath, callback: Callback) -> &mut Route;
@@ -210,6 +213,11 @@ pub trait Router {
 impl Router for Route {
     fn get(&mut self, uri: RequestPath, callback: Callback) -> &mut Route {
         self.add_route(REST::GET, uri, callback);
+        self
+    }
+
+    fn patch(&mut self, uri: RequestPath, callback: Callback) -> &mut Route {
+        self.add_route(REST::PATCH, uri, callback);
         self
     }
 

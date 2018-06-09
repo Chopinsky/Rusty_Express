@@ -222,6 +222,11 @@ impl Router for HttpServer {
         self.router.get(uri, callback);
         &mut self.router
     }
+    
+    fn patch(&mut self, uri: RequestPath, callback: Callback) -> &mut Route {
+        self.router.patch(uri, callback);
+        &mut self.router
+    }
 
     fn post(&mut self, uri: RequestPath, callback: Callback) -> &mut Route {
         self.router.post(uri, callback);
