@@ -93,9 +93,9 @@ impl HttpServer {
 
         println!("Listening for connections on port {}", port);
 
-        if self.config.use_session_autoclean && !Session::auto_clean_is_running() {
+        if self.config.use_session_autoclean && !ExchangeConfig::auto_clean_is_running() {
             if let Some(duration) = self.config.get_session_auto_clean_period() {
-                if let Some(handler) = Session::auto_clean_start(duration) {
+                if let Some(handler) = ExchangeConfig::auto_clean_start(duration) {
                     self.states.set_session_handler(&handler);
                 }
             }

@@ -10,15 +10,15 @@
 [docsrs]: https://docs.rs/rusty_express
 
 ## What is this
-This is a simple http server library written in Rust and provide Express-alike APIs. We know Rust 
+This is a simple http-server library written in Rust and provide Express-alike APIs. We know Rust
 is hard and daunting to use, so the goal of this project is to make sure your server can be easy 
-to use without fears. 
+to construct without fears such that you can focus on the business logic.
 
-Many of today's popular Rust-based web framework are very verbose and difficult to use, one will 
-usually have to learn advanced Rust features or API libraries in order to finish a seemingly easy 
-job in other language's framework. So we started this project to make it easy to use Rust as a 
-back-end technology, and aims to provide native experience similar to Node's Express framework.
-That's how this project got its name of "Rusty Express": a Rust based, Express-alike web framework.
+Many of today's popular Rust-based web framework are verbose and would take efforts to learn, one will
+usually have to be familiar with advanced Rust features or API libraries in order to finish a seemingly
+easy job in other language's framework. That's why we started this project -- we want it to be easy to
+use as a back-end technology, and provide native experience similar to Node's Express framework. That's
+where this project got its name -- "Rusty Express": a Rust based, Express-alike web framework.
 
 Version 0.3.0+ is a major milestone, from this point on the APIs shall be mostly stable, and we
 expect to make less, if none, break changes, but please do let us know if you've come across bugs
@@ -27,7 +27,7 @@ that we should fix, or have met performance bottle necks that we shall try to im
 
 ## What's new in 0.3.1 
 - Fixing a few obvious bugs and improve the performance.
-- Now the template framework is mostly done. I will add a simple template engine in the next version (0.3.2).
+- Now the template framework is mostly done. I will add a simple template engine in the next main version (0.3.3).
 
 
 ## Migrating from 0.2.x to 0.3.0 

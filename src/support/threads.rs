@@ -37,6 +37,8 @@ impl ThreadPool {
         };
 
         let (sender, receiver) = mpsc::channel();
+
+        // TODO: when switching to mpmc, try get rid of the Arc-Mutex structure
         let receiver = Arc::new(Mutex::new(receiver));
 
         let mut workers = Vec::with_capacity(pool_size);

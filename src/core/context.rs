@@ -36,7 +36,7 @@ pub trait ContextProvider {
     fn process(&self, req: &Box<Request>, resp: &mut Box<Response>) -> Result<(), &'static str>;
 }
 
-struct EmptyContext {}
+struct EmptyContext;
 
 impl ContextProvider for EmptyContext {
     #[inline]
