@@ -25,7 +25,7 @@ expect to make less, if none, break changes, but please do let us know if you've
 that we should fix, or have met performance bottle necks that we shall try to improve.
 
 
-## What's new in 0.3.1 
+## What's changed in 0.3.2
 - Fixing a few obvious bugs and improve the performance.
 - Now the template framework is mostly done. I will add a simple template engine in the next main version (0.3.3).
 
