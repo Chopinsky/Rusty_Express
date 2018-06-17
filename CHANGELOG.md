@@ -5,7 +5,7 @@
 
 ## What's new in 0.3.1
 - Fixing a few obvious bugs and improve the performance.
-- Now the template framework is mostly done. I will add a simple template engine in the next main version (0.3.3).
+- Now the template framework is mostly done. A simple template engine will be added in the next main version (0.3.3).
 
 # 2018-05
 ## Major version break: 0.3.0

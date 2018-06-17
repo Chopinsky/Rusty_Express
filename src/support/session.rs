@@ -1,3 +1,60 @@
+//! The optional `session` module provides the service to store persistent client data on the server
+//! side. You can choose to use any 3rd party crates for achieving the same purposes as well.
+//!
+//! If you choose to use the `session` module provided by this framework, make sure to include the
+//! `session` feature in your Cargo's dependency build list. In addition, your persistent data struct
+//! must also implement the `SessionData` trait. This trait will give the framework the ability to
+//! store the session data to a local file, then retrieve them when rebooting or reloading the server.
+//!
+//! You will find more details in the `SessionData` trait, but here's a simple example of it:
+//! # Examples
+//! ```
+//! use express::prelude::session::*;
+//!
+//! pub struct Data {
+//!     pub token: String
+//! }
+//!
+//! impl SessionData for Data {
+//!     pub fn serialize(&self) -> String {
+//!         self.token.to_owned()
+//!     }
+//!
+//!     pub fn deserialize(raw: &str) -> Option<Self> where Self: Sized {
+//!         let data = Data {
+//!             token: String::from(raw)
+//!         };
+//!
+//!         Some(data)
+//!     }
+//! }
+//! ```
+//!
+//! And then you can use the session data in your response handler:
+//! # Examples
+//! ```
+//! pub fn handler(req: &Box<Request>, resp: &mut Box<Response>) {
+//!     ...
+//!
+//!     // Create a new session
+//!     let session = SessionExchange::initialize_new();
+//!
+//!
+//! }
+//! ```
+//!
+//! If the request is to update an existing session data, you can do the following:
+//! # Examples
+//! ```
+//! pub fn handler(req: &Box<Request>, resp: &mut Box<Response>) {
+//!     ...
+//!
+//!     // If you have already created a session before, uncomment the line below to retrieve it, instead
+//!     let session = SessionExchange::from_id(req.header("session_id").unwrap());
+//!
+//!
+//! }
+
 use std::collections::HashMap;
 use std::cmp::Ordering;
 use std::fs::File;

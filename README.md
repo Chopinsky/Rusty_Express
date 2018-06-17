@@ -26,8 +26,7 @@ that we should fix, or have met performance bottle necks that we shall try to im
 
 
 ## What's changed in 0.3.2
-- Fixing a few obvious bugs and improve the performance.
-- Now the template framework is mostly done. I will add a simple template engine in the next main version (0.3.3).
+- Update 'session' module to be more robust for use with generic session data types.
 
 
 ## Migrating from 0.2.x to 0.3.0 

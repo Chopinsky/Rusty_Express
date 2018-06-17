@@ -6,8 +6,9 @@
 //! scale, and is excellent on performance.
 //!
 //! # Examples
-//! extern crate rusty_express;
-//! use rusty_express::prelude::*;
+//! ```
+//! extern crate rusty_express as express;
+//! use express::prelude::*;
 //!
 //! fn main() {
 //!    let mut server = HttpServer::new();
@@ -19,6 +20,7 @@
 //!    resp.send(&format!("Hello world from rusty server from path: {}", req.uri));
 //!    resp.status(200);
 //! }
+//! ```
 
 #[macro_use]
 extern crate lazy_static;
