@@ -19,15 +19,15 @@ pub fn std_to_chrono(duration: Duration) -> Option<chrono::Duration> {
 }
 
 pub trait MapUpdates<T> {
-    fn add(&mut self, field: &str, value: T, allow_override: bool) -> Option<T>;
+    fn add(&mut self, field: &str, value: T, allow_replace: bool) -> Option<T>;
 }
 
 impl<T> MapUpdates<T> for HashMap<String, T> {
-    fn add(&mut self, field: &str, value: T, allow_override: bool) -> Option<T> {
+    fn add(&mut self, field: &str, value: T, allow_replace: bool) -> Option<T> {
         if field.is_empty() { return None; }
 
         let f = field.to_lowercase();
-        if allow_override {
+        if allow_replace {
             //new field, insert into the map
             self.insert(f, value)
         } else {

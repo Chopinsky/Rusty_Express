@@ -87,7 +87,7 @@ impl ServerConfig {
 pub type ViewEngine = fn(&mut Box<String>, Box<EngineContext>) -> u16;
 
 pub struct EngineContext {
-    store: HashMap<String, Vec<EngineContext>>,
+    store: HashMap<String, Vec<String>>,
 }
 
 //TODO: impl EngineContext's getter/setter, with the converter trait for the actual context data

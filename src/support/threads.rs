@@ -7,6 +7,7 @@ use std::sync::{mpsc, Arc, Mutex, Once, ONCE_INIT};
 use support::debug;
 
 static TIMEOUT: Duration = Duration::from_millis(200);
+
 type Job = Box<FnBox + Send + 'static>;
 
 trait FnBox {
@@ -14,6 +15,7 @@ trait FnBox {
 }
 
 impl<F: FnOnce()> FnBox for F {
+    #[inline]
     fn call_box(self: Box<F>) {
         (*self)()
     }

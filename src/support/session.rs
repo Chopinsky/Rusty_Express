@@ -37,23 +37,22 @@
 //!     ...
 //!
 //!     // Create a new session
-//!     let session = SessionExchange::initialize_new();
+//!     let session = SessionExchange::create_new().unwrap();
+//!     let session_id = session.get_id();
 //!
+//!     let data = Data { token: 'abcde12345' };
+//!     session.set_data(data);
+//!     session.save();  // make sure to save the session before going out of the scope
 //!
-//! }
-//! ```
-//!
-//! If the request is to update an existing session data, you can do the following:
-//! # Examples
-//! ```
-//! pub fn handler(req: &Box<Request>, resp: &mut Box<Response>) {
 //!     ...
 //!
-//!     // If you have already created a session before, uncomment the line below to retrieve it, instead
-//!     let session = SessionExchange::from_id(req.header("session_id").unwrap());
+//!     // retrieve the session from the store
+//!     let session = SessionExchange::from_id(session_id).unwrap();
+//!     let data = session.get_data()::<Data>.unwrap();
 //!
-//!
+//!     assert!(data.token, 'abcde12345');
 //! }
+//! ```
 
 use std::collections::HashMap;
 use std::cmp::Ordering;
@@ -143,19 +142,19 @@ impl Clone for Session {
 }
 
 pub trait SessionExchange {
-    fn initialize_new() -> Option<Session>;
-    fn initialize_new_with_id(id: &str) -> Option<Session>;
+    fn create_new() -> Option<Session>;
+    fn create_new_with_id(id: &str) -> Option<Session>;
     fn from_id(id: String) -> Option<Session>;
     fn from_or_new(id: String) -> Option<Session>;
     fn release(id: String);
 }
 
 impl SessionExchange for Session {
-    fn initialize_new() -> Option<Self> {
+    fn create_new() -> Option<Self> {
         new_session("")
     }
 
-    fn initialize_new_with_id(id: &str) -> Option<Self> {
+    fn create_new_with_id(id: &str) -> Option<Self> {
         new_session(id)
     }
 
@@ -183,7 +182,7 @@ impl SessionExchange for Session {
         if let Some(session) = Session::from_id(id) {
             Some(session)
         } else {
-            Session::initialize_new()
+            Session::create_new()
         }
     }
 

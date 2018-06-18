@@ -355,7 +355,8 @@ impl ResponseStates for Response {
 
 pub trait ResponseWriter {
     fn status(&mut self, status: u16);
-    fn header(&mut self, field: &str, value: &str, replace: bool);
+    fn header(&mut self, field: &str, value: &str, allow_replace: bool);
+    fn set_header(&mut self, field: &str, value: &str);
     fn send(&mut self, content: &str);
     fn send_file(&mut self, file_path: &str) -> u16;
     fn send_file_async(&mut self, file_loc: &str);
@@ -383,31 +384,59 @@ impl ResponseWriter for Response {
             };
     }
 
-    fn header(&mut self, field: &str, value: &str, replace: bool) {
+    fn header(&mut self, field: &str, value: &str, allow_replace: bool) {
         if field.is_empty() || value.is_empty() { return; }
 
         let key = field.to_lowercase();
         match &key[..] {
-            "content-type" => self.content_type = value.to_owned(),
+            "content-type" => {
+                if self.content_type.is_empty() || allow_replace {
+                    // only set the content type if the first time, or allow replacing the existing value
+                    self.content_type = value.to_owned();
+                }
+            },
             "content-length" => {
-                let val = value.parse::<u64>();
-                if let Ok(valid_len) = val {
+                if self.content_length.is_some() && !allow_replace {
+                    // if the content length has been set and we won't allow override, we're done
+                    return;
+                }
+
+                if let Ok(valid_len) = value.parse::<u64>() {
                     self.content_length = Some(value.to_owned());
                 } else {
                     panic!("Content length must be a valid string from u64, but provided with: {}", value);
                 }
             },
             "connection" => {
-                if value.to_lowercase().eq("keep-alive") && self.can_keep_alive {
+                if self.keep_alive && !allow_replace {
+                    // if already toggled to keep alive and don't allow override, we're done
+                    return;
+                }
+
+                if (&value.to_lowercase()[..]).eq("keep-alive") && self.can_keep_alive {
                     self.keep_alive = true;
                 } else {
                     self.keep_alive = false;
                 }
             },
             _ => {
-                self.header.add(&key[..], value.to_owned(), replace);
+                self.header.add(field, value.to_owned(), allow_replace);
             },
         };
+    }
+
+    /// set_header is a sugar to the `header` API, and it's created to simplify the majority of the
+    /// use cases for setting the response header.
+    ///
+    /// By default, the field-value pair will be set to the response header, and override any existing
+    /// pairs if they've been set prior to the API call.
+    ///
+    /// # Examples
+    /// resp.set_header("Content-Type", "application/javascript");
+    /// assert!(resp.get_header("Content-Type").unwrap(), &String::from("application/javascript"));
+    #[inline]
+    fn set_header(&mut self, field: &str, value: &str) {
+        self.header(field, value, true);
     }
 
     fn send(&mut self, content: &str) {
