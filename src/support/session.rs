@@ -42,7 +42,6 @@
 //!
 //!     let data = Data { token: 'abcde12345' };
 //!     session.set_data(data);
-//!     session.save();  // make sure to save the session before going out of the scope
 //!
 //!     ...
 //!
@@ -107,6 +106,7 @@ pub struct Session {
     auto_renewal: bool,
     expires_at: chrono::DateTime<Utc>,
     store: Box<String>,
+    is_dirty: bool,
 }
 
 impl SessionData for Session {
@@ -137,6 +137,7 @@ impl Clone for Session {
             expires_at: self.expires_at.clone(),
             auto_renewal: self.auto_renewal,
             store: self.store.clone(),
+            is_dirty: self.is_dirty,
         }
     }
 }
@@ -150,10 +151,12 @@ pub trait SessionExchange {
 }
 
 impl SessionExchange for Session {
+    #[inline]
     fn create_new() -> Option<Self> {
         new_session("")
     }
 
+    #[inline]
     fn create_new_with_id(id: &str) -> Option<Self> {
         new_session(id)
     }
@@ -281,12 +284,13 @@ pub trait SessionHandler<T: SessionData> {
     fn get_id(&self) -> String;
     fn get_data(&self) -> Option<T>;
     fn set_data(&mut self, val: T);
-    fn auto_lifetime_renew(&mut self, auto_renewal: bool);
+    fn lifetime_auto_renew(&mut self, auto_renewal: bool);
     fn expires_at(&mut self, expires_at: DateTime<Utc>);
     fn save(&mut self);
 }
 
 impl<T: SessionData> SessionHandler<T> for Session {
+    #[inline]
     fn get_id(&self) -> String {
         self.id.to_owned()
     }
@@ -299,28 +303,43 @@ impl<T: SessionData> SessionHandler<T> for Session {
         }
     }
 
-    // Set new session key-value pair, returns the old value if the key
-    // already exists
+    /// Set new session key-value pair, returns the old value if the key
+    /// already exists
     fn set_data(&mut self, val: T) {
         self.store = Box::new(val.serialize());
+        self.is_dirty = true;
     }
 
-    fn auto_lifetime_renew(&mut self, auto_renewal: bool) {
+    fn lifetime_auto_renew(&mut self, auto_renewal: bool) {
         self.auto_renewal = auto_renewal;
+        self.is_dirty = true;
     }
 
-    // Set the expires system time. This will turn off auto session life time
-    // renew if it's set.
+    /// Set the expires system time. This will turn off auto session life time
+    /// renew if it's set.
     fn expires_at(&mut self, expires_time: DateTime<Utc>) {
         if self.auto_renewal {
             self.auto_renewal = false;
         }
 
         self.expires_at = expires_time;
+        self.is_dirty = true;
     }
 
+    /// Manually save the session to the store. Normally when the session object goes out of the scope,
+    /// it will be automatically saved to the session-store if it has been updated. Though we still
+    /// provide this API to provide more flexibility towards session handling.
     fn save(&mut self) {
         save(self.id.to_owned(), self);
+        self.is_dirty = false;
+    }
+}
+
+impl Drop for Session {
+    fn drop(&mut self) {
+        if self.is_dirty {
+            save(self.id.to_owned(), self);
+        }
     }
 }
 
@@ -446,6 +465,7 @@ fn new_session(id: &str) -> Option<Session> {
         expires_at: get_next_expiration(&Utc::now()),
         auto_renewal: true,
         store: Box::new(String::new()),
+        is_dirty: false,
     };
 
     if let Ok(mut store) = STORE.write() {
@@ -547,6 +567,7 @@ fn rebuild_session(
         expires_at,
         auto_renewal,
         store,
+        is_dirty: false,
     });
 }
 
