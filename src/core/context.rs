@@ -7,7 +7,12 @@ lazy_static! {
     static ref CONTEXT: RwLock<Box<ServerContextProvider>> = RwLock::new(Box::new(EmptyContext {}));
 }
 
-pub type ServerContextProvider = ContextProvider + Sync + Send + 'static;
+pub type ServerContextProvider = ContextProvider + Sync + Send;
+
+pub trait ContextProvider {
+    fn update(&mut self, req: &Box<Request>, resp: &mut Box<Response>) -> Result<(), &'static str>;
+    fn process(&self, req: &Box<Request>, resp: &mut Box<Response>) -> Result<(), &'static str>;
+}
 
 pub fn set_context(context: Box<ServerContextProvider>) {
     if let Ok(mut c) = CONTEXT.write() {
@@ -29,11 +34,6 @@ pub fn process_with_context(req: &Box<Request>, resp: &mut Box<Response>) -> Res
     }
 
     Err("Unable to lock and process the response with the context")
-}
-
-pub trait ContextProvider {
-    fn update(&mut self, req: &Box<Request>, resp: &mut Box<Response>) -> Result<(), &'static str>;
-    fn process(&self, req: &Box<Request>, resp: &mut Box<Response>) -> Result<(), &'static str>;
 }
 
 struct EmptyContext;

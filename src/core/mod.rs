@@ -1,5 +1,5 @@
+pub(crate) mod connection;
 pub mod config;
-pub mod connection;
 pub mod cookie;
 pub mod http;
 pub mod router;

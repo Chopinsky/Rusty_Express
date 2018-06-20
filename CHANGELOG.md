@@ -1,7 +1,7 @@
 # 2018-06
 ## 0.3.2
 - Update 'session' module to be more robust for use with generic session data types.
-//TODO: give examples...
+- Improving documentation.
 
 ## What's new in 0.3.1
 - Fixing a few obvious bugs and improve the performance.

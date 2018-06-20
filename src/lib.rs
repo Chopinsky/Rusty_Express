@@ -34,7 +34,7 @@ mod support;
 
 pub mod prelude {
     pub use {HttpServer, ServerDef};
-    pub use core::config::{EngineContext, PageGenerator, ServerConfig, ViewEngineDefinition, ViewEngine};
+    pub use core::config::{PageGenerator, ServerConfig, ViewEngineDefinition, ViewEngine};
     pub use core::context::ContextProvider;
     pub use core::context as ServerContext;
     pub use core::cookie::*;
@@ -117,6 +117,7 @@ impl HttpServer {
         self.states.ack_to_terminate();
     }
 
+    #[inline]
     pub fn drop_session_auto_clean(&mut self) {
         self.states.drop_session_auto_clean();
     }
@@ -128,7 +129,7 @@ fn start_with(
         config: &ServerConfig,
         server_states: &ServerStates) {
 
-    let workers_pool = ThreadPool::new(config.pool_size);
+    let mut workers_pool = ThreadPool::new(config.pool_size);
     shared_pool::initialize_with(vec![config.pool_size]);
 
     let read_timeout = Some(Duration::from_millis(config.read_timeout as u64));

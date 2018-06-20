@@ -84,11 +84,11 @@ impl ServerConfig {
     }
 }
 
-pub type ViewEngine = fn(&mut Box<String>, Box<EngineContext>) -> u16;
+pub type ViewEngine = fn(&mut Box<String>, Box<Send + Sync>) -> u16;
 
-pub struct EngineContext {
-    store: HashMap<String, Vec<String>>,
-}
+//pub struct EngineContext {
+//    store: HashMap<String, Vec<String>>,
+//}
 
 //TODO: impl EngineContext's getter/setter, with the converter trait for the actual context data
 
@@ -107,20 +107,22 @@ impl ViewEngineDefinition for ServerConfig {
 }
 
 pub trait ViewEngineParser {
-    fn template_parser(extension: &str, content: &mut Box<String>, context: Box<EngineContext>) -> u16;
+    fn template_parser<T: Send + Sync + 'static>(extension: &str, content: &mut Box<String>, context: Box<T>) -> u16;
 }
 
 impl ViewEngineParser for ServerConfig {
-    fn template_parser(extension: &str, content: &mut Box<String>, context: Box<EngineContext>) -> u16 {
+    fn template_parser<T: Send + Sync + 'static>(extension: &str, content: &mut Box<String>, context: Box<T>) -> u16 {
         if extension.is_empty() { return 0; }
 
         if let Ok(template_engines) = VIEW_ENGINES.read() {
             if let Some(engine) = template_engines.get(extension) {
                 return engine(content, context);
+            } else {
+                return 404;
             }
         }
 
-        return 0;
+        500
     }
 }
 

@@ -16,7 +16,7 @@ use std::thread;
 use chrono::prelude::*;
 use super::cookie::*;
 use super::router::REST;
-use super::config::{EngineContext, PageGenerator, ServerConfig, ViewEngine, ViewEngineParser};
+use super::config::{PageGenerator, ServerConfig, ViewEngine, ViewEngineParser};
 use support::{common::MapUpdates, common::write_to_buff, common::flush_buffer, debug, shared_pool, TaskType};
 
 static FOUR_OH_FOUR: &'static str = include_str!("../default/404.html");
@@ -360,7 +360,7 @@ pub trait ResponseWriter {
     fn send(&mut self, content: &str);
     fn send_file(&mut self, file_path: &str) -> u16;
     fn send_file_async(&mut self, file_loc: &str);
-    fn send_template(&mut self, file_path: &str, context: Box<EngineContext>) -> u16;
+    fn send_template<T: Send + Sync + 'static>(&mut self, file_path: &str, context: Box<T>) -> u16;
     fn set_cookie(&mut self, cookie: Cookie);
     fn set_cookies(&mut self, cookie: &[Cookie]);
     fn clear_cookies(&mut self);
@@ -505,11 +505,11 @@ impl ResponseWriter for Response {
         }
     }
 
-    fn send_template(&mut self, file_loc: &str, context: Box<EngineContext>) -> u16 {
+    fn send_template<T: Send + Sync + 'static>(&mut self, file_path: &str, context: Box<T>) -> u16 {
         if self.is_header_only() { return 200; }
-        if file_loc.is_empty() { return 404; }
+        if file_path.is_empty() { return 404; }
 
-        if let Some(path) = get_file_path(file_loc) {
+        if let Some(path) = get_file_path(file_path) {
             if !path.is_file() { return 404; }
 
             let mut ext = String::new();

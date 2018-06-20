@@ -1,16 +1,16 @@
-mod threads;
+mod scheduler;
 mod route_trie;
 
 #[cfg(feature = "session")]
 pub mod session;
 
-pub mod common;
-pub mod debug;
-pub mod shared_pool {
-    pub use support::threads::{close, initialize_with, run};
+pub(crate) mod common;
+pub(crate) mod debug;
+pub(crate) mod shared_pool {
+    pub(crate) use support::scheduler::{close, initialize_with, run};
 }
 
-pub use self::threads::TaskType;
-pub use self::route_trie::*;
-pub use self::threads::ThreadPool;
+pub(crate) use self::route_trie::*;
+pub(crate) use self::scheduler::TaskType;
+pub(crate) use self::scheduler::ThreadPool;
 

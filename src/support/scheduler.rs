@@ -32,7 +32,7 @@ pub struct ThreadPool {
 }
 
 impl ThreadPool {
-    pub fn new(size: usize) -> ThreadPool {
+    pub(crate) fn new(size: usize) -> ThreadPool {
         let pool_size = match size {
             _ if size < 1 => 1,
             _ => size,
@@ -54,8 +54,10 @@ impl ThreadPool {
         }
     }
 
-    pub fn execute<F>(&self, f: F) where F: FnOnce() + Send + 'static {
+    pub(crate) fn execute<F>(&mut self, f: F) where F: FnOnce() + Send + 'static {
         let job = Box::new(f);
+
+        //TODO: switching to mpmc, and check sender.len() to determine if we need to add more workers
 
         if let Ok(sender) = self.sender.lock() {
             if let Err(err) = sender.send(Message::NewJob(job)) {
@@ -65,7 +67,7 @@ impl ThreadPool {
         }
     }
 
-    pub fn clear(&mut self) {
+    pub(crate) fn clear(&mut self) {
         if let Ok(sender) = self.sender.lock() {
             for _ in &mut self.workers {
                 sender.send(Message::Terminate).unwrap_or_else(|err| {
@@ -135,7 +137,7 @@ pub enum TaskType {
 static ONCE: Once = ONCE_INIT;
 static mut POOL: Option<Pool> = None;
 
-pub fn initialize_with(sizes: Vec<usize>) {
+pub(crate) fn initialize_with(sizes: Vec<usize>) {
     unsafe {
         ONCE.call_once(|| {
             let pool_sizes: Vec<usize> = sizes.iter().map(|val| {
@@ -163,10 +165,10 @@ pub fn initialize_with(sizes: Vec<usize>) {
     }
 }
 
-pub fn run<F>(f: F, task: TaskType)
+pub(crate) fn run<F>(f: F, task: TaskType)
     where F: FnOnce() + Send + 'static {
     unsafe {
-        if let Some(ref pool) = POOL {
+        if let Some(ref mut pool) = POOL {
             // if pool has been created
             match task {
                 TaskType::Request => {
@@ -185,7 +187,7 @@ pub fn run<F>(f: F, task: TaskType)
     }
 }
 
-pub fn close() {
+pub(crate) fn close() {
     unsafe {
         if let Some(mut pool) = POOL.take() {
             pool.req_workers.clear();
