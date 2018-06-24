@@ -84,13 +84,45 @@ impl ServerConfig {
     }
 }
 
-pub type ViewEngine = fn(&mut Box<String>, Box<Send + Sync>) -> u16;
+/// Function type alias `ViewEngine` represents the function signature required for the external
+/// view engine framework to be used in the Rusty_Express. Each engine shall be specific to handle one
+/// type of html-template. The 1st parameter represents the raw template content in string format,
+/// while the 2nd parameter represents the rendering context -- the information required to render
+/// the template into customisable webpage.
+pub type ViewEngine = fn(&mut Box<String>, Box<EngineContext + Send + Sync>) -> u16;
 
-//pub struct EngineContext {
-//    store: HashMap<String, Vec<String>>,
-//}
-
-//TODO: impl EngineContext's getter/setter, with the converter trait for the actual context data
+/// In order to streamline the way to supply rendering context information to the underlying template
+/// engines, the `EngineContext` trait is required to be implemented by the `ViewEngine` framework's
+/// data model objects. However, the framework can choose other means to obtain context info, under
+/// which case, the `display` function can be no-op (i.e. always return empty string wrapped in Ok()
+/// as the return value)
+///
+/// # Examples
+/// ```rust
+/// pub struct RenderModel {
+///     id: String,
+///     user: String,
+///     email: String,
+/// }
+///
+/// impl EngineContext for RenderModel {
+///     fn display(&self, field: &str) -> Result<String, String> {
+///         match field {
+///             "User" => Ok(self.user.to_owned()),
+///             "ID" => Ok(self.id.to_owned()),
+///             "Email" => Ok(self.email.to_owned()),
+///             _ => Err(&format!("Unable to provide information for the key: {}", field)[..]),
+///         }
+///     }
+/// }
+/// ```
+pub trait EngineContext {
+    /// `display` function should be implemented to provide the rendering context information for the
+    /// template engine. For example, if the template engine encounters something like `<p>{{msg}}</p>`,
+    /// and the `context.display("msg")` returns `Ok(String::from("A Secret Message!"))`, then the
+    /// rendered content could be `<p>A Secret Message!</p>`
+    fn display(&self, field: &str) -> Result<String, String>;
+}
 
 pub trait ViewEngineDefinition {
     fn view_engine(extension: &str, engine: ViewEngine);
@@ -107,11 +139,19 @@ impl ViewEngineDefinition for ServerConfig {
 }
 
 pub trait ViewEngineParser {
-    fn template_parser<T: Send + Sync + 'static>(extension: &str, content: &mut Box<String>, context: Box<T>) -> u16;
+    fn template_parser<T: EngineContext + Send + Sync + 'static>(
+        extension: &str,
+        content:
+        &mut Box<String>,
+        context: Box<T>) -> u16;
 }
 
 impl ViewEngineParser for ServerConfig {
-    fn template_parser<T: Send + Sync + 'static>(extension: &str, content: &mut Box<String>, context: Box<T>) -> u16 {
+    fn template_parser<T: EngineContext + Send + Sync + 'static>(
+        extension: &str,
+        content: &mut Box<String>,
+        context: Box<T>) -> u16
+    {
         if extension.is_empty() { return 0; }
 
         if let Ok(template_engines) = VIEW_ENGINES.read() {

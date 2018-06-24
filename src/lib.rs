@@ -1,6 +1,3 @@
-#![allow(deprecated)]
-#![allow(unused_variables)]
-
 //! Rusty Express is a simple server written in Rust and provide Express-alike APIs.
 //! This project aims to provide a http server solution which is easy to use, easy to
 //! scale, and is excellent on performance.
@@ -22,8 +19,10 @@
 //! }
 //! ```
 
-#[macro_use]
-extern crate lazy_static;
+#![allow(deprecated)]
+#![allow(unused_variables)]
+
+#[macro_use] extern crate lazy_static;
 extern crate regex;
 extern crate chrono;
 extern crate rand;
@@ -34,7 +33,7 @@ mod support;
 
 pub mod prelude {
     pub use {HttpServer, ServerDef};
-    pub use core::config::{PageGenerator, ServerConfig, ViewEngineDefinition, ViewEngine};
+    pub use core::config::{EngineContext, PageGenerator, ServerConfig, ViewEngineDefinition, ViewEngine};
     pub use core::context::ContextProvider;
     pub use core::context as ServerContext;
     pub use core::cookie::*;
@@ -97,9 +96,7 @@ impl HttpServer {
 
         if self.config.use_session_autoclean && !ExchangeConfig::auto_clean_is_running() {
             if let Some(duration) = self.config.get_session_auto_clean_period() {
-                if let Some(handler) = ExchangeConfig::auto_clean_start(duration) {
-                    self.states.set_session_handler(&handler);
-                }
+                self.states.set_session_handler(ExchangeConfig::auto_clean_start(duration));
             }
         }
 

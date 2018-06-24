@@ -166,7 +166,8 @@ pub(crate) fn initialize_with(sizes: Vec<usize>) {
 }
 
 pub(crate) fn run<F>(f: F, task: TaskType)
-    where F: FnOnce() + Send + 'static {
+    where F: FnOnce() + Send + 'static
+{
     unsafe {
         if let Some(ref mut pool) = POOL {
             // if pool has been created

@@ -1,8 +1,7 @@
 mod scheduler;
 mod route_trie;
 
-#[cfg(feature = "session")]
-pub mod session;
+#[cfg(feature = "session")] pub mod session;
 
 pub(crate) mod common;
 pub(crate) mod debug;

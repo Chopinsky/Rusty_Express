@@ -203,7 +203,7 @@ pub trait SessionExchangeConfig {
     fn clean();
     fn clean_up_to(lifetime: DateTime<Utc>);
     fn store_size() -> Option<usize>;
-    fn auto_clean_start(period: Duration) -> Option<Thread>;
+    fn auto_clean_start(period: Duration) -> Option<JoinHandle<()>>;
     fn auto_clean_stop();
     fn auto_clean_is_running() -> bool;
 }
@@ -245,7 +245,7 @@ impl SessionExchangeConfig for ExchangeConfig {
         }
     }
 
-    fn auto_clean_start(period: Duration) -> Option<Thread> {
+    fn auto_clean_start(period: Duration) -> Option<JoinHandle<()>> {
         if ExchangeConfig::auto_clean_is_running() {
             return None;
         }
@@ -257,16 +257,14 @@ impl SessionExchangeConfig for ExchangeConfig {
                 period
             };
 
-        let handler: JoinHandle<_> = thread::spawn(move || {
+        Some(thread::spawn(move || {
             AUTO_CLEARN.store(true, atomic::Ordering::Release);
 
             loop {
                 thread::sleep(sleep_period);
                 clean_up_to(Utc::now());
             }
-        });
-
-        Some(handler.thread().to_owned())
+        }))
     }
 
     fn auto_clean_stop() {

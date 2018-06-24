@@ -6,7 +6,7 @@ use support::session::*;
 
 pub struct ServerStates {
     going_to_shutdown: bool,
-    session_auto_clean_handler: Option<Thread>,
+    session_auto_clean_handler: Option<JoinHandle<()>>,
 }
 
 impl ServerStates {
@@ -25,14 +25,13 @@ impl ServerStates {
         self.going_to_shutdown = true;
     }
 
-    pub fn set_session_handler(&mut self, handler: &Thread) {
-        self.session_auto_clean_handler = Some(handler.to_owned());
+    pub fn set_session_handler(&mut self, handler: Option<JoinHandle<()>>) {
+        self.session_auto_clean_handler = handler;
     }
 
     pub fn drop_session_auto_clean(&mut self) {
-        if let Some(handler) = self.session_auto_clean_handler.to_owned() {
+        if let Some(handler) = self.session_auto_clean_handler.take() {
             ExchangeConfig::auto_clean_stop();
-            drop(handler);
         }
     }
 }

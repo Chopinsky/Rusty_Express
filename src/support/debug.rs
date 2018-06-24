@@ -24,10 +24,13 @@ pub fn print(info: &str, level: u8) {
     if !print_level_allowed(level) { return; }
 
     let now: DateTime<Utc> = Utc::now();
-    match level {
-        0 => println!("{}: {}\r\n", now.format("%Y-%m-%d %H:%M:%S GMT").to_string(), info),
-        _ => eprintln!("{}: {}\r\n", now.format("%Y-%m-%d %H:%M:%S GMT").to_string(), info),
-    }
+    let level_label = match level {
+        0 => String::from("info"),
+        1 => String::from("warning"),
+        _ => String::from(format!("error [{}]", level)),
+    };
+
+    println!("{}: {} at {}", level_label, now.format("%Y-%m-%d %H:%M:%S GMT").to_string(), info);
 }
 
 #[inline]
