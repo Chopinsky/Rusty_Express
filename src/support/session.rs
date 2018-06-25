@@ -359,7 +359,7 @@ impl PersistHandler for Session {
                 return false;
             };
 
-        let mut pool = ThreadPool::new(8);
+        let pool = ThreadPool::new(8);
         let (tx, rx): (mpsc::Sender<Option<Session>>, mpsc::Receiver<Option<Session>>) = mpsc::channel();
 
         let now = Utc::now();

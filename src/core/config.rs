@@ -1,6 +1,5 @@
 #![allow(unused_variables)]
 #![allow(dead_code)]
-#![allow(deprecated)]
 
 use std::collections::HashMap;
 use std::cmp;
@@ -9,7 +8,6 @@ use std::time::Duration;
 
 use chrono;
 use num_cpus;
-use super::states::StatesInteraction;
 use support::common::*;
 
 //TODO: load config from file, e.g. config.toml
@@ -44,11 +42,6 @@ impl ServerConfig {
     #[inline]
     pub fn get_meta_data(&self) -> ConnMetadata {
         self.meta_data.to_owned()
-    }
-
-    #[inline]
-    pub fn set_managed_state_interaction(&mut self, interaction: StatesInteraction) {
-        self.meta_data.set_state_interaction(interaction);
     }
 
     pub fn use_default_header(&mut self, header: HashMap<String, String>) {
@@ -171,7 +164,6 @@ pub type PageGenerator = fn() -> String;
 pub struct ConnMetadata {
     header: Box<HashMap<String, String>>,
     status_page_generators: Arc<Box<HashMap<u16, PageGenerator>>>,
-    state_interaction: StatesInteraction,
 }
 
 impl ConnMetadata {
@@ -179,7 +171,6 @@ impl ConnMetadata {
         ConnMetadata {
             header: Box::new(HashMap::new()),
             status_page_generators: Arc::new(Box::new(HashMap::new())),
-            state_interaction: StatesInteraction::None,
         }
     }
 
@@ -192,18 +183,6 @@ impl ConnMetadata {
     pub fn get_status_pages(&self) -> Arc<Box<HashMap<u16, PageGenerator>>> {
         Arc::clone(&self.status_page_generators)
     }
-
-    #[inline]
-    #[deprecated(since = "0.3.0", note = "This feature will be removed in 0.3.3")]
-    pub fn set_state_interaction(&mut self, interaction: StatesInteraction) {
-        self.state_interaction = interaction;
-    }
-
-    #[inline]
-    #[deprecated(since = "0.3.0", note = "This feature will be removed in 0.3.3")]
-    pub fn get_state_interaction(&self) -> &StatesInteraction {
-        &self.state_interaction
-    }
 }
 
 impl Clone for ConnMetadata {
@@ -211,7 +190,6 @@ impl Clone for ConnMetadata {
         ConnMetadata {
             header: self.header.clone(),
             status_page_generators: self.status_page_generators.clone(),
-            state_interaction: self.state_interaction.clone(),
         }
     }
 }

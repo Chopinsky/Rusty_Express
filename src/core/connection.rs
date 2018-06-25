@@ -102,7 +102,7 @@ fn handle_response(stream: TcpStream, callback: Callback,
                    metadata: &Arc<ConnMetadata>) -> Option<u8> {
 
     match request.header("connection") {
-        Some(ref val) if val.to_lowercase().eq("close") => response.can_keep_alive(false),
+        Some(ref val) if val.eq(&String::from("close")) => response.can_keep_alive(false),
         _ => response.can_keep_alive(true),
     };
 
@@ -276,7 +276,7 @@ fn parse_request_base(line: &str, req: &mut Box<Request>, router: Arc<Route>)
                     "OPTIONS" => REST::OPTIONS,
                     _ => {
                         let others = info.to_uppercase();
-                        if others.eq("HEADER") {
+                        if others.eq(&String::from("HEADER")) {
                             header_only = true;
                         }
 

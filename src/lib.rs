@@ -27,9 +27,10 @@ extern crate regex;
 extern crate chrono;
 extern crate rand;
 extern crate num_cpus;
+extern crate crossbeam_channel as channel;
 
-mod core;
-mod support;
+pub(crate) mod core;
+pub(crate) mod support;
 
 pub mod prelude {
     pub use {HttpServer, ServerDef};
@@ -39,17 +40,20 @@ pub mod prelude {
     pub use core::cookie::*;
     pub use core::http::{Request, RequestWriter, Response, ResponseStates, ResponseWriter};
     pub use core::router::{REST, Route, Router, RequestPath};
+    pub use core::states::ControlMessage;
 
     #[cfg(feature = "session")]
     pub use support::session::*;
 }
 
 use std::collections::HashMap;
-use std::net::{SocketAddr, Shutdown, TcpListener, TcpStream};
-use std::sync::{Arc, RwLock};
+use std::net::{SocketAddr, TcpListener, TcpStream};
+use std::sync::Arc;
 use std::time::Duration;
+use std::thread;
 
-use core::config::{ServerConfig, ViewEngineDefinition, ViewEngine};
+use channel::Sender;
+use core::config::{ConnMetadata, ServerConfig, ViewEngineDefinition, ViewEngine};
 use core::connection::*;
 use core::router::*;
 use core::states::*;
@@ -84,34 +88,65 @@ impl HttpServer {
         }
     }
 
+    /// `listen` will take 1 parameter for the port that the server will be monitoring at, aka
+    /// `127.0.0.1:port`. This function will block until the server is shut down.
     pub fn listen(&mut self, port: u16) {
-        debug::initialize();
+        // delegate the actual work to the more robust routine.
+        self.listen_and_serve(port, |sender: Sender<ControlMessage>| {});
+    }
 
+    pub fn listen_and_serve(&mut self, port: u16, callback: fn(channel::Sender<ControlMessage>)) {
+        debug::initialize();
+        println!("Listening for connections on port {}", port);
+
+        // create the listener
         let server_address = SocketAddr::from(([127, 0, 0, 1], port));
         let listener = TcpListener::bind(server_address).unwrap_or_else(|err| {
             panic!("Unable to start the http server: {}...", err);
         });
 
-        println!("Listening for connections on port {}", port);
-
+        // if using the session module and allow auto clean up, launch the service now.
         if self.config.use_session_autoclean && !ExchangeConfig::auto_clean_is_running() {
             if let Some(duration) = self.config.get_session_auto_clean_period() {
                 self.states.set_session_handler(ExchangeConfig::auto_clean_start(duration));
             }
         }
 
-        start_with(&listener, &self.router, &self.config, &self.states);
+        // obtain the control message courier service and start the callback
+        let sender = self.states.get_courier_sender();
+        let control_handler = thread::spawn(move || {
+            // sleep 100 ms to avoid racing with the main server before it's ready to take control messages.
+            thread::sleep(Duration::from_millis(100));
+            callback(sender);
+        });
+
+        // launch the service, now this will block until the server is shutdown
+        shared_pool::initialize_with(vec![self.config.pool_size]);
+        launch(&listener, &self.router, &self.config, &self.states);
+
+        // start to shut down the TcpListener
         println!("Shutting down...");
+
+        // must close the shared pool, since it's a static and won't drop with the end of the server,
+        // which could cause response executions still on-the-fly to crash.
+        shared_pool::close();
+
+        // now terminate the callback function as well.
+        control_handler.join().unwrap_or_else(|err| {
+            debug::print("Failed to shut down the callback handler, the service is teared down correctly", 1);
+        });
     }
 
-    #[deprecated(since = "0.3.0", note = "This feature will be removed in 0.3.3")]
-    pub fn listen_and_manage<T: Send + Sync + Clone + StatesProvider + 'static>(&mut self, port: u16, state: Arc<RwLock<T>>) {
-        self.listen(port);
-    }
-
+    #[deprecated(since="0.3.3", note="use server courier to send the termination message instead.")]
     pub fn try_to_terminate(&mut self) {
         debug::print("Requested to shutdown...", 0);
         self.states.ack_to_terminate();
+    }
+
+    #[inline]
+    #[must_use]
+    pub fn get_courier(&self) -> channel::Sender<ControlMessage> {
+        self.states.get_courier_sender()
     }
 
     #[inline]
@@ -120,15 +155,13 @@ impl HttpServer {
     }
 }
 
-fn start_with(
-        listener: &TcpListener,
-        router: &Route,
-        config: &ServerConfig,
-        server_states: &ServerStates) {
-
-    let mut workers_pool = ThreadPool::new(config.pool_size);
-    shared_pool::initialize_with(vec![config.pool_size]);
-
+fn launch(
+    listener: &TcpListener,
+    router: &Route,
+    config: &ServerConfig,
+    server_states: &ServerStates)
+{
+    let workers_pool = ThreadPool::new(config.pool_size);
     let read_timeout = Some(Duration::from_millis(config.read_timeout as u64));
     let write_timeout = Some(Duration::from_millis(config.write_timeout as u64));
 
@@ -136,30 +169,48 @@ fn start_with(
     let meta_arc = Arc::new(config.get_meta_data());
 
     for stream in listener.incoming() {
-        if let Ok(s) = stream {
-            if server_states.is_terminating() {
-                // Told to close the connection, shut down the socket now.
-                &s.shutdown(Shutdown::Both).unwrap_or_else(|e| {
-                    debug::print(&format!("Unable to shut down the stream: {}", e)[..], 1);
-                });
+        match stream {
+            Ok(s) => handle_stream(s, &router, &meta_arc, &workers_pool, read_timeout, write_timeout),
+            Err(e) => debug::print(&format!("Failed to receive the upcoming stream: {}", e)[..], 1),
+        }
 
-                break;
-            }
-
-            // clone Arc-pointers
-            let router_ptr = Arc::clone(&router);
-            let meta_ptr = Arc::clone(&meta_arc);
-
-            workers_pool.execute(move || {
-                set_timeout(&s, read_timeout, write_timeout);
-                handle_connection(s, router_ptr, meta_ptr);
-            });
+        if to_terminate(server_states) {
+            // Told to close the connection, shut down the socket now after finishing the last serve.
+            break;
         }
     }
+}
 
-    // must close the shared pool, since it's a static and won't drop with the end of the server,
-    // which could cause response executions still on-the-fly to crash.
-    shared_pool::close();
+fn handle_stream(
+    stream: TcpStream,
+    router: &Arc<Route>,
+    meta: &Arc<ConnMetadata>,
+    workers_pool: &ThreadPool,
+    read_timeout: Option<Duration>,
+    write_timeout: Option<Duration>)
+{
+    // clone Arc-pointers
+    let router_ptr = Arc::clone(&router);
+    let meta_ptr = Arc::clone(&meta);
+
+    workers_pool.execute(move || {
+        set_timeout(&stream, read_timeout, write_timeout);
+        handle_connection(stream, router_ptr, meta_ptr);
+    });
+}
+
+fn to_terminate(server_states: &ServerStates) -> bool {
+    if let Some(message) = server_states.courier_try_recv() {
+        match message {
+            ControlMessage::Terminate => true,
+            ControlMessage::Custom(content) => {
+                println!("The message: {} is not yet supported.", content);
+                false
+            },
+        }
+    } else {
+        false
+    }
 }
 
 fn set_timeout(stream: &TcpStream, read: Option<Duration>, write: Option<Duration>) {

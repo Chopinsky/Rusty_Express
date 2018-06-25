@@ -54,7 +54,7 @@ impl ThreadPool {
         }
     }
 
-    pub(crate) fn execute<F>(&mut self, f: F) where F: FnOnce() + Send + 'static {
+    pub(crate) fn execute<F>(&self, f: F) where F: FnOnce() + Send + 'static {
         let job = Box::new(f);
 
         //TODO: switching to mpmc, and check sender.len() to determine if we need to add more workers

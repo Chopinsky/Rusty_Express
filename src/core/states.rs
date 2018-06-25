@@ -1,10 +1,17 @@
 #![allow(unused_variables)]
+#![allow(dead_code)]
 
 use std::thread::*;
-use super::http::{Request, Response};
+use channel;
 use support::session::*;
 
+pub enum ControlMessage {
+    Terminate,
+    Custom(String),
+}
+
 pub struct ServerStates {
+    courier_channel: (channel::Sender<ControlMessage>, channel::Receiver<ControlMessage>),
     going_to_shutdown: bool,
     session_auto_clean_handler: Option<JoinHandle<()>>,
 }
@@ -12,8 +19,9 @@ pub struct ServerStates {
 impl ServerStates {
     pub fn new() -> Self {
         ServerStates {
+            courier_channel: channel::bounded(1),
             going_to_shutdown: false,
-            session_auto_clean_handler: None
+            session_auto_clean_handler: None,
         }
     }
 
@@ -34,53 +42,14 @@ impl ServerStates {
             ExchangeConfig::auto_clean_stop();
         }
     }
-}
 
-#[derive(PartialEq, Eq, Clone, Copy)]
-#[deprecated(since = "0.3.0", note = "This feature will be removed in 0.3.3")]
-pub enum StatesInteraction {
-    WithRequest,
-    WithResponse,
-    Both,
-    None,
-}
-
-#[deprecated(since = "0.3.0", note = "This feature will be removed in 0.3.3")]
-pub type RequireStateUpdates = bool;
-
-#[deprecated(since = "0.3.0", note = "This feature will be removed in 0.3.3")]
-pub trait StatesProvider {
-    fn interaction_stage(&self) -> StatesInteraction;
-    fn on_request(&self, req: &mut Box<Request>) -> RequireStateUpdates;
-    fn on_response(&self, resp: &mut Box<Response>) -> RequireStateUpdates;
-    fn update(&mut self, req: &Box<Request>, resp: Option<&Box<Response>>);
-}
-
-#[deprecated(since = "0.3.0", note = "This feature will be removed in 0.3.3")]
-pub struct EmptyState {}
-
-#[deprecated(since = "0.3.0", note = "This feature will be removed in 0.3.3")]
-impl Clone for EmptyState {
-    fn clone(&self) -> Self { EmptyState {} }
-}
-
-#[deprecated(since = "0.3.0", note = "This feature will be removed in 0.3.3")]
-impl StatesProvider for EmptyState {
     #[inline]
-    fn interaction_stage(&self) -> StatesInteraction {
-        StatesInteraction::None
+    pub(crate) fn get_courier_sender(&self) -> channel::Sender<ControlMessage> {
+        channel::Sender::clone(&self.courier_channel.0)
     }
 
     #[inline]
-    fn on_request(&self, req: &mut Box<Request>) -> RequireStateUpdates {
-        false
+    pub(crate) fn courier_try_recv(&self) -> Option<ControlMessage> {
+        self.courier_channel.1.try_recv()
     }
-
-    #[inline]
-    fn on_response(&self, resp: &mut Box<Response>) -> RequireStateUpdates {
-        false
-    }
-
-    #[inline]
-    fn update(&mut self, req: &Box<Request>, resp: Option<&Box<Response>>) { }
 }

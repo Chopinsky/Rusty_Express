@@ -4,6 +4,8 @@
 extern crate rusty_express;
 
 use rusty_express::prelude::*;
+use std::thread;
+use std::time::Duration;
 
 fn main() {
     // define http server now
@@ -21,7 +23,13 @@ fn main() {
           .get(RequestPath::Explicit("/index"), Model::simple_index);
 
     server.def_router(router);
-    server.listen(8080);
+
+    //server.listen(8080);
+    server.listen_and_serve(8080, |sender| {
+        // automatically shutting down after 60 seconds
+        thread::sleep(Duration::from_secs(60));
+        sender.send(ControlMessage::Terminate);
+    });
 }
 
 struct Model {

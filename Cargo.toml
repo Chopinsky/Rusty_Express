@@ -4,7 +4,7 @@ description = "A simple http server library written in Rust and provide Express-
 readme = "README.md"
 documentation = "https://docs.rs/rusty_express/"
 repository = "https://github.com/Chopinsky/Rusty_Express.git"
-version = "0.3.2"
+version = "0.3.3"
 authors = ["Jacob Zuo <chopinsky@live.com>"]
 license = "MIT"
 
@@ -18,3 +18,4 @@ chrono = "^0.4"
 lazy_static = "^1.0"
 rand = "^0.4"
 num_cpus = "^1.8"
+crossbeam-channel = "^0.2.0"
