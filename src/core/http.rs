@@ -21,8 +21,10 @@ use support::{common::*, debug, shared_pool, TaskType};
 static FOUR_OH_FOUR: &'static str = include_str!("../default/404.html");
 static FOUR_OH_ONE: &'static str = include_str!("../default/401.html");
 static FIVE_HUNDRED: &'static str = include_str!("../default/500.html");
-static VERSION: &'static str = "0.3.0";
-static TIMEOUT: Duration = Duration::from_millis(64);
+static VERSION: &'static str = "0.3.3";
+
+static RESP_TIMEOUT: Duration = Duration::from_millis(64);
+static LONG_CONN_TIMEOUT: Duration = Duration::from_secs(8);
 
 //TODO: internal registered cache?
 
@@ -248,7 +250,7 @@ impl Response {
         }
 
         if let Some(rx) = receiver {
-            if let Ok(content) = rx.recv_timeout(TIMEOUT) {
+            if let Ok(content) = rx.recv_timeout(RESP_TIMEOUT) {
                 if !content.is_empty() {
                     header.push_str(&content);
                 }
@@ -595,12 +597,12 @@ impl ResponseWriter for Response {
     }
 }
 
-pub trait ResponseManager {
+pub(crate) trait ResponseManager {
     fn header_only(&mut self, header_only: bool);
     fn validate_and_update(&mut self, fallback: &HashMap<u16, PageGenerator>);
     fn write_header(&self, buffer: &mut BufWriter<&TcpStream>);
     fn write_body(&self, buffer: &mut BufWriter<&TcpStream>);
-    fn write_trunked_body(&mut self, clone: TcpStream, buffer: &mut BufWriter<&TcpStream>);
+    fn keep_long_conn(&mut self, clone: TcpStream, buffer: &mut BufWriter<&TcpStream>);
 }
 
 impl ResponseManager for Response {
@@ -671,16 +673,15 @@ impl ResponseManager for Response {
         }
     }
 
-    fn write_trunked_body(&mut self, stream_clone: TcpStream, buffer: &mut BufWriter<&TcpStream>) {
+    fn keep_long_conn(&mut self, stream_clone: TcpStream, buffer: &mut BufWriter<&TcpStream>) {
         if self.has_contents() {
             // the content length should have been set in the header, see function resp_header
             stream_trunk(&self.body, buffer);
         }
 
         // set read time-out to 16 seconds
-        if let Err(e) = stream_clone.set_read_timeout(Some(Duration::from_secs(16))) {
-            debug::print(
-                &format!("Failed to establish a reading channel on a keep-alive stream: {}", e), 1);
+        if let Err(e) = stream_clone.set_read_timeout(Some(LONG_CONN_TIMEOUT)) {
+            debug::print(&format!("Failed to establish a reading channel on a keep-alive stream: {}", e), 1);
             return;
         }
 
@@ -689,10 +690,9 @@ impl ResponseManager for Response {
             broadcast_new_communications( Arc::new(Mutex::new(sub.0)), stream_clone);
         }
 
-        let timeout = Duration::from_secs(16);
         if let Some(ref notifier) = self.notifier {
             // listen to any replies from the server routes
-            for reply in notifier.1.recv_timeout(timeout) {
+            for reply in notifier.1.recv_timeout(LONG_CONN_TIMEOUT) {
                 stream_trunk(&reply, buffer);
                 if reply.is_empty() {
                     // if a 0-length reply, then we're done after the reply and shall break out
@@ -827,7 +827,7 @@ fn get_status(status: u16) -> String {
             204 => "204 No Content",
             205 => "205 Reset Content",
             206 => "206 Partial Content",
-            300 => "Multiple Choices",
+            300 => "300 Multiple Choices",
             301 => "301 Moved Permanently",
             302 => "302 Found",
             303 => "303 See Other",

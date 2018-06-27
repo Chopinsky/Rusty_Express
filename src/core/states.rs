@@ -3,10 +3,14 @@
 
 use std::thread::*;
 use channel;
+use super::config::ServerConfig;
+use super::router::Route;
 use support::session::*;
 
 pub enum ControlMessage {
     Terminate,
+    HotLoadRouter(Route),
+    HotLoadConfig(ServerConfig),
     Custom(String),
 }
 

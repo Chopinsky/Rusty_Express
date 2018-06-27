@@ -46,14 +46,14 @@ pub fn write_to_buff(buffer: &mut BufWriter<&TcpStream>, content: &[u8]) {
     }
 }
 
-pub fn flush_buffer(buffer: &mut BufWriter<&TcpStream>) -> Option<u8> {
+pub fn flush_buffer(buffer: &mut BufWriter<&TcpStream>) -> u8 {
     if let Err(err) = buffer.flush() {
         debug::print(
             &format!("An error has taken place when flushing the response to the stream: {}", err)[..],
             1);
 
-        return Some(1)
+        return 1
     }
 
-    Some(0)
+    0
 }

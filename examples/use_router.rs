@@ -25,11 +25,11 @@ fn main() {
     server.def_router(router);
 
     //server.listen(8080);
-    server.listen_and_serve(8080, |sender| {
+    server.listen_and_serve(8080, Some(|sender| {
         // automatically shutting down after 60 seconds
         thread::sleep(Duration::from_secs(60));
         sender.send(ControlMessage::Terminate);
-    });
+    }));
 }
 
 struct Model {

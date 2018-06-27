@@ -14,12 +14,14 @@ use super::router::{AuthFunc, Callback, REST, Route, RouteHandler};
 use support::{common::write_to_buff, common::flush_buffer, debug, shared_pool, TaskType};
 
 static HEADER_END: [u8; 2] = [13, 10];
+type ExecCode = u8;
 
 #[derive(PartialEq, Eq, Clone, Copy)]
-enum ParseError {
-    EmptyRequestErr,
-    ReadStreamErr,
+enum ConnError {
+    EmptyRequest,
+    ReadStreamFailure,
     AccessDenied,
+    ServiceUnavailable,
 }
 
 //TODO: switch 'mpsc' to 'crossbeam-channel' 
@@ -78,17 +80,26 @@ enum ParseError {
 //    result
 //}
 
-pub fn handle_connection(
-        stream: TcpStream,
-        router: Arc<Route>,
-        metadata: Arc<ConnMetadata>) -> Option<u8> {
+pub(crate) fn handle_connection(
+    stream: TcpStream,
+    router: Arc<Route>,
+    metadata: Arc<ConnMetadata>
+) -> ExecCode {
 
     let mut request= Box::new(Request::new());
 
     let handler = match handle_request(&stream, &mut request, router) {
         Err(err) => {
             debug::print("Error on parsing request", 3);
-            return write_to_stream(&stream, &mut build_err_response(&err, &metadata));
+
+            let status: u16 = match err {
+                ConnError::EmptyRequest => 400,
+                ConnError::AccessDenied => 401,
+                ConnError::ServiceUnavailable => 404,
+                ConnError::ReadStreamFailure => 500,
+            };
+
+            return write_to_stream(&stream, &mut build_err_response(status, &metadata));
         },
         Ok(cb) => cb,
     };
@@ -97,9 +108,15 @@ pub fn handle_connection(
                     &mut initialize_response(&metadata), &metadata)
 }
 
-fn handle_response(stream: TcpStream, callback: Callback,
-                   request: &Box<Request>, response: &mut Box<Response>,
-                   metadata: &Arc<ConnMetadata>) -> Option<u8> {
+pub(crate) fn send_err_resp(stream: TcpStream, err_code: u16, metadata: Arc<ConnMetadata>) -> ExecCode {
+    return write_to_stream(&stream, &mut build_err_response(err_code, &metadata));
+}
+
+fn handle_response(
+    stream: TcpStream, callback: Callback,
+    request: &Box<Request>, response: &mut Box<Response>,
+    metadata: &Arc<ConnMetadata>
+) -> ExecCode {
 
     match request.header("connection") {
         Some(ref val) if val.eq(&String::from("close")) => response.can_keep_alive(false),
@@ -124,7 +141,7 @@ fn initialize_response(metadata: &Arc<ConnMetadata>) -> Box<Response> {
     }
 }
 
-fn write_to_stream(stream: &TcpStream, response: &mut Box<Response>) -> Option<u8> {
+fn write_to_stream(stream: &TcpStream, response: &mut Box<Response>) -> ExecCode {
     let mut writer = BufWriter::new(stream);
 
     // Serialize the header to the stream
@@ -149,32 +166,32 @@ fn write_to_stream(stream: &TcpStream, response: &mut Box<Response>) -> Option<u
 
     if let Ok(clone) = stream.try_clone() {
         // serialize_trunked_body will block until all the keep-alive i/o are done
-        response.write_trunked_body(clone, &mut writer);
+        response.keep_long_conn(clone, &mut writer);
     }
 
     // trunked keep-alive i/o is done, shut down the stream for good since copies
     // can be listening on read/write
     if let Err(err) = stream.shutdown(Shutdown::Both) {
         debug::print(&format!("Encountered errors while shutting down the trunked body stream: {}", err), 1);
-        return Some(1);
+        return 1;
     }
 
     // Otherwise we're good to leave.
-    Some(0)
+    0
 }
 
-fn handle_request(mut stream: &TcpStream, request: &mut Box<Request>, router: Arc<Route>) -> Result<Callback, ParseError> {
+fn handle_request(mut stream: &TcpStream, request: &mut Box<Request>, router: Arc<Route>) -> Result<Callback, ConnError> {
     let mut buffer = [0; 1024];
 
     if let Err(e) = stream.read(&mut buffer) {
         debug::print(&format!("Reading stream error -- {}", e), 3);
-        Err(ParseError::ReadStreamErr)
+        Err(ConnError::ReadStreamFailure)
 
     } else {
         let request_raw = String::from_utf8_lossy(&buffer[..]);
 
         if request_raw.is_empty() {
-            return Err(ParseError::EmptyRequestErr);
+            return Err(ConnError::EmptyRequest);
         }
 
         let auth_func = router.get_auth_func();
@@ -188,13 +205,13 @@ fn handle_request(mut stream: &TcpStream, request: &mut Box<Request>, router: Ar
         };
 
         if !has_access {
-            return Err(ParseError::AccessDenied);
+            return Err(ConnError::AccessDenied);
         }
 
         if let Some(callback) = callback {
             Ok(callback)
         } else {
-            Err(ParseError::EmptyRequestErr)
+            Err(ConnError::ServiceUnavailable)
         }
     }
 }
@@ -401,15 +418,10 @@ fn scheme_parser(scheme: String) -> HashMap<String, Vec<String>> {
     scheme_result
 }
 
-fn build_err_response(err: &ParseError, metadata: &Arc<ConnMetadata>) -> Box<Response> {
+fn build_err_response(err_status: u16, metadata: &Arc<ConnMetadata>) -> Box<Response> {
     let mut resp = Box::new(Response::new());
-    let status: u16 = match err {
-        &ParseError::ReadStreamErr => 500,
-        &ParseError::AccessDenied => 401,
-        _ => 404,
-    };
 
-    resp.status(status);
+    resp.status(err_status);
     resp.validate_and_update(&metadata.get_status_pages());
     resp.keep_alive(false);
 

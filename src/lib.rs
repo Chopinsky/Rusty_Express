@@ -52,7 +52,6 @@ use std::sync::Arc;
 use std::time::Duration;
 use std::thread;
 
-use channel::Sender;
 use core::config::{ConnMetadata, ServerConfig, ViewEngineDefinition, ViewEngine};
 use core::connection::*;
 use core::router::*;
@@ -61,14 +60,15 @@ use support::debug;
 use support::session::*;
 use support::{ThreadPool, shared_pool};
 
-//TODO: 1. logger? or middlewear?
-//TODO: 2. Impl middlewear
-//TODO: 3. remove States Management related features on 0.3.4
+//TODO: Impl middlewear
+
+static mut READ_TIMEOUT: Option<Duration> = None;
+static mut WRITE_TIMEOUT: Option<Duration> = None;
 
 pub struct HttpServer {
     router: Route,
     config: ServerConfig,
-    states: ServerStates,
+    state: ServerStates,
 }
 
 impl HttpServer {
@@ -76,7 +76,7 @@ impl HttpServer {
         HttpServer {
             router: Route::new(),
             config: ServerConfig::new(),
-            states: ServerStates::new(),
+            state: ServerStates::new(),
         }
     }
 
@@ -84,20 +84,36 @@ impl HttpServer {
         HttpServer {
             router: Route::new(),
             config,
-            states: ServerStates::new(),
+            state: ServerStates::new(),
         }
     }
 
     /// `listen` will take 1 parameter for the port that the server will be monitoring at, aka
     /// `127.0.0.1:port`. This function will block until the server is shut down.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// extern crate rusty_express as express;
+    /// use express::prelude::*;
+    ///
+    /// let mut server = HttpServer::new();
+    /// server.def_router(router);
+    /// server.listen(8080);
+    /// ```
     pub fn listen(&mut self, port: u16) {
         // delegate the actual work to the more robust routine.
-        self.listen_and_serve(port, |sender: Sender<ControlMessage>| {});
+        self.listen_and_serve(port, None);
     }
 
-    pub fn listen_and_serve(&mut self, port: u16, callback: fn(channel::Sender<ControlMessage>)) {
+    pub fn listen_and_serve(&mut self, port: u16, callback: Option<fn(channel::Sender<ControlMessage>)>) {
+        unsafe {
+            READ_TIMEOUT = Some(Duration::from_millis(self.config.read_timeout as u64));
+            WRITE_TIMEOUT = Some(Duration::from_millis(self.config.write_timeout as u64));
+        }
+
+        // initialize the debug service, which setup the debug level based on the environment variable
         debug::initialize();
-        println!("Listening for connections on port {}", port);
 
         // create the listener
         let server_address = SocketAddr::from(([127, 0, 0, 1], port));
@@ -105,79 +121,94 @@ impl HttpServer {
             panic!("Unable to start the http server: {}...", err);
         });
 
-        // if using the session module and allow auto clean up, launch the service now.
-        if self.config.use_session_autoclean && !ExchangeConfig::auto_clean_is_running() {
-            if let Some(duration) = self.config.get_session_auto_clean_period() {
-                self.states.set_session_handler(ExchangeConfig::auto_clean_start(duration));
-            }
-        }
-
         // obtain the control message courier service and start the callback
-        let sender = self.states.get_courier_sender();
-        let control_handler = thread::spawn(move || {
-            // sleep 100 ms to avoid racing with the main server before it's ready to take control messages.
-            thread::sleep(Duration::from_millis(100));
-            callback(sender);
-        });
+        let control_handler =
+            if let Some(cb) = callback {
+                let sender = self.state.get_courier_sender();
+                Some(thread::spawn(move || {
+                    // sleep 100 ms to avoid racing with the main server before it's ready to take control messages.
+                    thread::sleep(Duration::from_millis(100));
+                    cb(sender);
+                }))
+            } else {
+                None
+            };
 
         // launch the service, now this will block until the server is shutdown
-        shared_pool::initialize_with(vec![self.config.pool_size]);
-        launch(&listener, &self.router, &self.config, &self.states);
+        println!("Listening for connections on port {}", port);
+        self.launch_with(&listener);
 
         // start to shut down the TcpListener
         println!("Shutting down...");
 
-        // must close the shared pool, since it's a static and won't drop with the end of the server,
-        // which could cause response executions still on-the-fly to crash.
-        shared_pool::close();
-
         // now terminate the callback function as well.
-        control_handler.join().unwrap_or_else(|err| {
-            debug::print("Failed to shut down the callback handler, the service is teared down correctly", 1);
-        });
+        if let Some(handler) = control_handler {
+            handler.join().unwrap_or_else(|err| {
+                debug::print("Failed to shut down the callback handler, the service is teared down correctly", 1);
+            });
+        }
     }
 
-    #[deprecated(since="0.3.3", note="use server courier to send the termination message instead.")]
+    #[deprecated(since = "0.3.3", note = "use server courier to send the termination message instead.")]
     pub fn try_to_terminate(&mut self) {
         debug::print("Requested to shutdown...", 0);
-        self.states.ack_to_terminate();
+        self.state.ack_to_terminate();
     }
 
     #[inline]
     #[must_use]
     pub fn get_courier(&self) -> channel::Sender<ControlMessage> {
-        self.states.get_courier_sender()
+        self.state.get_courier_sender()
     }
 
     #[inline]
     pub fn drop_session_auto_clean(&mut self) {
-        self.states.drop_session_auto_clean();
+        self.state.drop_session_auto_clean();
     }
-}
 
-fn launch(
-    listener: &TcpListener,
-    router: &Route,
-    config: &ServerConfig,
-    server_states: &ServerStates)
-{
-    let workers_pool = ThreadPool::new(config.pool_size);
-    let read_timeout = Some(Duration::from_millis(config.read_timeout as u64));
-    let write_timeout = Some(Duration::from_millis(config.write_timeout as u64));
+    fn launch_with(&mut self, listener: &TcpListener) {
+        // if using the session module and allow auto clean up, launch the service now.
+        session_auto_config(&self.config, &mut self.state);
 
-    let router = Arc::new(router.to_owned());
-    let meta_arc = Arc::new(config.get_meta_data());
+        let workers_pool = ThreadPool::new(self.config.pool_size);
+        shared_pool::initialize_with(vec![self.config.pool_size]);
 
-    for stream in listener.incoming() {
-        match stream {
-            Ok(s) => handle_stream(s, &router, &meta_arc, &workers_pool, read_timeout, write_timeout),
-            Err(e) => debug::print(&format!("Failed to receive the upcoming stream: {}", e)[..], 1),
+        let mut shared_router = Arc::new(self.router.to_owned());
+        let mut shared_metadata = Arc::new(self.config.get_meta_data());
+
+        for stream in listener.incoming() {
+            if let Some(message) = self.state.courier_try_recv() {
+                match message {
+                    ControlMessage::Terminate => {
+                        if let Ok(s) = stream {
+                            let conn_meta = Arc::clone(&shared_metadata);
+                            send_err_resp(s, 503, conn_meta);
+                        }
+
+                        break;
+                    },
+                    ControlMessage::HotLoadRouter(r) => {
+                        self.router = r;
+                        shared_router = Arc::new(self.router.to_owned());
+                    },
+                    ControlMessage::HotLoadConfig(c) => {
+                        self.config = c;
+                        session_auto_config(&self.config, &mut self.state);
+                        shared_metadata = Arc::new(self.config.get_meta_data());
+                    },
+                    ControlMessage::Custom(content) => println!("The message: {} is not yet supported.", content),
+                }
+            }
+
+            match stream {
+                Ok(s) => handle_stream(s, &shared_router, &shared_metadata, &workers_pool),
+                Err(e) => debug::print(&format!("Failed to receive the upcoming stream: {}", e)[..], 1),
+            }
         }
 
-        if to_terminate(server_states) {
-            // Told to close the connection, shut down the socket now after finishing the last serve.
-            break;
-        }
+        // must close the shared pool, since it's a static and won't drop with the end of the server,
+        // which could cause response executions still on-the-fly to crash.
+        shared_pool::close();
     }
 }
 
@@ -185,42 +216,40 @@ fn handle_stream(
     stream: TcpStream,
     router: &Arc<Route>,
     meta: &Arc<ConnMetadata>,
-    workers_pool: &ThreadPool,
-    read_timeout: Option<Duration>,
-    write_timeout: Option<Duration>)
-{
+    workers_pool: &ThreadPool
+) {
     // clone Arc-pointers
     let router_ptr = Arc::clone(&router);
     let meta_ptr = Arc::clone(&meta);
 
     workers_pool.execute(move || {
-        set_timeout(&stream, read_timeout, write_timeout);
+        unsafe { stream.set_timeout(READ_TIMEOUT, WRITE_TIMEOUT); }
         handle_connection(stream, router_ptr, meta_ptr);
     });
 }
 
-fn to_terminate(server_states: &ServerStates) -> bool {
-    if let Some(message) = server_states.courier_try_recv() {
-        match message {
-            ControlMessage::Terminate => true,
-            ControlMessage::Custom(content) => {
-                println!("The message: {} is not yet supported.", content);
-                false
-            },
+fn session_auto_config(config: &ServerConfig, state: &mut ServerStates) {
+    if config.use_session_autoclean && !ExchangeConfig::auto_clean_is_running() {
+        if let Some(duration) = config.get_session_auto_clean_period() {
+            state.set_session_handler(ExchangeConfig::auto_clean_start(duration));
         }
-    } else {
-        false
     }
 }
 
-fn set_timeout(stream: &TcpStream, read: Option<Duration>, write: Option<Duration>) {
-    stream.set_read_timeout(read).unwrap_or_else(|err| {
-        debug::print(&format!("Unable to set read timeout: {}", err)[..], 1);
-    });
+trait StreamTimeoutConfig {
+    fn set_timeout(&self, read_timeout: Option<Duration>, write_timeout: Option<Duration>);
+}
 
-    stream.set_write_timeout(write).unwrap_or_else(|err| {
-        debug::print(&format!("Unable to set write timeout: {}", err)[..], 1);
-    });
+impl StreamTimeoutConfig for TcpStream {
+    fn set_timeout(&self, read_timeout: Option<Duration>, write_timeout: Option<Duration>) {
+        self.set_read_timeout(read_timeout).unwrap_or_else(|err| {
+            debug::print(&format!("Unable to set read timeout: {}", err)[..], 1);
+        });
+
+        self.set_write_timeout(write_timeout).unwrap_or_else(|err| {
+            debug::print(&format!("Unable to set write timeout: {}", err)[..], 1);
+        });
+    }
 }
 
 pub trait ServerDef {
