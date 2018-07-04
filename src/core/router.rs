@@ -34,7 +34,27 @@ pub enum RequestPath {
     WildCard(&'static str),
 }
 
+/// `Callback` is a type alias to the REST request handler functions, which will be invoked when a
+/// client request has been received on the associated URI or pattern.
 pub type Callback = fn(&Box<Request>, &mut Box<Response>);
+
+/// `AuthFunc` is a type alias to the authentication functions, which is optional, but if set, it
+/// will be invoked right after we parse the client request to determine if the requested URI is
+/// allowed to be visited by the client: if denied, we will generate the 403 error message as the
+/// respones. This function is generally to be used as the gate-keeper, e.g. if a use is logged in
+/// to see the dashboard routes.
+///
+/// The function takes 2 input parameters: 1) request: &Box<Request>, which contains all information
+/// from the client request; 2) the URI from the request: String, which is the URI being requested,
+/// this information is also available from the `request` parameter, but we extracted out to make it
+/// easier to access.
+///
+/// The function takes 1 boolean output, where `true` means the access is allowed, and `false` means
+/// the access is denied.
+///
+/// The use of the AuthFunc is totally optional, you can also check authentication within individual
+/// request handlers as well. You can also use the `context` and/or `session` modules to store, or
+/// update persistent information regarding the client requestor.
 pub type AuthFunc = fn(&Box<Request>, String) -> bool;
 
 struct RegexRoute {

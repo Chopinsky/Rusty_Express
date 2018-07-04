@@ -44,6 +44,9 @@ pub mod prelude {
 
     #[cfg(feature = "session")]
     pub use support::session::*;
+
+    #[cfg(feature = "logger")]
+    pub use support::logger::{LogLevel};
 }
 
 use std::collections::HashMap;

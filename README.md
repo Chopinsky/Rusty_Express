@@ -25,9 +25,12 @@ expect to make less, if none, break changes, but please do let us know if you've
 that we should fix, or have met performance bottle necks that we shall try to improve.
 
 
-## What's changed in 0.3.2
-- Update 'session' module to be more robust for use with generic session data types.
-- Improving documentation.
+## What's changed in 0.3.3
+- Removing the `state_interaction` mechanism. The replacement feature, the server `context` module, has been introduced
+in 0.3.0
+- Now supporting hot-loading of server `config` and `router` objects, which could help reduce the needs of the server
+downtime.
+- Heads up: next version will be published in 0.4.x.
 
 
 ## Migrating from 0.2.x to 0.3.0 

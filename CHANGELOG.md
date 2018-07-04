@@ -1,3 +1,11 @@
+# 2018-07
+## 0.3.3
+- Removing the `state_interaction` mechanism. The replacement feature, the server `context` module, has been introduced
+in 0.3.0
+- Now supporting hot-loading of server `config` and `router` objects, which could help reduce the needs of the server
+downtime.
+- Heads up: next version will be published in 0.4.x.
+
 # 2018-06
 ## 0.3.2
 - Update 'session' module to be more robust for use with generic session data types.
@@ -27,4 +35,3 @@ pub fn handler(req: &Box<Request>, resp: &mut Box<Response>) {
 - The `StateProvider` trait is deprecated (and de-factor no-op in 0.3.0), and it will be removed in
 the 0.3.3 release. Please switch to use the `ServerContext` features instead. You can find how to
 use the `ServerContext` in this example: [Server with defined router](https://github.com/Chopinsky/Rusty_Express/blob/master/examples/use_router.rs)
-

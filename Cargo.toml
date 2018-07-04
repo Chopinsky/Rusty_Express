@@ -9,8 +9,9 @@ authors = ["Jacob Zuo <chopinsky@live.com>"]
 license = "MIT"
 
 [features]
-default = ["session"]
+default = ["session", "logger"]
 session = []
+logger = []
 
 [dependencies]
 regex = "^0.2"
