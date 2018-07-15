@@ -113,8 +113,10 @@ pub(crate) fn send_err_resp(stream: TcpStream, err_code: u16, metadata: Arc<Conn
 }
 
 fn handle_response(
-    stream: TcpStream, callback: Callback,
-    request: &Box<Request>, response: &mut Box<Response>,
+    stream: TcpStream,
+    callback: Callback,
+    request: &Box<Request>,
+    response: &mut Box<Response>,
     metadata: &Arc<ConnMetadata>
 ) -> ExecCode {
 
@@ -196,6 +198,15 @@ fn handle_request(mut stream: &TcpStream, request: &mut Box<Request>, router: Ar
 
         let auth_func = router.get_auth_func();
         let callback = parse_request(&request_raw, request, router);
+
+        let host = request.header("host");
+        if let Some(host_addr) = host {
+            request.set_host(host_addr);
+        } else {
+            if let Ok(socket_addr) = stream.peer_addr() {
+                request.set_host_socket(socket_addr);
+            }
+        }
 
         let has_access = if let Some(auth) = auth_func {
             let route_path = request.uri.to_owned();

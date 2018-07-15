@@ -6,7 +6,7 @@ use std::collections::hash_map::Iter;
 use std::fs::File;
 use std::io::{BufReader, BufWriter};
 use std::io::prelude::*;
-use std::net::{TcpStream};
+use std::net::{SocketAddr, TcpStream};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, mpsc};
 use std::time::Duration;
@@ -36,6 +36,7 @@ pub struct Request {
     fragment: String,
     params: HashMap<String, String>,
     header: HashMap<String, String>,
+    ip: Option<SocketAddr>,
     body: Vec<String>,
 }
 
@@ -49,6 +50,7 @@ impl Request {
             fragment: String::new(),
             params: HashMap::new(),
             header: HashMap::new(),
+            ip: None,
             body: Vec::new(),
         }
     }
@@ -92,7 +94,6 @@ impl Request {
         self.fragment.clone()
     }
 
-    #[inline]
     pub fn param(&self, key: &str) -> Option<String> {
         match self.params.get(key) {
             Some(val) => Some(val.to_owned()),
@@ -103,6 +104,11 @@ impl Request {
     #[inline]
     pub fn param_iter(&self) -> Iter<String, String> {
         self.params.iter()
+    }
+
+    #[inline]
+    pub fn ip_info(&self) -> Option<SocketAddr> {
+        self.ip
     }
 }
 
@@ -115,6 +121,8 @@ pub trait RequestWriter {
     fn set_param(&mut self, key: &str, val: &str);
     fn create_param(&mut self, params: HashMap<String, String>);
     fn set_fragment(&mut self, fragment: String);
+    fn set_host(&mut self, addr: String);
+    fn set_host_socket(&mut self, addr: SocketAddr);
     fn extend_body(&mut self, content: &str);
 }
 
@@ -152,6 +160,18 @@ impl RequestWriter for Request {
     #[inline]
     fn set_fragment(&mut self, fragment: String) {
         self.fragment = fragment;
+    }
+
+    fn set_host(&mut self, addr: String) {
+        let socket: Result<SocketAddr, _> = addr.parse();
+        if let Ok(socket_addr) = socket {
+            self.ip = Some(socket_addr);
+        }
+    }
+
+    #[inline]
+    fn set_host_socket(&mut self, addr: SocketAddr) {
+        self.ip = Some(addr)
     }
 
     fn extend_body(&mut self, content: &str) {
