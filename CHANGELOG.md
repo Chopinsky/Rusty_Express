@@ -4,6 +4,7 @@
 in 0.3.0
 - Now supporting hot-loading of server `config` and `router` objects, which could help reduce the needs of the server
 downtime.
+- Providing request's IP, if that information is available.
 - Heads up: next version will be published in 0.4.x.
 
 # 2018-06
