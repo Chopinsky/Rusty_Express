@@ -1,18 +1,18 @@
 #![allow(unused_imports)]
 #![allow(unused_variables)]
 
-use std::collections::{HashMap, HashSet};
 use std::cmp::Ordering;
+use std::collections::{HashMap, HashSet};
 use std::io::Error;
 use std::sync::mpsc;
 use std::time::Duration;
 
 use super::http::{Request, RequestWriter, Response, ResponseStates, ResponseWriter};
 use regex::Regex;
-use support::debug;
 use support::common::MapUpdates;
+use support::debug;
 use support::TaskType;
-use support::{RouteTrie, shared_pool};
+use support::{shared_pool, RouteTrie};
 
 //TODO: authorized routes -> authFunc
 
@@ -64,10 +64,7 @@ struct RegexRoute {
 
 impl RegexRoute {
     pub fn new(re: Regex, handler: Callback) -> Self {
-        RegexRoute {
-            regex: re,
-            handler,
-        }
+        RegexRoute { regex: re, handler }
     }
 }
 
@@ -103,36 +100,40 @@ impl RouteMap {
                 }
 
                 self.explicit.add(req_uri, callback, false);
-            },
+            }
             RequestPath::WildCard(req_uri) => {
                 if req_uri.is_empty() {
                     panic!("Request path must have valid contents.");
                 }
 
-                if self.wildcard.contains_key(req_uri) { return; }
+                if self.wildcard.contains_key(req_uri) {
+                    return;
+                }
 
                 if let Ok(re) = Regex::new(req_uri) {
-                    self.wildcard.add(req_uri, RegexRoute::new(re, callback), false);
+                    self.wildcard
+                        .add(req_uri, RegexRoute::new(re, callback), false);
                 }
-            },
+            }
             RequestPath::ExplicitWithParams(req_uri) => {
                 if !req_uri.contains("/:") {
                     self.explicit.add(req_uri, callback, false);
                     return;
                 }
 
-                let segments: Vec<String> = req_uri.trim_matches('/')
-                                                   .split('/')
-                                                   .filter(|s| !s.is_empty())
-                                                   .map(|s| s.to_owned())
-                                                   .collect();
+                let segments: Vec<String> = req_uri
+                    .trim_matches('/')
+                    .split('/')
+                    .filter(|s| !s.is_empty())
+                    .map(|s| s.to_owned())
+                    .collect();
 
                 if let Err(e) = validate_segments(&segments) {
                     panic!("{}", e);
                 }
 
                 self.explicit_with_params.add(segments, callback);
-            },
+            }
         }
     }
 
@@ -142,8 +143,7 @@ impl RouteMap {
         }
 
         if !self.explicit_with_params.is_empty() {
-            let (callback, temp_params) =
-                search_params_router(&self.explicit_with_params, uri);
+            let (callback, temp_params) = search_params_router(&self.explicit_with_params, uri);
 
             if callback.is_some() {
                 for param in temp_params {
@@ -274,7 +274,13 @@ impl Router for Route {
 
 pub trait RouteHandler {
     fn handle_request(callback: Callback, req: &Box<Request>, resp: &mut Box<Response>);
-    fn seek_handler(&self, method: &REST, uri: &str, header_only: bool, tx: mpsc::Sender<(Option<Callback>, HashMap<String, String>)>);
+    fn seek_handler(
+        &self,
+        method: &REST,
+        uri: &str,
+        header_only: bool,
+        tx: mpsc::Sender<(Option<Callback>, HashMap<String, String>)>,
+    );
 }
 
 impl RouteHandler for Route {
@@ -285,16 +291,22 @@ impl RouteHandler for Route {
         // if a redirect response, set up as so.
         let mut redirect = resp.get_redirect_path();
         if !redirect.is_empty() {
-            if !redirect.starts_with('/') { redirect.insert(0, '/'); }
+            if !redirect.starts_with('/') {
+                redirect.insert(0, '/');
+            }
 
             resp.header("Location", &redirect, true);
             resp.status(301);
         }
     }
 
-    fn seek_handler(&self, method: &REST, uri: &str, header_only: bool,
-                    tx: mpsc::Sender<(Option<Callback>, HashMap<String, String>)>) {
-
+    fn seek_handler(
+        &self,
+        method: &REST,
+        uri: &str,
+        header_only: bool,
+        tx: mpsc::Sender<(Option<Callback>, HashMap<String, String>)>,
+    ) {
         let mut result = None;
         let mut params = HashMap::new();
 
@@ -325,13 +337,18 @@ fn search_wildcard_router(routes: &HashMap<String, RegexRoute>, uri: &str) -> Op
     result
 }
 
-fn search_params_router(route_head: &RouteTrie, uri: &str) -> (Option<Callback>, Vec<(String, String)>) {
-    let raw_segments: Vec<String> = uri.trim_matches('/').split('/').map(|s| s.to_owned()).collect();
+fn search_params_router(
+    route_head: &RouteTrie,
+    uri: &str,
+) -> (Option<Callback>, Vec<(String, String)>) {
+    let raw_segments: Vec<String> = uri.trim_matches('/')
+        .split('/')
+        .map(|s| s.to_owned())
+        .collect();
     let segements = raw_segments.as_slice();
     let mut params: Vec<(String, String)> = Vec::new();
 
-    let result =
-        RouteTrie::find(&route_head.root, segements, &mut params);
+    let result = RouteTrie::find(&route_head.root, segements, &mut params);
 
     (result, params)
 }

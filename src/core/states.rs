@@ -1,10 +1,10 @@
 #![allow(unused_variables)]
 #![allow(dead_code)]
 
-use std::thread::*;
-use channel;
 use super::config::ServerConfig;
 use super::router::Route;
+use channel;
+use std::thread::*;
 use support::session::*;
 
 pub enum ControlMessage {
@@ -15,7 +15,10 @@ pub enum ControlMessage {
 }
 
 pub struct ServerStates {
-    courier_channel: (channel::Sender<ControlMessage>, channel::Receiver<ControlMessage>),
+    courier_channel: (
+        channel::Sender<ControlMessage>,
+        channel::Receiver<ControlMessage>,
+    ),
     going_to_shutdown: bool,
     session_auto_clean_handler: Option<JoinHandle<()>>,
 }

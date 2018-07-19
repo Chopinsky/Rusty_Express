@@ -1,10 +1,10 @@
 #![allow(dead_code)]
 
-use std::sync::{Mutex, Once, ONCE_INIT, RwLock};
-use std::time::Duration;
-use std::thread;
-use chrono::{DateTime, Utc};
 use channel;
+use chrono::{DateTime, Utc};
+use std::sync::{Mutex, Once, RwLock, ONCE_INIT};
+use std::thread;
+use std::time::Duration;
 
 lazy_static! {
     static ref TEMP_STORE: Mutex<Vec<LogInfo>> = Mutex::new(Vec::new());
@@ -64,7 +64,10 @@ pub(crate) fn initialize() {
                     return;
                 } else {
                     let refresh = config.refresh_period.as_secs();
-                    println!("The logger has started, it will refresh log to folder {} every {} seconds", config.store_folder, refresh);
+                    println!(
+                        "The logger has started, it will refresh log to folder {} every {} seconds",
+                        config.store_folder, refresh
+                    );
 
                     start_refresh(config.refresh_period.clone());
                 }
@@ -75,11 +78,9 @@ pub(crate) fn initialize() {
 
 fn start_refresh(period: Duration) {
     unsafe {
-        REFRESH_HANDLER = Some(thread::spawn(move || {
-            loop {
-                thread::sleep(period);
-                write_to_file();
-            }
+        REFRESH_HANDLER = Some(thread::spawn(move || loop {
+            thread::sleep(period);
+            write_to_file();
         }));
     }
 }
@@ -88,7 +89,10 @@ fn stop_refresh() {
     unsafe {
         if let Some(handler) = REFRESH_HANDLER.take() {
             handler.join().unwrap_or_else(|err| {
-                eprintln!("Failed to stop the log refresh service, error code: {:?}...", err);
+                eprintln!(
+                    "Failed to stop the log refresh service, error code: {:?}...",
+                    err
+                );
             });
         }
     }
@@ -112,6 +116,4 @@ fn reset_refresh(period: Option<Duration>) {
     });
 }
 
-fn write_to_file() {
-
-}
+fn write_to_file() {}

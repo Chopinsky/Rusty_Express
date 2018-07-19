@@ -1,6 +1,6 @@
+use chrono::prelude::{DateTime, Utc};
 use std::env;
 use std::sync::{Once, ONCE_INIT};
-use chrono::prelude::{DateTime, Utc};
 
 static ONCE: Once = ONCE_INIT;
 static mut DEBUG_LEVEL: u8 = 0;
@@ -19,9 +19,15 @@ pub fn initialize() {
 }
 
 pub fn print(info: &str, level: u8) {
-    if !in_debug_mode() { return; }
-    if info.is_empty() { return; }
-    if !print_level_allowed(level) { return; }
+    if !in_debug_mode() {
+        return;
+    }
+    if info.is_empty() {
+        return;
+    }
+    if !print_level_allowed(level) {
+        return;
+    }
 
     let now: DateTime<Utc> = Utc::now();
     let level_label = match level {
@@ -30,7 +36,12 @@ pub fn print(info: &str, level: u8) {
         _ => String::from(format!("error [{}]", level)),
     };
 
-    println!("{}: {} at {}", level_label, now.format("%Y-%m-%d %H:%M:%S GMT").to_string(), info);
+    println!(
+        "{}: {} at {}",
+        level_label,
+        now.format("%Y-%m-%d %H:%M:%S GMT").to_string(),
+        info
+    );
 }
 
 #[inline]

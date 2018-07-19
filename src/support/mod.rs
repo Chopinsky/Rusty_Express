@@ -1,5 +1,5 @@
-mod scheduler;
 mod route_trie;
+mod scheduler;
 
 #[cfg(feature = "session")]
 pub mod session;
@@ -16,4 +16,3 @@ pub(crate) mod shared_pool {
 pub(crate) use self::route_trie::*;
 pub(crate) use self::scheduler::TaskType;
 pub(crate) use self::scheduler::ThreadPool;
-

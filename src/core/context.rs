@@ -1,7 +1,7 @@
 #![allow(dead_code)]
 
-use std::sync::RwLock;
 use super::http::{Request, Response};
+use std::sync::RwLock;
 
 lazy_static! {
     static ref CONTEXT: RwLock<Box<ServerContextProvider>> = RwLock::new(Box::new(EmptyContext {}));
@@ -28,7 +28,10 @@ pub fn update_context(req: &Box<Request>, resp: &mut Box<Response>) -> Result<()
     Err("Unable to lock and update the context")
 }
 
-pub fn process_with_context(req: &Box<Request>, resp: &mut Box<Response>) -> Result<(), &'static str> {
+pub fn process_with_context(
+    req: &Box<Request>,
+    resp: &mut Box<Response>,
+) -> Result<(), &'static str> {
     if let Ok(c) = CONTEXT.read() {
         return c.process(req, resp);
     }
@@ -40,13 +43,23 @@ struct EmptyContext;
 
 impl ContextProvider for EmptyContext {
     #[inline]
-    fn update(&mut self, _req: &Box<Request>, _resp: &mut Box<Response>) -> Result<(), &'static str> { Ok(()) }
+    fn update(
+        &mut self,
+        _req: &Box<Request>,
+        _resp: &mut Box<Response>,
+    ) -> Result<(), &'static str> {
+        Ok(())
+    }
 
     #[inline]
-    fn process(&self, _req: &Box<Request>, _resp: &mut Box<Response>) -> Result<(), &'static str> { Ok(()) }
+    fn process(&self, _req: &Box<Request>, _resp: &mut Box<Response>) -> Result<(), &'static str> {
+        Ok(())
+    }
 }
 
 impl Clone for EmptyContext {
     #[inline]
-    fn clone(&self) -> Self { EmptyContext {} }
+    fn clone(&self) -> Self {
+        EmptyContext {}
+    }
 }

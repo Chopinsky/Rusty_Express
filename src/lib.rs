@@ -22,46 +22,49 @@
 #![allow(deprecated)]
 #![allow(unused_variables)]
 
-#[macro_use] extern crate lazy_static;
-extern crate regex;
+#[macro_use]
+extern crate lazy_static;
 extern crate chrono;
-extern crate rand;
-extern crate num_cpus;
 extern crate crossbeam_channel as channel;
+extern crate num_cpus;
+extern crate rand;
+extern crate regex;
 
 pub(crate) mod core;
 pub(crate) mod support;
 
 pub mod prelude {
-    pub use {HttpServer, ServerDef};
-    pub use core::config::{EngineContext, PageGenerator, ServerConfig, ViewEngineDefinition, ViewEngine};
-    pub use core::context::ContextProvider;
+    pub use core::config::{
+        EngineContext, PageGenerator, ServerConfig, ViewEngine, ViewEngineDefinition,
+    };
     pub use core::context as ServerContext;
+    pub use core::context::ContextProvider;
     pub use core::cookie::*;
     pub use core::http::{Request, RequestWriter, Response, ResponseStates, ResponseWriter};
-    pub use core::router::{REST, Route, Router, RequestPath};
+    pub use core::router::{RequestPath, Route, Router, REST};
     pub use core::states::ControlMessage;
+    pub use {HttpServer, ServerDef};
 
     #[cfg(feature = "session")]
     pub use support::session::*;
 
     #[cfg(feature = "logger")]
-    pub use support::logger::{LogLevel};
+    pub use support::logger::LogLevel;
 }
 
 use std::collections::HashMap;
 use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::sync::Arc;
-use std::time::Duration;
 use std::thread;
+use std::time::Duration;
 
-use core::config::{ConnMetadata, ServerConfig, ViewEngineDefinition, ViewEngine};
+use core::config::{ConnMetadata, ServerConfig, ViewEngine, ViewEngineDefinition};
 use core::connection::*;
 use core::router::*;
 use core::states::*;
 use support::debug;
 use support::session::*;
-use support::{ThreadPool, shared_pool};
+use support::{shared_pool, ThreadPool};
 
 //TODO: Impl middlewear
 
@@ -109,7 +112,11 @@ impl HttpServer {
         self.listen_and_serve(port, None);
     }
 
-    pub fn listen_and_serve(&mut self, port: u16, callback: Option<fn(channel::Sender<ControlMessage>)>) {
+    pub fn listen_and_serve(
+        &mut self,
+        port: u16,
+        callback: Option<fn(channel::Sender<ControlMessage>)>,
+    ) {
         unsafe {
             READ_TIMEOUT = Some(Duration::from_millis(self.config.read_timeout as u64));
             WRITE_TIMEOUT = Some(Duration::from_millis(self.config.write_timeout as u64));
@@ -125,17 +132,16 @@ impl HttpServer {
         });
 
         // obtain the control message courier service and start the callback
-        let control_handler =
-            if let Some(cb) = callback {
-                let sender = self.state.get_courier_sender();
-                Some(thread::spawn(move || {
-                    // sleep 100 ms to avoid racing with the main server before it's ready to take control messages.
-                    thread::sleep(Duration::from_millis(100));
-                    cb(sender);
-                }))
-            } else {
-                None
-            };
+        let control_handler = if let Some(cb) = callback {
+            let sender = self.state.get_courier_sender();
+            Some(thread::spawn(move || {
+                // sleep 100 ms to avoid racing with the main server before it's ready to take control messages.
+                thread::sleep(Duration::from_millis(100));
+                cb(sender);
+            }))
+        } else {
+            None
+        };
 
         // launch the service, now this will block until the server is shutdown
         println!("Listening for connections on port {}", port);
@@ -152,7 +158,9 @@ impl HttpServer {
         }
     }
 
-    #[deprecated(since = "0.3.3", note = "use server courier to send the termination message instead.")]
+    #[deprecated(
+        since = "0.3.3", note = "use server courier to send the termination message instead."
+    )]
     pub fn try_to_terminate(&mut self) {
         debug::print("Requested to shutdown...", 0);
         self.state.ack_to_terminate();
@@ -189,23 +197,28 @@ impl HttpServer {
                         }
 
                         break;
-                    },
+                    }
                     ControlMessage::HotLoadRouter(r) => {
                         self.router = r;
                         shared_router = Arc::new(self.router.to_owned());
-                    },
+                    }
                     ControlMessage::HotLoadConfig(c) => {
                         self.config = c;
                         session_auto_config(&self.config, &mut self.state);
                         shared_metadata = Arc::new(self.config.get_meta_data());
-                    },
-                    ControlMessage::Custom(content) => println!("The message: {} is not yet supported.", content),
+                    }
+                    ControlMessage::Custom(content) => {
+                        println!("The message: {} is not yet supported.", content)
+                    }
                 }
             }
 
             match stream {
                 Ok(s) => handle_stream(s, &shared_router, &shared_metadata, &workers_pool),
-                Err(e) => debug::print(&format!("Failed to receive the upcoming stream: {}", e)[..], 1),
+                Err(e) => debug::print(
+                    &format!("Failed to receive the upcoming stream: {}", e)[..],
+                    1,
+                ),
             }
         }
 
@@ -219,14 +232,16 @@ fn handle_stream(
     stream: TcpStream,
     router: &Arc<Route>,
     meta: &Arc<ConnMetadata>,
-    workers_pool: &ThreadPool
+    workers_pool: &ThreadPool,
 ) {
     // clone Arc-pointers
     let router_ptr = Arc::clone(&router);
     let meta_ptr = Arc::clone(&meta);
 
     workers_pool.execute(move || {
-        unsafe { stream.set_timeout(READ_TIMEOUT, WRITE_TIMEOUT); }
+        unsafe {
+            stream.set_timeout(READ_TIMEOUT, WRITE_TIMEOUT);
+        }
         handle_connection(stream, router_ptr, meta_ptr);
     });
 }
@@ -305,7 +320,7 @@ impl Router for HttpServer {
         self.router.get(uri, callback);
         &mut self.router
     }
-    
+
     fn patch(&mut self, uri: RequestPath, callback: Callback) -> &mut Route {
         self.router.patch(uri, callback);
         &mut self.router

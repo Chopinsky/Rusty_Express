@@ -1,8 +1,8 @@
 #![allow(unused_variables)]
 #![allow(dead_code)]
 
-use std::collections::HashMap;
 use std::cmp;
+use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
@@ -123,7 +123,9 @@ pub trait ViewEngineDefinition {
 
 impl ViewEngineDefinition for ServerConfig {
     fn view_engine(extension: &str, engine: ViewEngine) {
-        if extension.is_empty() { return; }
+        if extension.is_empty() {
+            return;
+        }
 
         if let Ok(mut engines) = VIEW_ENGINES.write() {
             engines.insert(extension.to_owned(), Box::new(engine));
@@ -134,18 +136,20 @@ impl ViewEngineDefinition for ServerConfig {
 pub trait ViewEngineParser {
     fn template_parser<T: EngineContext + Send + Sync + 'static>(
         extension: &str,
-        content:
-        &mut Box<String>,
-        context: Box<T>) -> u16;
+        content: &mut Box<String>,
+        context: Box<T>,
+    ) -> u16;
 }
 
 impl ViewEngineParser for ServerConfig {
     fn template_parser<T: EngineContext + Send + Sync + 'static>(
         extension: &str,
         content: &mut Box<String>,
-        context: Box<T>) -> u16
-    {
-        if extension.is_empty() { return 0; }
+        context: Box<T>,
+    ) -> u16 {
+        if extension.is_empty() {
+            return 0;
+        }
 
         if let Ok(template_engines) = VIEW_ENGINES.read() {
             if let Some(engine) = template_engines.get(extension) {

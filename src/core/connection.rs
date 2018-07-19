@@ -5,13 +5,15 @@ use std::collections::HashMap;
 use std::io::prelude::*;
 use std::io::{BufReader, BufWriter, Error};
 use std::net::{Shutdown, TcpStream};
-use std::sync::{Arc, mpsc};
+use std::sync::{mpsc, Arc};
 use std::time::Duration;
 
 use super::config::ConnMetadata;
-use super::http::{Request, RequestWriter, Response, ResponseManager, ResponseStates, ResponseWriter};
-use super::router::{AuthFunc, Callback, REST, Route, RouteHandler};
-use support::{common::write_to_buff, common::flush_buffer, debug, shared_pool, TaskType};
+use super::http::{
+    Request, RequestWriter, Response, ResponseManager, ResponseStates, ResponseWriter,
+};
+use super::router::{AuthFunc, Callback, Route, RouteHandler, REST};
+use support::{common::flush_buffer, common::write_to_buff, debug, shared_pool, TaskType};
 
 static HEADER_END: [u8; 2] = [13, 10];
 type ExecCode = u8;
@@ -24,7 +26,7 @@ enum ConnError {
     ServiceUnavailable,
 }
 
-//TODO: switch 'mpsc' to 'crossbeam-channel' 
+//TODO: switch 'mpsc' to 'crossbeam-channel'
 
 //TODO: still good for implementing middlewear
 //pub fn handle_connection_with_states<T: Send + Sync + Clone + StatesProvider>(
@@ -83,10 +85,9 @@ enum ConnError {
 pub(crate) fn handle_connection(
     stream: TcpStream,
     router: Arc<Route>,
-    metadata: Arc<ConnMetadata>
+    metadata: Arc<ConnMetadata>,
 ) -> ExecCode {
-
-    let mut request= Box::new(Request::new());
+    let mut request = Box::new(Request::new());
 
     let handler = match handle_request(&stream, &mut request, router) {
         Err(err) => {
@@ -100,15 +101,24 @@ pub(crate) fn handle_connection(
             };
 
             return write_to_stream(&stream, &mut build_err_response(status, &metadata));
-        },
+        }
         Ok(cb) => cb,
     };
 
-    handle_response(stream, handler, &request,
-                    &mut initialize_response(&metadata), &metadata)
+    handle_response(
+        stream,
+        handler,
+        &request,
+        &mut initialize_response(&metadata),
+        &metadata,
+    )
 }
 
-pub(crate) fn send_err_resp(stream: TcpStream, err_code: u16, metadata: Arc<ConnMetadata>) -> ExecCode {
+pub(crate) fn send_err_resp(
+    stream: TcpStream,
+    err_code: u16,
+    metadata: Arc<ConnMetadata>,
+) -> ExecCode {
     return write_to_stream(&stream, &mut build_err_response(err_code, &metadata));
 }
 
@@ -117,9 +127,8 @@ fn handle_response(
     callback: Callback,
     request: &Box<Request>,
     response: &mut Box<Response>,
-    metadata: &Arc<ConnMetadata>
+    metadata: &Arc<ConnMetadata>,
 ) -> ExecCode {
-
     match request.header("connection") {
         Some(ref val) if val.eq(&String::from("close")) => response.can_keep_alive(false),
         _ => response.can_keep_alive(true),
@@ -174,7 +183,13 @@ fn write_to_stream(stream: &TcpStream, response: &mut Box<Response>) -> ExecCode
     // trunked keep-alive i/o is done, shut down the stream for good since copies
     // can be listening on read/write
     if let Err(err) = stream.shutdown(Shutdown::Both) {
-        debug::print(&format!("Encountered errors while shutting down the trunked body stream: {}", err), 1);
+        debug::print(
+            &format!(
+                "Encountered errors while shutting down the trunked body stream: {}",
+                err
+            ),
+            1,
+        );
         return 1;
     }
 
@@ -182,13 +197,16 @@ fn write_to_stream(stream: &TcpStream, response: &mut Box<Response>) -> ExecCode
     0
 }
 
-fn handle_request(mut stream: &TcpStream, request: &mut Box<Request>, router: Arc<Route>) -> Result<Callback, ConnError> {
+fn handle_request(
+    mut stream: &TcpStream,
+    request: &mut Box<Request>,
+    router: Arc<Route>,
+) -> Result<Callback, ConnError> {
     let mut buffer = [0; 1024];
 
     if let Err(e) = stream.read(&mut buffer) {
         debug::print(&format!("Reading stream error -- {}", e), 3);
         Err(ConnError::ReadStreamFailure)
-
     } else {
         let request_raw = String::from_utf8_lossy(&buffer[..]);
 
@@ -241,7 +259,9 @@ fn parse_request(request: &str, store: &mut Box<Request>, router: Arc<Route>) ->
     };
 
     let rx = parse_request_base(base_line, store, router);
-    if rx.is_none() { return None; }
+    if rx.is_none() {
+        return None;
+    }
 
     let mut is_body = false;
     for line in lines {
@@ -284,15 +304,19 @@ fn parse_request_headers(store: &mut Box<Request>, line: &str, is_body: bool) {
     }
 }
 
-fn parse_request_base(line: &str, req: &mut Box<Request>, router: Arc<Route>)
-    -> Option<mpsc::Receiver<(Option<Callback>, HashMap<String, String>)>> {
-
+fn parse_request_base(
+    line: &str,
+    req: &mut Box<Request>,
+    router: Arc<Route>,
+) -> Option<mpsc::Receiver<(Option<Callback>, HashMap<String, String>)>> {
     let mut header_only = false;
     let mut raw_scheme = String::new();
     let mut raw_fragment = String::new();
 
     for (index, info) in line.split_whitespace().enumerate() {
-        if index < 2 && info.is_empty() { return None; }
+        if index < 2 && info.is_empty() {
+            return None;
+        }
 
         match index {
             0 => {
@@ -309,14 +333,16 @@ fn parse_request_base(line: &str, req: &mut Box<Request>, router: Arc<Route>)
                         }
 
                         REST::OTHER(others)
-                    },
+                    }
                 };
 
                 req.method = base_method;
-            },
+            }
             1 => split_path(info, &mut req.uri, &mut raw_scheme, &mut raw_fragment),
             2 => req.write_header("HTTP_VERSION", info, true),
-            _ => { break; },
+            _ => {
+                break;
+            }
         };
     }
 
@@ -325,9 +351,12 @@ fn parse_request_base(line: &str, req: &mut Box<Request>, router: Arc<Route>)
         let req_method = req.method.clone();
 
         let (tx, rx) = mpsc::channel();
-        shared_pool::run(move || {
-            router.seek_handler(&req_method, &uri, header_only, tx);
-        }, TaskType::Request);
+        shared_pool::run(
+            move || {
+                router.seek_handler(&req_method, &uri, header_only, tx);
+            },
+            TaskType::Request,
+        );
 
         // now do more work on non-essential parsing
         if !raw_fragment.is_empty() {
@@ -344,7 +373,12 @@ fn parse_request_base(line: &str, req: &mut Box<Request>, router: Arc<Route>)
     None
 }
 
-fn split_path(full_uri: &str, final_uri: &mut String, final_scheme: &mut String, final_frag: &mut String) {
+fn split_path(
+    full_uri: &str,
+    final_uri: &mut String,
+    final_scheme: &mut String,
+    final_frag: &mut String,
+) {
     let uri = full_uri.trim();
     if uri.is_empty() {
         final_uri.push_str("/");
@@ -378,7 +412,7 @@ fn split_path(full_uri: &str, final_uri: &mut String, final_scheme: &mut String,
     } else {
         let uri_len = uri.len();
         if uri_len > 1 && uri.ends_with("/") {
-            final_uri.push_str(&uri[..uri_len-1]);
+            final_uri.push_str(&uri[..uri_len - 1]);
         } else {
             final_uri.push_str(uri)
         };
@@ -390,7 +424,9 @@ fn split_path(full_uri: &str, final_uri: &mut String, final_scheme: &mut String,
 /// header field. Assuming no duplicate cookie keys, or the first cookie key-value pair
 /// will be stored.
 fn cookie_parser(store: &mut Box<Request>, cookie_body: &str) {
-    if cookie_body.is_empty() { return; }
+    if cookie_body.is_empty() {
+        return;
+    }
 
     for set in cookie_body.trim().split(";").into_iter() {
         let pair: Vec<&str> = set.trim().splitn(2, "=").collect();
@@ -409,12 +445,11 @@ fn scheme_parser(scheme: String) -> HashMap<String, Vec<String>> {
 
         if store.len() > 0 {
             let key = store[0].trim();
-            let val =
-                if store.len() == 2 {
-                    store[1].trim().to_owned()
-                } else {
-                    String::new()
-                };
+            let val = if store.len() == 2 {
+                store[1].trim().to_owned()
+            } else {
+                String::new()
+            };
 
             if scheme_result.contains_key(key) {
                 if let Some(val_vec) = scheme_result.get_mut(key) {

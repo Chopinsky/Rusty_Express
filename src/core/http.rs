@@ -1,21 +1,21 @@
 #![allow(dead_code)]
 #![allow(unused_variables)]
 
-use std::collections::HashMap;
 use std::collections::hash_map::Iter;
+use std::collections::HashMap;
 use std::fs::File;
-use std::io::{BufReader, BufWriter};
 use std::io::prelude::*;
+use std::io::{BufReader, BufWriter};
 use std::net::{SocketAddr, TcpStream};
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex, mpsc};
-use std::time::Duration;
+use std::sync::{mpsc, Arc, Mutex};
 use std::thread;
+use std::time::Duration;
 
-use chrono::prelude::*;
+use super::config::{EngineContext, PageGenerator, ServerConfig, ViewEngineParser};
 use super::cookie::*;
 use super::router::REST;
-use super::config::{EngineContext, PageGenerator, ServerConfig, ViewEngineParser};
+use chrono::prelude::*;
 use support::{common::*, debug, shared_pool, TaskType};
 
 static FOUR_OH_FOUR: &'static str = include_str!("../default/404.html");
@@ -56,8 +56,12 @@ impl Request {
     }
 
     pub fn header(&self, field: &str) -> Option<String> {
-        if field.is_empty() { return None; }
-        if self.header.is_empty() { return None; }
+        if field.is_empty() {
+            return None;
+        }
+        if self.header.is_empty() {
+            return None;
+        }
 
         match self.header.get(&field[..]) {
             Some(value) => Some(value.to_owned()),
@@ -66,8 +70,12 @@ impl Request {
     }
 
     pub fn cookie(&self, key: &str) -> Option<String> {
-        if key.is_empty() { return None; }
-        if self.cookie.is_empty() { return None; }
+        if key.is_empty() {
+            return None;
+        }
+        if self.cookie.is_empty() {
+            return None;
+        }
 
         match self.cookie.get(&key[..]) {
             Some(value) => Some(value.to_owned()),
@@ -81,8 +89,12 @@ impl Request {
     }
 
     pub fn scheme(&self, field: &str) -> Option<Vec<String>> {
-        if field.is_empty() { return None; }
-        if self.scheme.is_empty() { return None; }
+        if field.is_empty() {
+            return None;
+        }
+        if self.scheme.is_empty() {
+            return None;
+        }
 
         match self.scheme.get(&field[..]) {
             Some(value) => Some(value.to_owned()),
@@ -230,19 +242,25 @@ impl Response {
                 let (tx, rx) = mpsc::channel();
                 let cookie = Arc::clone(&self.cookie);
 
-                shared_pool::run(move || {
-                    write_header_cookie(cookie, tx);
-                }, TaskType::Response);
+                shared_pool::run(
+                    move || {
+                        write_header_cookie(cookie, tx);
+                    },
+                    TaskType::Response,
+                );
 
                 Some(rx)
-            },
+            }
         };
 
-        let mut header =
-            Box::new(write_header_status(self.status, self.has_contents()));
+        let mut header = Box::new(write_header_status(self.status, self.has_contents()));
 
         // other header field-value pairs
-        write_headers(&self.header, &mut header, self.keep_alive && self.can_keep_alive);
+        write_headers(
+            &self.header,
+            &mut header,
+            self.keep_alive && self.can_keep_alive,
+        );
 
         if !self.content_type.is_empty() {
             header.push_str(&format!("Content-Type: {}\r\n", self.content_type));
@@ -262,8 +280,8 @@ impl Response {
 
         if !self.header.contains_key("connection") {
             let connection = match self.keep_alive {
-               true if self.can_keep_alive => "keep-alive",
-               _ => "close",
+                true if self.can_keep_alive => "keep-alive",
+                _ => "close",
             };
 
             header.push_str(&format!("Connection: {}\r\n", connection));
@@ -282,13 +300,12 @@ impl Response {
     }
 
     fn set_ext_mime_header(&mut self, path: &PathBuf) {
-        let mime_type =
-            if let Some(ext) = path.extension() {
-                let file_extension = ext.to_string_lossy();
-                default_mime_type_with_ext(&file_extension)
-            } else {
-                String::from("text/plain")
-            };
+        let mime_type = if let Some(ext) = path.extension() {
+            let file_extension = ext.to_string_lossy();
+            default_mime_type_with_ext(&file_extension)
+        } else {
+            String::from("text/plain")
+        };
 
         self.set_content_type(&mime_type);
     }
@@ -303,7 +320,15 @@ pub trait ResponseStates {
     fn status_is_set(&self) -> bool;
     fn has_contents(&self) -> bool;
     fn is_header_only(&self) -> bool;
-    fn get_channels(&mut self) -> Result<(Arc<mpsc::Sender<Box<String>>>, Arc<mpsc::Receiver<Box<String>>>), &'static str>;
+    fn get_channels(
+        &mut self,
+    ) -> Result<
+        (
+            Arc<mpsc::Sender<Box<String>>>,
+            Arc<mpsc::Receiver<Box<String>>>,
+        ),
+        &'static str,
+    >;
 }
 
 impl ResponseStates for Response {
@@ -311,7 +336,7 @@ impl ResponseStates for Response {
     fn to_keep_alive(&self) -> bool {
         self.keep_alive
     }
-    
+
     #[inline]
     fn get_redirect_path(&self) -> String {
         self.redirect.to_owned()
@@ -352,14 +377,24 @@ impl ResponseStates for Response {
     /// get_channels will create the channels for communicating between the chunk generator threads and
     /// the main stream. Listen to the receiver for any client communications, and use the sender to
     /// send any ensuing responses.
-    fn get_channels(&mut self) -> Result<(Arc<mpsc::Sender<Box<String>>>, Arc<mpsc::Receiver<Box<String>>>), &'static str> {
+    fn get_channels(
+        &mut self,
+    ) -> Result<
+        (
+            Arc<mpsc::Sender<Box<String>>>,
+            Arc<mpsc::Receiver<Box<String>>>,
+        ),
+        &'static str,
+    > {
         if self.notifier.is_none() {
-            let (tx, rx): (mpsc::Sender<Box<String>>, mpsc::Receiver<Box<String>>) = mpsc::channel();
+            let (tx, rx): (mpsc::Sender<Box<String>>, mpsc::Receiver<Box<String>>) =
+                mpsc::channel();
             self.notifier = Some((Arc::new(tx), rx));
         }
 
         if self.subscriber.is_none() {
-            let (tx, rx): (mpsc::Sender<Box<String>>, mpsc::Receiver<Box<String>>) = mpsc::channel();
+            let (tx, rx): (mpsc::Sender<Box<String>>, mpsc::Receiver<Box<String>>) =
+                mpsc::channel();
             self.subscriber = Some((tx, Arc::new(rx)));
         }
 
@@ -381,7 +416,11 @@ pub trait ResponseWriter {
     fn send(&mut self, content: &str);
     fn send_file(&mut self, file_path: &str) -> u16;
     fn send_file_async(&mut self, file_loc: &str);
-    fn send_template<T: EngineContext + Send + Sync + 'static>(&mut self, file_path: &str, context: Box<T>) -> u16;
+    fn send_template<T: EngineContext + Send + Sync + 'static>(
+        &mut self,
+        file_path: &str,
+        context: Box<T>,
+    ) -> u16;
     fn set_cookie(&mut self, cookie: Cookie);
     fn set_cookies(&mut self, cookie: &[Cookie]);
     fn clear_cookies(&mut self);
@@ -393,20 +432,21 @@ pub trait ResponseWriter {
 
 impl ResponseWriter for Response {
     fn status(&mut self, status: u16) {
-        self.status =
-            match status {
-                100 ... 101 => status,
-                200 ... 206 => status,
-                300 ... 308 if status != 307 && status != 308 => status,
-                400 ... 417 if status != 402 => status,
-                426 | 428 | 429 | 431 | 451 => status,
-                500 ... 505 | 511 => status,
-                _ => 0,
-            };
+        self.status = match status {
+            100...101 => status,
+            200...206 => status,
+            300...308 if status != 307 && status != 308 => status,
+            400...417 if status != 402 => status,
+            426 | 428 | 429 | 431 | 451 => status,
+            500...505 | 511 => status,
+            _ => 0,
+        };
     }
 
     fn header(&mut self, field: &str, value: &str, allow_replace: bool) {
-        if field.is_empty() || value.is_empty() { return; }
+        if field.is_empty() || value.is_empty() {
+            return;
+        }
 
         let key = field.to_lowercase();
         match &key[..] {
@@ -415,7 +455,7 @@ impl ResponseWriter for Response {
                     // only set the content type if the first time, or allow replacing the existing value
                     self.content_type = value.to_owned();
                 }
-            },
+            }
             "content-length" => {
                 if self.content_length.is_some() && !allow_replace {
                     // if the content length has been set and we won't allow override, we're done
@@ -425,9 +465,12 @@ impl ResponseWriter for Response {
                 if let Ok(valid_len) = value.parse::<u64>() {
                     self.content_length = Some(value.to_owned());
                 } else {
-                    panic!("Content length must be a valid string from u64, but provided with: {}", value);
+                    panic!(
+                        "Content length must be a valid string from u64, but provided with: {}",
+                        value
+                    );
                 }
-            },
+            }
             "connection" => {
                 if self.keep_alive && !allow_replace {
                     // if already toggled to keep alive and don't allow override, we're done
@@ -439,10 +482,10 @@ impl ResponseWriter for Response {
                 } else {
                     self.keep_alive = false;
                 }
-            },
+            }
             _ => {
                 self.header.add(field, value.to_owned(), allow_replace);
-            },
+            }
         };
     }
 
@@ -461,7 +504,9 @@ impl ResponseWriter for Response {
     }
 
     fn send(&mut self, content: &str) {
-        if self.is_header_only() { return; }
+        if self.is_header_only() {
+            return;
+        }
 
         if !content.is_empty() {
             self.body.push_str(content);
@@ -484,7 +529,9 @@ impl ResponseWriter for Response {
     fn send_file(&mut self, file_loc: &str) -> u16 {
         //TODO - use meta path
 
-        if self.is_header_only() { return 200; }
+        if self.is_header_only() {
+            return 200;
+        }
 
         if let Some(file_path) = get_file_path(file_loc) {
             let status = open_file(&file_path, &mut self.body);
@@ -505,7 +552,9 @@ impl ResponseWriter for Response {
     }
 
     fn send_file_async(&mut self, file_loc: &str) {
-        if self.is_header_only() { return; }
+        if self.is_header_only() {
+            return;
+        }
 
         // lazy init the tx-rx pair.
         if self.body_tx.is_none() {
@@ -519,21 +568,32 @@ impl ResponseWriter for Response {
 
             if let &Some(ref tx) = &self.body_tx {
                 let tx_clone = mpsc::Sender::clone(tx);
-                shared_pool::run(move || {
-                    open_file_async(path, tx_clone);
-                }, TaskType::Response);
+                shared_pool::run(
+                    move || {
+                        open_file_async(path, tx_clone);
+                    },
+                    TaskType::Response,
+                );
             }
         }
     }
 
     fn send_template<T: EngineContext + Send + Sync + 'static>(
-        &mut self, file_path: &str, context: Box<T>) -> u16 {
-
-        if self.is_header_only() { return 200; }
-        if file_path.is_empty() { return 404; }
+        &mut self,
+        file_path: &str,
+        context: Box<T>,
+    ) -> u16 {
+        if self.is_header_only() {
+            return 200;
+        }
+        if file_path.is_empty() {
+            return 404;
+        }
 
         if let Some(path) = get_file_path(file_path) {
-            if !path.is_file() { return 404; }
+            if !path.is_file() {
+                return 404;
+            }
 
             let mut ext = String::new();
             if let Some(os_ext) = path.extension() {
@@ -548,7 +608,7 @@ impl ResponseWriter for Response {
 
             let mut content = Box::new(String::new());
             open_file(&path, &mut content);
-            
+
             // Now render the conent with the engine
             let status = ServerConfig::template_parser(&ext[..], &mut content, context);
             if status == 0 || status == 200 {
@@ -566,7 +626,9 @@ impl ResponseWriter for Response {
     }
 
     fn set_cookie(&mut self, cookie: Cookie) {
-        if !cookie.is_valid() { return; }
+        if !cookie.is_valid() {
+            return;
+        }
 
         if let Some(cookie_set) = Arc::get_mut(&mut self.cookie) {
             let key = cookie.get_cookie_key();
@@ -577,7 +639,9 @@ impl ResponseWriter for Response {
     fn set_cookies(&mut self, cookies: &[Cookie]) {
         if let Some(cookie_set) = Arc::get_mut(&mut self.cookie) {
             for cookie in cookies.iter() {
-                if !cookie.is_valid() { continue; }
+                if !cookie.is_valid() {
+                    continue;
+                }
 
                 let key = cookie.get_cookie_key();
                 cookie_set.insert(key, cookie.clone());
@@ -603,7 +667,7 @@ impl ResponseWriter for Response {
             self.keep_alive = false;
         }
     }
-    
+
     fn set_content_type(&mut self, content_type: &str) {
         if !content_type.is_empty() {
             self.content_type = content_type.to_owned();
@@ -651,7 +715,9 @@ impl ResponseManager for Response {
         }
 
         // if contents have been provided, we're all good.
-        if self.has_contents() { return; }
+        if self.has_contents() {
+            return;
+        }
 
         // if not setting the header only and not having a body, it's a failure
         match self.status {
@@ -661,21 +727,21 @@ impl ResponseManager for Response {
                 } else {
                     self.body = Box::new(FOUR_OH_FOUR.to_owned());
                 }
-            },
+            }
             401 => {
                 if let Some(page_generator) = fallback.get(&401) {
                     self.body = Box::new(page_generator());
                 } else {
                     self.body = Box::new(FOUR_OH_ONE.to_owned());
                 }
-            },
+            }
             _ => {
                 if let Some(page_generator) = fallback.get(&500) {
                     self.body = Box::new(page_generator());
                 } else {
                     self.body = Box::new(FIVE_HUNDRED.to_owned());
                 }
-            },
+            }
         }
     }
 
@@ -701,13 +767,19 @@ impl ResponseManager for Response {
 
         // set read time-out to 16 seconds
         if let Err(e) = stream_clone.set_read_timeout(Some(LONG_CONN_TIMEOUT)) {
-            debug::print(&format!("Failed to establish a reading channel on a keep-alive stream: {}", e), 1);
+            debug::print(
+                &format!(
+                    "Failed to establish a reading channel on a keep-alive stream: {}",
+                    e
+                ),
+                1,
+            );
             return;
         }
 
         if let Some(sub) = self.subscriber.take() {
             // spawn a new thread to listen to the read stream for any new communications
-            broadcast_new_communications( Arc::new(Mutex::new(sub.0)), stream_clone);
+            broadcast_new_communications(Arc::new(Mutex::new(sub.0)), stream_clone);
         }
 
         if let Some(ref notifier) = self.notifier {
@@ -723,20 +795,24 @@ impl ResponseManager for Response {
     }
 }
 
-fn broadcast_new_communications(sender: Arc<Mutex<mpsc::Sender<Box<String>>>>, mut stream_clone: TcpStream) {
+fn broadcast_new_communications(
+    sender: Arc<Mutex<mpsc::Sender<Box<String>>>>,
+    mut stream_clone: TcpStream,
+) {
     thread::spawn(move || {
         let mut buffer = [0; 1024];
 
         loop {
             if let Err(e) = stream_clone.take_error() {
-                debug::print(
-                    &format!("Keep-alive stream can't continue: {}", e), 1);
+                debug::print(&format!("Keep-alive stream can't continue: {}", e), 1);
                 break;
             }
 
             if let Err(e) = stream_clone.read(&mut buffer) {
                 debug::print(
-                    &format!("Unable to continue reading from a keep-alive stream: {}", e), 1);
+                    &format!("Unable to continue reading from a keep-alive stream: {}", e),
+                    1,
+                );
                 break;
             }
 
@@ -750,7 +826,9 @@ fn broadcast_new_communications(sender: Arc<Mutex<mpsc::Sender<Box<String>>>>, m
                         // this could be caused by shutting down the stream from the main thread, so more of
                         // the informative level of the message.
                         debug::print(
-                            &format!("Unable to broadcast the communications: {}", err), 2);
+                            &format!("Unable to broadcast the communications: {}", err),
+                            2,
+                        );
                         break;
                     }
                 }
@@ -771,7 +849,7 @@ fn stream_default_body(status: u16, buffer: &mut BufWriter<&TcpStream>) {
         //explicit error status
         0 | 404 => write_default_page(400, buffer),
         500 => write_default_page(500, buffer),
-        _ => { /* Nothing */ },
+        _ => { /* Nothing */ }
     };
 }
 
@@ -780,11 +858,11 @@ fn write_default_page(status: u16, buffer: &mut BufWriter<&TcpStream>) {
         500 => {
             /* return default 500 page */
             write_to_buff(buffer, FIVE_HUNDRED.as_bytes());
-        },
+        }
         _ => {
             /* return default/override 404 page */
             write_to_buff(buffer, FOUR_OH_FOUR.as_bytes());
-        },
+        }
     }
 }
 
@@ -811,11 +889,11 @@ fn open_file(file_path: &PathBuf, buf: &mut Box<String>) -> u16 {
             Err(e) => {
                 debug::print(&format!("Unable to read file: {}", e), 1);
                 500
-            },
+            }
             Ok(_) => {
                 //things are truly ok now
                 200
-            },
+            }
         };
     } else {
         debug::print("Unable to open requested file for path", 1);
@@ -826,8 +904,10 @@ fn open_file(file_path: &PathBuf, buf: &mut Box<String>) -> u16 {
 fn open_file_async(file_path: PathBuf, tx: mpsc::Sender<Box<String>>) {
     let mut buf: Box<String> = Box::new(String::new());
     match open_file(&file_path, &mut buf) {
-        404 | 500 if buf.len() > 0 => { buf.clear(); },
-        _ => { /* Nothing to do here */ },
+        404 | 500 if buf.len() > 0 => {
+            buf.clear();
+        }
+        _ => { /* Nothing to do here */ }
     }
 
     if let Err(e) = tx.send(buf) {
@@ -836,55 +916,54 @@ fn open_file_async(file_path: PathBuf, tx: mpsc::Sender<Box<String>>) {
 }
 
 fn get_status(status: u16) -> String {
-    let status_base =
-        match status {
-            100 => "100 Continue",
-            101 => "101 Switching Protocols",
-            200 => "200 OK",
-            201 => "201 Created",
-            202 => "202 Accepted",
-            203 => "203 Non-Authoritative Information",
-            204 => "204 No Content",
-            205 => "205 Reset Content",
-            206 => "206 Partial Content",
-            300 => "300 Multiple Choices",
-            301 => "301 Moved Permanently",
-            302 => "302 Found",
-            303 => "303 See Other",
-            304 => "304 Not Modified",
-            307 => "307 Temporary Redirect",
-            308 => "308 Permanent Redirect",
-            400 => "400 Bad Request",
-            401 => "401 Unauthorized",
-            403 => "403 Forbidden",
-            404 => "404 Not Found",
-            405 => "405 Method Not Allowed",
-            406 => "406 Not Acceptable",
-            407 => "407 Proxy Authentication Required",
-            408 => "408 Request Timeout",
-            409 => "409 Conflict",
-            410 => "410 Gone",
-            411 => "411 Length Required",
-            412 => "412 Precondition Failed",
-            413 => "413 Payload Too Large",
-            414 => "414 URI Too Long",
-            415 => "415 Unsupported Media Type",
-            416 => "416 Range Not Satisfiable",
-            417 => "417 Expectation Failed",
-            426 => "426 Upgrade Required",
-            428 => "428 Precondition Required",
-            429 => "429 Too Many Requests",
-            431 => "431 Request Header Fields Too Large",
-            451 => "451 Unavailable For Legal Reasons",
-            500 => "500 Internal Server Error",
-            501 => "501 Not Implemented",
-            502 => "502 Bad Gateway",
-            503 => "503 Service Unavailable",
-            504 => "504 Gateway Timeout",
-            505 => "505 HTTP Version Not Supported",
-            511 => "511 Network Authentication Required",
-            _ => "403 Forbidden",
-        };
+    let status_base = match status {
+        100 => "100 Continue",
+        101 => "101 Switching Protocols",
+        200 => "200 OK",
+        201 => "201 Created",
+        202 => "202 Accepted",
+        203 => "203 Non-Authoritative Information",
+        204 => "204 No Content",
+        205 => "205 Reset Content",
+        206 => "206 Partial Content",
+        300 => "300 Multiple Choices",
+        301 => "301 Moved Permanently",
+        302 => "302 Found",
+        303 => "303 See Other",
+        304 => "304 Not Modified",
+        307 => "307 Temporary Redirect",
+        308 => "308 Permanent Redirect",
+        400 => "400 Bad Request",
+        401 => "401 Unauthorized",
+        403 => "403 Forbidden",
+        404 => "404 Not Found",
+        405 => "405 Method Not Allowed",
+        406 => "406 Not Acceptable",
+        407 => "407 Proxy Authentication Required",
+        408 => "408 Request Timeout",
+        409 => "409 Conflict",
+        410 => "410 Gone",
+        411 => "411 Length Required",
+        412 => "412 Precondition Failed",
+        413 => "413 Payload Too Large",
+        414 => "414 URI Too Long",
+        415 => "415 Unsupported Media Type",
+        416 => "416 Range Not Satisfiable",
+        417 => "417 Expectation Failed",
+        426 => "426 Upgrade Required",
+        428 => "428 Precondition Required",
+        429 => "429 Too Many Requests",
+        431 => "431 Request Header Fields Too Large",
+        451 => "451 Unavailable For Legal Reasons",
+        500 => "500 Internal Server Error",
+        501 => "501 Not Implemented",
+        502 => "502 Bad Gateway",
+        503 => "503 Service Unavailable",
+        504 => "504 Gateway Timeout",
+        505 => "505 HTTP Version Not Supported",
+        511 => "511 Network Authentication Required",
+        _ => "403 Forbidden",
+    };
 
     return format!("HTTP/1.1 {}\r\n", status_base);
 }
@@ -899,7 +978,9 @@ fn default_mime_type_with_ext(ext: &str) -> String {
         "bz2" => String::from("application/x-bzip2"),
         "css" | "scss" | "sass" | "less" => String::from("text/css"),
         "doc" => String::from("application/msword"),
-        "docx" => String::from("application/vnd.openxmlformats-officedocument.wordprocessingml.document"),
+        "docx" => {
+            String::from("application/vnd.openxmlformats-officedocument.wordprocessingml.document")
+        }
         "eot" => String::from("application/vnd.ms-fontobject"),
         "epub" => String::from("application/epub+zip"),
         "js" | "jsx" => String::from("application/javascript"),
@@ -912,7 +993,9 @@ fn default_mime_type_with_ext(ext: &str) -> String {
         "ods" => String::from("application/vnd.oasis.opendocument.spreadsheet"),
         "odt" => String::from("application/vnd.oasis.opendocument.text"),
         "ppt" => String::from("application/vnd.ms-powerpoint"),
-        "pptx" => String::from("application/vnd.openxmlformats-officedocument.presentationml.presentation"),
+        "pptx" => String::from(
+            "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+        ),
         "rar" => String::from("application/x-rar-compressed"),
         "swf" => String::from("application/x-shockwave-flash"),
         "vsd" => String::from("application/vnd.visio"),
@@ -924,9 +1007,11 @@ fn default_mime_type_with_ext(ext: &str) -> String {
         "svg" => String::from("image/svg+xml"),
         "csh" | "sh" | "tar" | "wav" => format!("application/x-{}", ext),
         "csv" | "html" | "htm" => format!("text/{}", ext),
-        "jpeg" | "jpg" | "gif" | "png" | "bmp" | "webp" | "tiff" | "tif" => format!("image/{}", ext),
+        "jpeg" | "jpg" | "gif" | "png" | "bmp" | "webp" | "tiff" | "tif" => {
+            format!("image/{}", ext)
+        }
         "otf" | "ttf" | "woff" | "woff2" => format!("font/{}", ext),
-        "midi" | "mp3" | "aac" | "mid" | "oga"  => format!("audio/{}", ext),
+        "midi" | "mp3" | "aac" | "mid" | "oga" => format!("audio/{}", ext),
         "webm" | "mp4" | "ogg" | "mpeg" | "ogv" => format!("video/{}", ext),
         "xml" | "pdf" | "json" | "ogx" | "rtf" | "zip" => format!("application/{}", ext),
         _ if !ext.is_empty() => format!("application/{}", ext),
@@ -936,9 +1021,7 @@ fn default_mime_type_with_ext(ext: &str) -> String {
 
 fn write_header_status(status: u16, has_contents: bool) -> String {
     match status {
-        404 | 500 => {
-            get_status(status)
-        },
+        404 | 500 => get_status(status),
         0 => {
             /* No status has been explicitly set, be smart here */
             if has_contents {
@@ -946,20 +1029,27 @@ fn write_header_status(status: u16, has_contents: bool) -> String {
             } else {
                 get_status(404)
             }
-        },
+        }
         _ => {
             /* A status has been set explicitly, respect that here. */
             get_status(status)
-        },
+        }
     }
 }
 
-fn write_headers(header: &HashMap<String, String>, final_header: &mut Box<String>, keep_alive: bool) {
+fn write_headers(
+    header: &HashMap<String, String>,
+    final_header: &mut Box<String>,
+    keep_alive: bool,
+) {
     final_header.push_str(&format!("Server: Rusty-Express/{}\r\n", VERSION));
 
     if !header.contains_key("date") {
         let dt = Utc::now();
-        final_header.push_str(&format!("Date: {}\r\n", dt.format("%a, %e %b %Y %T GMT").to_string()));
+        final_header.push_str(&format!(
+            "Date: {}\r\n",
+            dt.format("%a, %e %b %Y %T GMT").to_string()
+        ));
     }
 
     let transfer = String::from("transfer-encoding");

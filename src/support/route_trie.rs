@@ -1,7 +1,7 @@
 #![allow(dead_code)]
 
-use std::collections::HashMap;
 use core::router::Callback;
+use std::collections::HashMap;
 
 pub struct TrieNode {
     field: String,
@@ -21,7 +21,9 @@ impl TrieNode {
     }
 
     pub fn insert(&mut self, mut segments: Vec<String>, callback: Callback) {
-        if segments.is_empty() { return; }
+        if segments.is_empty() {
+            return;
+        }
 
         let head = segments.remove(0);
         let (current, is_param) = match head.starts_with(':') {
@@ -35,41 +37,40 @@ impl TrieNode {
             if let Some(child) = self.named_children.get_mut(current) {
                 match segments.len() {
                     0 => {
-                        if let Some(_) = child.callback { panic!("Key collision!"); }
+                        if let Some(_) = child.callback {
+                            panic!("Key collision!");
+                        }
                         child.callback = Some(callback);
-                    },
+                    }
                     _ => {
                         child.insert(segments, callback);
-                    },
+                    }
                 }
 
                 return;
             }
 
             let new_child = match segments.len() {
-                    0 => {
-                        TrieNode::new(current, Some(callback))
-                    },
-                    _ => {
-                        let mut temp = TrieNode::new(current, None);
-                        temp.insert(segments, callback);
-                        temp
-                    },
-                };
+                0 => TrieNode::new(current, Some(callback)),
+                _ => {
+                    let mut temp = TrieNode::new(current, None);
+                    temp.insert(segments, callback);
+                    temp
+                }
+            };
 
-            self.named_children.insert(head.to_owned(), Box::new(new_child));
+            self.named_children
+                .insert(head.to_owned(), Box::new(new_child));
             return;
         }
 
         let new_child = match segments.len() {
-            0 => {
-                TrieNode::new(current, Some(callback))
-            },
+            0 => TrieNode::new(current, Some(callback)),
             _ => {
                 let mut node = TrieNode::new(current, None);
                 node.insert(segments, callback);
                 node
-            },
+            }
         };
 
         self.params_children.push(Box::new(new_child));
@@ -88,7 +89,7 @@ impl Clone for TrieNode {
 }
 
 pub struct RouteTrie {
-    pub root: TrieNode
+    pub root: TrieNode,
 }
 
 impl RouteTrie {
@@ -107,8 +108,14 @@ impl RouteTrie {
         self.root.insert(segments, callback);
     }
 
-    pub fn find(root: &TrieNode, segments: &[String], params: &mut Vec<(String, String)>) -> Option<Callback> {
-        if segments.is_empty() { return None; }
+    pub fn find(
+        root: &TrieNode,
+        segments: &[String],
+        params: &mut Vec<(String, String)>,
+    ) -> Option<Callback> {
+        if segments.is_empty() {
+            return None;
+        }
 
         let head = &segments[0];
         let is_segments_tail = segments.len() <= 1;

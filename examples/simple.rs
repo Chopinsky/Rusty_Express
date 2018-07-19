@@ -13,16 +13,17 @@ fn main() {
 }
 
 pub fn simple_response(req: &Box<Request>, resp: &mut Box<Response>) {
-
     /*        Test: generate new Sessions
     //        if let Some(mut session) = Session::new() {
     //            session.expires_at(SystemTime::now().add(Duration::new(5, 0)));
     //            session.save();
     //            println!("New session: {}", session.get_id());
     //        }
-    */
+     */
 
-    resp.send(&format!("Hello world from rusty server from path: {}", req.uri));
+    resp.send(&format!(
+        "Hello world from rusty server from path: {}",
+        req.uri
+    ));
     resp.status(200);
 }
-

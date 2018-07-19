@@ -19,21 +19,25 @@ fn main() {
 
     // Define router separately
     let mut router = Route::new();
-    router.get(RequestPath::Explicit("/"), Model::simple_response)
-          .get(RequestPath::Explicit("/index"), Model::simple_index);
+    router
+        .get(RequestPath::Explicit("/"), Model::simple_response)
+        .get(RequestPath::Explicit("/index"), Model::simple_index);
 
     server.def_router(router);
 
     //server.listen(8080);
-    server.listen_and_serve(8080, Some(|sender| {
-        // automatically shutting down after 60 seconds
-        thread::sleep(Duration::from_secs(60));
-        sender.send(ControlMessage::Terminate);
-    }));
+    server.listen_and_serve(
+        8080,
+        Some(|sender| {
+            // automatically shutting down after 60 seconds
+            thread::sleep(Duration::from_secs(60));
+            sender.send(ControlMessage::Terminate);
+        }),
+    );
 }
 
 struct Model {
-    count: u32
+    count: u32,
 }
 
 impl Model {
@@ -62,7 +66,9 @@ impl Model {
     }
 
     #[inline]
-    fn add_one(&mut self) { self.count += 1; }
+    fn add_one(&mut self) {
+        self.count += 1;
+    }
 
     #[inline]
     fn get_count(&self) -> u32 {
@@ -84,9 +90,7 @@ impl Model {
 
 impl Clone for Model {
     fn clone(&self) -> Self {
-        Model {
-            count: self.count,
-        }
+        Model { count: self.count }
     }
 }
 

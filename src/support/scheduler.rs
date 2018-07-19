@@ -1,9 +1,9 @@
 #![allow(dead_code)]
 
 use std::mem;
+use std::sync::{mpsc, Arc, Mutex, Once, ONCE_INIT};
 use std::thread;
 use std::time::Duration;
-use std::sync::{mpsc, Arc, Mutex, Once, ONCE_INIT};
 use support::debug;
 
 static TIMEOUT: Duration = Duration::from_millis(200);
@@ -54,7 +54,10 @@ impl ThreadPool {
         }
     }
 
-    pub(crate) fn execute<F>(&self, f: F) where F: FnOnce() + Send + 'static {
+    pub(crate) fn execute<F>(&self, f: F)
+    where
+        F: FnOnce() + Send + 'static,
+    {
         let job = Box::new(f);
 
         //TODO: switching to mpmc, and check sender.len() to determine if we need to add more workers
@@ -78,7 +81,9 @@ impl ThreadPool {
 
         for worker in &mut self.workers {
             if let Some(thread) = worker.thread.take() {
-                thread.join().expect("Couldn't join on the associated thread");
+                thread
+                    .join()
+                    .expect("Couldn't join on the associated thread");
             }
         }
     }
@@ -140,12 +145,13 @@ static mut POOL: Option<Pool> = None;
 pub(crate) fn initialize_with(sizes: Vec<usize>) {
     unsafe {
         ONCE.call_once(|| {
-            let pool_sizes: Vec<usize> = sizes.iter().map(|val| {
-                match val {
+            let pool_sizes: Vec<usize> = sizes
+                .iter()
+                .map(|val| match val {
                     &0 => 1,
                     _ => *val,
-                }
-            }).collect();
+                })
+                .collect();
 
             let (req_size, resp_size) = match pool_sizes.len() {
                 1 => (pool_sizes[0], pool_sizes[0]),
@@ -166,7 +172,8 @@ pub(crate) fn initialize_with(sizes: Vec<usize>) {
 }
 
 pub(crate) fn run<F>(f: F, task: TaskType)
-    where F: FnOnce() + Send + 'static
+where
+    F: FnOnce() + Send + 'static,
 {
     unsafe {
         if let Some(ref mut pool) = POOL {
@@ -175,11 +182,11 @@ pub(crate) fn run<F>(f: F, task: TaskType)
                 TaskType::Request => {
                     pool.req_workers.execute(f);
                     return;
-                },
+                }
                 TaskType::Response => {
                     pool.resp_workers.execute(f);
                     return;
-                },
+                }
             };
         }
 

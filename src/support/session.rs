@@ -53,19 +53,19 @@
 //! }
 //! ```
 
-use std::collections::HashMap;
 use std::cmp::Ordering;
+use std::collections::HashMap;
 use std::fs::File;
 use std::io::{BufRead, BufReader, Write};
 use std::marker::Sized;
 use std::ops::*;
 use std::path::Path;
-use std::sync::{RwLock, mpsc};
 use std::sync::atomic;
-use std::sync::atomic::{AtomicBool};
-use std::time::{Duration, SystemTime};
+use std::sync::atomic::AtomicBool;
+use std::sync::{mpsc, RwLock};
 use std::thread;
 use std::thread::*;
+use std::time::{Duration, SystemTime};
 
 use chrono;
 use chrono::prelude::*;
@@ -86,7 +86,6 @@ lazy_static! {
 /// session object for persistent storage (currently only supporting plain text file); the 'deserialize'
 /// serves as the constructor based on the saved info from the saved info.
 pub trait SessionData {
-
     /// 'serialize' should be implemented to convert all session data that shall be persistent between
     /// http requests or connections.
     /// Note: ASCII characters \u{0005} and \u{0006} are reserved delimiters, please avoid
@@ -98,7 +97,9 @@ pub trait SessionData {
     /// or connections.
     /// Note: ASCII characters \u{0005} and \u{0006} are reserved delimiters, please avoid
     /// using these characters in your output string.
-    fn deserialize(raw: &str) -> Option<Self> where Self: Sized;
+    fn deserialize(raw: &str) -> Option<Self>
+    where
+        Self: Sized;
 }
 
 pub struct Session {
@@ -112,7 +113,9 @@ pub struct Session {
 impl SessionData for Session {
     fn serialize(&self) -> String {
         let mut result = String::new();
-        if self.id.is_empty() { return result; }
+        if self.id.is_empty() {
+            return result;
+        }
 
         let expires_at = self.expires_at.to_rfc3339();
         result.push_str(&format!("{}{}", self.id.to_owned(), DELEM_LV_2));
@@ -225,12 +228,11 @@ impl SessionExchangeConfig for ExchangeConfig {
 
     fn clean_up_to(lifetime: DateTime<Utc>) {
         let now = Utc::now();
-        let time =
-            if lifetime.cmp(&now) != Ordering::Greater {
-                now
-            } else {
-                lifetime
-            };
+        let time = if lifetime.cmp(&now) != Ordering::Greater {
+            now
+        } else {
+            lifetime
+        };
 
         thread::spawn(move || {
             clean_up_to(time);
@@ -250,12 +252,11 @@ impl SessionExchangeConfig for ExchangeConfig {
             return None;
         }
 
-        let sleep_period =
-            if period.cmp(&Duration::from_secs(60)) == Ordering::Less {
-                Duration::from_secs(60)
-            } else {
-                period
-            };
+        let sleep_period = if period.cmp(&Duration::from_secs(60)) == Ordering::Less {
+            Duration::from_secs(60)
+        } else {
+            period
+        };
 
         Some(thread::spawn(move || {
             AUTO_CLEARN.store(true, atomic::Ordering::Release);
@@ -350,17 +351,19 @@ pub trait PersistHandler {
 impl PersistHandler for Session {
     //TODO:allow decreptor
     fn init_from_file(path: &Path) -> bool {
-        let mut buf_reader =
-            if let Ok(dest_file) = File::open(&path) {
-                BufReader::new(dest_file)
-            } else {
-                // can't read the file, abort saving
-                eprintln!("Unable to open the session store file, please check if the file exists.");
-                return false;
-            };
+        let mut buf_reader = if let Ok(dest_file) = File::open(&path) {
+            BufReader::new(dest_file)
+        } else {
+            // can't read the file, abort saving
+            eprintln!("Unable to open the session store file, please check if the file exists.");
+            return false;
+        };
 
         let pool = ThreadPool::new(8);
-        let (tx, rx): (mpsc::Sender<Option<Session>>, mpsc::Receiver<Option<Session>>) = mpsc::channel();
+        let (tx, rx): (
+            mpsc::Sender<Option<Session>>,
+            mpsc::Receiver<Option<Session>>,
+        ) = mpsc::channel();
 
         let now = Utc::now();
         let default_expires = get_next_expiration(&now);
@@ -369,24 +372,26 @@ impl PersistHandler for Session {
         loop {
             let mut buf: Vec<u8> = Vec::new();
             if let Ok(size) = buf_reader.read_until(DELEM_LV_1 as u8, &mut buf) {
-                if size == 0 { break; }
+                if size == 0 {
+                    break;
+                }
 
                 buf.pop();
                 if let Ok(session) = String::from_utf8(buf) {
-                    if session.is_empty() { continue; }
+                    if session.is_empty() {
+                        continue;
+                    }
 
                     let tx_clone = mpsc::Sender::clone(&tx);
                     pool.execute(move || {
                         recreate_session_from_raw(session, &default_expires, &now, tx_clone);
                     });
                 }
-
             } else {
                 failures += 1;
                 if failures > 5 {
                     break;
                 }
-
             }
         }
 
@@ -396,7 +401,7 @@ impl PersistHandler for Session {
             for received in rx {
                 if let Some(session) = received {
                     let id: String = session.id.to_owned();
-                    store.entry(id).or_insert(session);  //if a key collision, always keep the early entry.
+                    store.entry(id).or_insert(session); //if a key collision, always keep the early entry.
                 }
             }
         }
@@ -408,21 +413,24 @@ impl PersistHandler for Session {
     fn save_to_file(path: &Path) {
         let save_path = path.to_owned();
         let handler = thread::spawn(move || {
-            let mut file =
-                if let Ok(dest_file) = File::create(&save_path) {
-                    dest_file
-                } else {
-                    // can't create file, abort saving
-                    return;
-                };
+            let mut file = if let Ok(dest_file) = File::create(&save_path) {
+                dest_file
+            } else {
+                // can't create file, abort saving
+                return;
+            };
 
             if let Ok(store) = STORE.read() {
                 let mut count: u8 = 0;
                 for (_, val) in store.iter() {
                     let s = format!("{}{}", val.serialize(), DELEM_LV_1);
 
-                    if s.is_empty() { continue; }
-                    if let Err(_) = file.write(s.as_bytes()) { continue; }
+                    if s.is_empty() {
+                        continue;
+                    }
+                    if let Err(_) = file.write(s.as_bytes()) {
+                        continue;
+                    }
 
                     count += 1;
                     if count % 32 == 0 {
@@ -453,7 +461,9 @@ fn new_session(id: &str) -> Option<Session> {
             None => String::new(),
         };
 
-        if next_id.is_empty() { return None; }
+        if next_id.is_empty() {
+            return None;
+        }
     } else {
         next_id = id.to_owned();
     }
@@ -476,15 +486,9 @@ fn new_session(id: &str) -> Option<Session> {
 }
 
 fn gen_session_id(id_size: usize) -> Option<String> {
-    let size =
-        if id_size < 16 {
-            16
-        } else {
-            id_size
-        };
+    let size = if id_size < 16 { 16 } else { id_size };
 
-    let mut next_id: String =
-        thread_rng().gen_ascii_chars().take(size).collect();
+    let mut next_id: String = thread_rng().gen_ascii_chars().take(size).collect();
 
     if let Ok(store) = STORE.read() {
         let begin = SystemTime::now();
@@ -530,9 +534,11 @@ fn save(id: String, session: &mut Session) -> bool {
 fn rebuild_session(
     raw: &str,
     default_expires: DateTime<Utc>,
-    now: chrono::DateTime<Utc>) -> Option<Session>
-{
-    if raw.is_empty() { return None; }
+    now: chrono::DateTime<Utc>,
+) -> Option<Session> {
+    if raw.is_empty() {
+        return None;
+    }
 
     let mut id = String::new();
     let mut expires_at = default_expires.clone();
@@ -543,8 +549,10 @@ fn rebuild_session(
         match index {
             0 => {
                 id = field.to_owned();
-                if id.is_empty() { return None; }
-            },
+                if id.is_empty() {
+                    return None;
+                }
+            }
             1 => {
                 if let Ok(parsed_expiration) = field.parse::<DateTime<Utc>>() {
                     expires_at = parsed_expiration;
@@ -553,10 +561,14 @@ fn rebuild_session(
                         return None;
                     }
                 }
+            }
+            2 => if field.eq("true") {
+                auto_renewal = true;
             },
-            2 => if field.eq("true") { auto_renewal = true; },
-            3 => { store = Box::new(String::from(field)) },
-            _ => { break; },
+            3 => store = Box::new(String::from(field)),
+            _ => {
+                break;
+            }
         }
     }
 
@@ -592,7 +604,9 @@ fn release(id: String) -> bool {
 fn clean_up_to(time: DateTime<Utc>) {
     let mut stale_sessions: Vec<String> = Vec::new();
     if let Ok(mut store) = STORE.write() {
-        if store.is_empty() { return; }
+        if store.is_empty() {
+            return;
+        }
 
         for session in store.values() {
             if session.expires_at.cmp(&time) != Ordering::Greater {
@@ -614,8 +628,8 @@ fn recreate_session_from_raw(
     raw: String,
     expires_at: &DateTime<Utc>,
     now: &DateTime<Utc>,
-    tx: mpsc::Sender<Option<Session>>)
-{
+    tx: mpsc::Sender<Option<Session>>,
+) {
     let result = rebuild_session(&raw[..], expires_at.to_owned(), now.to_owned());
 
     if let Err(e) = tx.send(result) {
