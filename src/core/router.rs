@@ -14,7 +14,9 @@ use support::debug;
 use support::TaskType;
 use support::{shared_pool, RouteTrie};
 
-//TODO: authorized routes -> authFunc
+lazy_static! {
+    static ref ROUTE_ALL: REST = REST::OTHER(String::from("*"));
+}
 
 #[derive(PartialEq, Eq, Hash, Clone)]
 pub enum REST {
@@ -100,7 +102,7 @@ impl RouteMap {
                 }
 
                 self.explicit.add(req_uri, callback, false);
-            }
+            },
             RequestPath::WildCard(req_uri) => {
                 if req_uri.is_empty() {
                     panic!("Request path must have valid contents.");
@@ -114,9 +116,9 @@ impl RouteMap {
                     self.wildcard
                         .add(req_uri, RegexRoute::new(re, callback), false);
                 }
-            }
+            },
             RequestPath::ExplicitWithParams(req_uri) => {
-                if !req_uri.contains("/:") {
+                if !req_uri.contains("/:") && !req_uri.contains(":\\") {
                     self.explicit.add(req_uri, callback, false);
                     return;
                 }
@@ -133,9 +135,11 @@ impl RouteMap {
                 }
 
                 self.explicit_with_params.add(segments, callback);
-            }
+            },
         }
     }
+
+    //TODO: add params validations
 
     fn seek_path(&self, uri: &str, params: &mut HashMap<String, String>) -> Option<Callback> {
         if let Some(callback) = self.explicit.get(uri) {
@@ -220,7 +224,6 @@ impl Clone for Route {
 }
 
 pub trait Router {
-    //TODO: add "all" to the router
     fn get(&mut self, uri: RequestPath, callback: Callback) -> &mut Route;
     fn patch(&mut self, uri: RequestPath, callback: Callback) -> &mut Route;
     fn post(&mut self, uri: RequestPath, callback: Callback) -> &mut Route;
@@ -228,6 +231,7 @@ pub trait Router {
     fn delete(&mut self, uri: RequestPath, callback: Callback) -> &mut Route;
     fn options(&mut self, uri: RequestPath, callback: Callback) -> &mut Route;
     fn other(&mut self, method: &str, uri: RequestPath, callback: Callback) -> &mut Route;
+    fn all(&mut self, uri: RequestPath, callback: Callback) -> &mut Route;
 }
 
 impl Router for Route {
@@ -268,7 +272,16 @@ impl Router for Route {
 
         let request_method = REST::OTHER(method.to_uppercase());
         self.add_route(request_method, uri, callback);
+
         self
+    }
+
+    /// Function 'all' will match the uri on all request methods. Note that the "match all" paradigm
+    /// is used in this framework as a safe fallback, which means that if a different callback
+    /// has been defined for the same uri but under a explicitly defined request method (e.g. get,
+    /// post, etc.), it will be matched and invoked instead of the "match all" callback functions.
+    fn all(&mut self, uri: RequestPath, callback: Callback) -> &mut Route {
+        self.other("*", uri.clone(), callback)
     }
 }
 
@@ -312,10 +325,18 @@ impl RouteHandler for Route {
 
         if let Some(routes) = self.store.get(method) {
             result = routes.seek_path(uri, &mut params);
+
         } else if header_only {
             //if a header only request, fallback to search with REST::GET
             if let Some(routes) = self.store.get(&REST::GET) {
                 result = routes.seek_path(uri, &mut params);
+            }
+
+        }
+
+        if result.is_none() {
+            if let Some(all_routes) = self.store.get(&ROUTE_ALL) {
+                result = all_routes.seek_path(uri, &mut params);
             }
         }
 
@@ -341,24 +362,29 @@ fn search_params_router(
     route_head: &RouteTrie,
     uri: &str,
 ) -> (Option<Callback>, Vec<(String, String)>) {
-    let raw_segments: Vec<String> = uri.trim_matches('/')
-        .split('/')
-        .map(|s| s.to_owned())
-        .collect();
-    let segements = raw_segments.as_slice();
-    let mut params: Vec<(String, String)> = Vec::new();
 
-    let result = RouteTrie::find(&route_head.root, segements, &mut params);
+    let raw_segments: Vec<String> =
+        uri.trim_matches('/')
+            .split('/')
+            .map(|s| s.to_owned())
+            .collect();
+
+    let mut params: Vec<(String, String)> = Vec::new();
+    let result =
+        RouteTrie::find(&route_head.root, raw_segments.as_slice(), &mut params);
 
     (result, params)
 }
 
-fn validate_segments(segments: &Vec<String>) -> Result<(), &'static str> {
+fn validate_segments(segments: &Vec<String>) -> Result<(), String> {
     let mut param_names = HashSet::new();
+
     for seg in segments {
         if seg.starts_with(':') {
-            if param_names.contains(seg) {
-                return Err("Route parameters must have unique names.");
+            if seg.len() == 1 {
+                return Err(String::from("Route parameter name can't be null"));
+            } else if param_names.contains(seg) {
+                return Err(format!("Route parameters must have unique name: {}", seg));
             } else {
                 param_names.insert(seg);
             }

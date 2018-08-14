@@ -40,6 +40,7 @@ impl TrieNode {
                         if let Some(_) = child.callback {
                             panic!("Key collision!");
                         }
+
                         child.callback = Some(callback);
                     }
                     _ => {
@@ -61,6 +62,7 @@ impl TrieNode {
 
             self.named_children
                 .insert(head.to_owned(), Box::new(new_child));
+
             return;
         }
 
@@ -88,6 +90,8 @@ impl Clone for TrieNode {
     }
 }
 
+//TODO: add params validations
+
 pub struct RouteTrie {
     pub root: TrieNode,
 }
@@ -113,6 +117,7 @@ impl RouteTrie {
         segments: &[String],
         params: &mut Vec<(String, String)>,
     ) -> Option<Callback> {
+
         if segments.is_empty() {
             return None;
         }
@@ -128,8 +133,11 @@ impl RouteTrie {
             return RouteTrie::find(&child, &segments[1..], params);
         }
 
-        for params_child in root.params_children.iter() {
-            let param_node = params_child;
+        for param_node in root.params_children.iter() {
+            if !param_node.field.is_empty() {
+                continue;
+            }
+
             params.push((param_node.field.to_owned(), head.to_owned()));
 
             if is_segments_tail {

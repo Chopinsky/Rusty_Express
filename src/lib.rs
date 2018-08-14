@@ -350,6 +350,11 @@ impl Router for HttpServer {
         self.router.other(method, uri, callback);
         &mut self.router
     }
+
+    fn all(&mut self, uri: RequestPath, callback: Callback) -> &mut Route {
+        self.router.all(uri, callback);
+        &mut self.router
+    }
 }
 
 impl ViewEngineDefinition for HttpServer {
