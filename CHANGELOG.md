@@ -1,3 +1,7 @@
+# 2018-08
+## 0.3.4
+- Fixing bugs
+
 # 2018-07
 ## 0.3.3
 - Removing the `state_interaction` mechanism. The replacement feature, the server `context` module, has been introduced

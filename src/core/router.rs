@@ -147,7 +147,8 @@ impl RouteMap {
         }
 
         if !self.explicit_with_params.is_empty() {
-            let (callback, temp_params) = search_params_router(&self.explicit_with_params, uri);
+            let (callback, temp_params) =
+                search_params_router(&self.explicit_with_params, uri);
 
             if callback.is_some() {
                 for param in temp_params {

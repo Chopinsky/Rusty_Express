@@ -134,7 +134,7 @@ impl RouteTrie {
         }
 
         for param_node in root.params_children.iter() {
-            if !param_node.field.is_empty() {
+            if param_node.field.is_empty() {
                 continue;
             }
 
