@@ -1,4 +1,9 @@
 # 2018-08
+## 0.3.5 (Next version...)
+- Now you can define regular expressions for validating the `RequestPath::ExplicitWithParams` 
+routes. This will help reduce the server burden if the incoming request is trying to guess the parameters.
+- Heads up: next version will be published in 0.4.x.
+
 ## 0.3.4
 - Fixing bugs
 

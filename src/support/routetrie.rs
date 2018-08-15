@@ -1,26 +1,44 @@
 #![allow(dead_code)]
 
-use core::router::Callback;
+use core::router::{Callback, REST};
+use regex::Regex;
 use std::collections::HashMap;
 
-pub struct TrieNode {
-    field: String,
-    callback: Option<Callback>,
-    named_children: HashMap<String, Box<TrieNode>>,
-    params_children: Vec<Box<TrieNode>>,
+struct Field {
+    name: String,
+    validation: Option<Regex>,
 }
 
-impl TrieNode {
-    fn new(field: &str, callback: Option<Callback>) -> Self {
-        TrieNode {
-            field: field.to_owned(),
+impl Clone for Field {
+    fn clone(&self) -> Self {
+        Field {
+            name: self.name.clone(),
+            validation: self.validation.clone(),
+        }
+    }
+}
+
+struct Node {
+    field: Field,
+    callback: Option<Callback>,
+    named_children: HashMap<String, Box<Node>>,
+    params_children: Vec<Box<Node>>,
+}
+
+impl Node {
+    fn new(field: &str, validation: Option<Regex>, callback: Option<Callback>) -> Self {
+        Node {
+            field: Field {
+                name: field.to_owned(),
+                validation,
+            },
             callback,
             named_children: HashMap::new(),
             params_children: Vec::new(),
         }
     }
 
-    pub fn insert(&mut self, mut segments: Vec<String>, callback: Callback) {
+    fn insert(&mut self, mut segments: Vec<String>, callback: Callback) {
         if segments.is_empty() {
             return;
         }
@@ -51,37 +69,32 @@ impl TrieNode {
                 return;
             }
 
-            let new_child = match segments.len() {
-                0 => TrieNode::new(current, Some(callback)),
-                _ => {
-                    let mut temp = TrieNode::new(current, None);
-                    temp.insert(segments, callback);
-                    temp
-                }
-            };
-
             self.named_children
-                .insert(head.to_owned(), Box::new(new_child));
+                .insert(head.to_owned(), Node::build_new_child(current, segments, callback));
 
             return;
         }
 
-        let new_child = match segments.len() {
-            0 => TrieNode::new(current, Some(callback)),
-            _ => {
-                let mut node = TrieNode::new(current, None);
-                node.insert(segments, callback);
-                node
-            }
-        };
+        self.params_children.push(Node::build_new_child(current, segments, callback));
+    }
 
-        self.params_children.push(Box::new(new_child));
+    fn build_new_child(name: &str, segments: Vec<String>, callback: Callback) -> Box<Node> {
+        match segments.len() {
+            0 => {
+                Box::new(Node::new(name, None, Some(callback)))
+            },
+            _ => {
+                let mut node = Node::new(name, None, None);
+                node.insert(segments, callback);
+                Box::new(node)
+            }
+        }
     }
 }
 
-impl Clone for TrieNode {
+impl Clone for Node {
     fn clone(&self) -> Self {
-        TrieNode {
+        Node {
             field: self.field.clone(),
             callback: self.callback.clone(),
             named_children: self.named_children.clone(),
@@ -93,13 +106,13 @@ impl Clone for TrieNode {
 //TODO: add params validations
 
 pub struct RouteTrie {
-    pub root: TrieNode,
+    root: Node,
 }
 
 impl RouteTrie {
     pub fn initialize() -> Self {
         RouteTrie {
-            root: TrieNode::new("/", None),
+            root: Node::new("/", None, None),
         }
     }
 
@@ -113,11 +126,20 @@ impl RouteTrie {
     }
 
     pub fn find(
-        root: &TrieNode,
+        route_head: &RouteTrie,
         segments: &[String],
         params: &mut Vec<(String, String)>,
-    ) -> Option<Callback> {
+    ) -> Option<Callback>
+    {
+        RouteTrie::recursive_find(&route_head.root, segments, params)
+    }
 
+    fn recursive_find (
+        root: &Node,
+        segments: &[String],
+        params: &mut Vec<(String, String)>,
+    ) -> Option<Callback>
+    {
         if segments.is_empty() {
             return None;
         }
@@ -130,22 +152,28 @@ impl RouteTrie {
                 return child.callback;
             }
 
-            return RouteTrie::find(&child, &segments[1..], params);
+            return RouteTrie::recursive_find(&child, &segments[1..], params);
         }
 
         for param_node in root.params_children.iter() {
-            if param_node.field.is_empty() {
+            if param_node.field.name.is_empty() {
                 continue;
             }
 
-            params.push((param_node.field.to_owned(), head.to_owned()));
+            if let Some(ref reg) = param_node.field.validation {
+                if !reg.is_match(head) {
+                    continue;
+                }
+            }
+
+            params.push((param_node.field.name.to_owned(), head.to_owned()));
 
             if is_segments_tail {
                 if let Some(callback) = param_node.callback {
                     return Some(callback);
                 }
             } else {
-                if let Some(callback) = RouteTrie::find(param_node, &segments[1..], params) {
+                if let Some(callback) = RouteTrie::recursive_find(param_node, &segments[1..], params) {
                     return Some(callback);
                 }
             }

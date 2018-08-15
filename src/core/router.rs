@@ -123,20 +123,30 @@ impl RouteMap {
                     return;
                 }
 
-                let segments: Vec<String> = req_uri
-                    .trim_matches('/')
-                    .split('/')
-                    .filter(|s| !s.is_empty())
-                    .map(|s| s.to_owned())
-                    .collect();
-
-                if let Err(e) = validate_segments(&segments) {
-                    panic!("{}", e);
-                }
-
-                self.explicit_with_params.add(segments, callback);
+                self.explicit_with_params.add(RouteMap::params_parser(req_uri), callback);
             },
         }
+    }
+
+    fn params_parser(uri: &'static str) -> Vec<String> {
+        let mut param_names = HashSet::new();
+
+        uri.trim_matches('/')
+            .split('/')
+            .filter(|s| {
+                if s.eq_ignore_ascii_case(":") {
+                    panic!("Route parameter name can't be null");
+                }
+
+                if param_names.contains(s) {
+                    panic!(format!("Route parameters must have unique name: {}", s));
+                }
+
+                param_names.insert(s.to_owned());
+                return !s.is_empty();
+            })
+            .map(|s| s.to_owned())
+            .collect()
     }
 
     //TODO: add params validations
@@ -372,7 +382,7 @@ fn search_params_router(
 
     let mut params: Vec<(String, String)> = Vec::new();
     let result =
-        RouteTrie::find(&route_head.root, raw_segments.as_slice(), &mut params);
+        RouteTrie::find(route_head, raw_segments.as_slice(), &mut params);
 
     (result, params)
 }
