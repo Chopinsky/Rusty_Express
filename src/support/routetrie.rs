@@ -4,16 +4,43 @@ use core::router::{Callback, REST};
 use regex::Regex;
 use std::collections::HashMap;
 
-struct Field {
+#[derive(Debug)]
+pub(crate) struct Field {
     name: String,
+    is_param: bool,
     validation: Option<Regex>,
+}
+
+impl Field {
+    pub(crate) fn new(name: String, is_param: bool, validation: Option<Regex>) -> Self {
+        Field {
+            name,
+            is_param,
+            validation
+        }
+    }
 }
 
 impl Clone for Field {
     fn clone(&self) -> Self {
         Field {
             name: self.name.clone(),
+            is_param: self.is_param,
             validation: self.validation.clone(),
+        }
+    }
+}
+
+impl PartialEq for Field {
+    fn eq(&self, other: &Field) -> bool {
+        if self.name != other.name {
+            false
+        } else if self.is_param != other.is_param {
+            false
+        } else if self.validation.is_some() != other.validation.is_some() {
+            false
+        } else {
+            true
         }
     }
 }
@@ -26,33 +53,26 @@ struct Node {
 }
 
 impl Node {
-    fn new(field: &str, validation: Option<Regex>, callback: Option<Callback>) -> Self {
+    fn new(field: Field, callback: Option<Callback>) -> Self {
         Node {
-            field: Field {
-                name: field.to_owned(),
-                validation,
-            },
+            field,
             callback,
             named_children: HashMap::new(),
             params_children: Vec::new(),
         }
     }
 
-    fn insert(&mut self, mut segments: Vec<String>, callback: Callback) {
+    fn insert(&mut self, mut segments: Vec<Field>, callback: Callback) {
         if segments.is_empty() {
             return;
         }
 
         let head = segments.remove(0);
-        let (current, is_param) = match head.starts_with(':') {
-            true => (&head[1..], true),
-            false => (&head[..], false),
-        };
 
         // if already has this child, keep calling insert recursively. Only do this when not
         // a params, otherwise, always create a new branch
-        if !is_param {
-            if let Some(child) = self.named_children.get_mut(current) {
+        if !head.is_param {
+            if let Some(child) = self.named_children.get_mut(&head.name) {
                 match segments.len() {
                     0 => {
                         if let Some(_) = child.callback {
@@ -70,21 +90,21 @@ impl Node {
             }
 
             self.named_children
-                .insert(head.to_owned(), Node::build_new_child(current, segments, callback));
+                .insert(head.name.clone(), Node::build_new_child(head, segments, callback));
 
             return;
         }
 
-        self.params_children.push(Node::build_new_child(current, segments, callback));
+        self.params_children.push(Node::build_new_child(head, segments, callback));
     }
 
-    fn build_new_child(name: &str, segments: Vec<String>, callback: Callback) -> Box<Node> {
+    fn build_new_child(field: Field, segments: Vec<Field>, callback: Callback) -> Box<Node> {
         match segments.len() {
             0 => {
-                Box::new(Node::new(name, None, Some(callback)))
+                Box::new(Node::new(field, Some(callback)))
             },
             _ => {
-                let mut node = Node::new(name, None, None);
+                let mut node = Node::new(field, None);
                 node.insert(segments, callback);
                 Box::new(node)
             }
@@ -103,29 +123,30 @@ impl Clone for Node {
     }
 }
 
-//TODO: add params validations
-
-pub struct RouteTrie {
+pub(crate) struct RouteTrie {
     root: Node,
 }
 
 impl RouteTrie {
-    pub fn initialize() -> Self {
+    pub(crate) fn initialize() -> Self {
         RouteTrie {
-            root: Node::new("/", None, None),
+            root: Node::new(
+                Field::new(String::from("/"), false, None),
+                None
+            ),
         }
     }
 
     #[inline]
-    pub fn is_empty(&self) -> bool {
+    pub(crate) fn is_empty(&self) -> bool {
         self.root.named_children.is_empty() && self.root.params_children.is_empty()
     }
 
-    pub fn add(&mut self, segments: Vec<String>, callback: Callback) {
+    pub(crate) fn add(&mut self, segments: Vec<Field>, callback: Callback) {
         self.root.insert(segments, callback);
     }
 
-    pub fn find(
+    pub(crate) fn find(
         route_head: &RouteTrie,
         segments: &[String],
         params: &mut Vec<(String, String)>,
@@ -166,7 +187,7 @@ impl RouteTrie {
                 }
             }
 
-            params.push((param_node.field.name.to_owned(), head.to_owned()));
+            params.push((param_node.field.name.clone(), head.clone()));
 
             if is_segments_tail {
                 if let Some(callback) = param_node.callback {

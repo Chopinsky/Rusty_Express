@@ -11,6 +11,7 @@ use super::http::{Request, RequestWriter, Response, ResponseStates, ResponseWrit
 use regex::Regex;
 use support::common::MapUpdates;
 use support::debug;
+use support::Field;
 use support::TaskType;
 use support::{shared_pool, RouteTrie};
 
@@ -128,28 +129,83 @@ impl RouteMap {
         }
     }
 
-    fn params_parser(uri: &'static str) -> Vec<String> {
+    fn params_parser(source_uri: &'static str) -> Vec<Field> {
         let mut param_names = HashSet::new();
+        let mut name = "";
 
-        uri.trim_matches('/')
-            .split('/')
-            .filter(|s| {
-                if s.eq_ignore_ascii_case(":") {
-                    panic!("Route parameter name can't be null");
+        // Status: 0 -- Normal; 1 -- Just split; 2 -- In params; 4 -- In params regex;
+        //         8 -- Params regex just end, must split next or panic.
+        let mut split_status: u8 = 0;
+
+        source_uri
+            .split(|c|
+                match c {
+                    ':' if split_status == 1 => {
+                        split_status <<= 1;  // 2 -- in params
+                        false
+                    },
+                    '(' if split_status == 2 => {
+                        split_status <<= 1; // 4 -- in params regex
+                        false
+                    },
+                    ')' if split_status == 4 => {
+                        split_status <<= 1; // 8 -- in params regex end
+                        false
+                    },
+                    '/' if split_status == 0 || split_status == 2 || split_status == 8 => {
+                        split_status = 1;   // reset to 1 -- just split
+                        true
+                    },
+                    '/' if split_status == 1 => {
+                        panic!("Route can't contain empty segment between '/'s: {}", source_uri);
+                    },
+                    _ => {
+                        if split_status == 2 && !char::is_alphanumeric(c) {
+                            panic!("Route's parameter name can only contain alpha-numeric characters: {}", source_uri);
+                        }
+
+                        if split_status == 8 {
+                            panic!("Route's parameter with regex validation must end after the regex: {}", source_uri);
+                        }
+
+                        if split_status == 1 {
+                            split_status >>= 1; // does not encounter special flags, this is an explicit uri segment name
+                        }
+
+                        false
+                    },
+                }
+            )
+            .filter_map(|s| {
+                if s.is_empty() {
+                    return None;
                 }
 
-                if param_names.contains(s) {
-                    panic!(format!("Route parameters must have unique name: {}", s));
+                if s.starts_with(':') {
+                    name = &s[1..];
+
+                    if name.is_empty() {
+                        panic!("Route parameter name can't be null");
+                    }
+
+                    //TODO: must strip the regex first...
+
+                    if param_names.contains(name) {
+                        panic!(format!("Route parameters must have unique name: {}", s));
+                    }
+
+                    param_names.insert(name.to_owned());
+                } else {
+                    name = &s;
                 }
 
-                param_names.insert(s.to_owned());
-                return !s.is_empty();
+                //TODO: parse the validation and panic if wrong format
+                let validation = None;
+
+                Some(Field::new(name.to_owned(), s.len() > 1 && s.starts_with(":"), validation))
             })
-            .map(|s| s.to_owned())
             .collect()
     }
-
-    //TODO: add params validations
 
     fn seek_path(&self, uri: &str, params: &mut HashMap<String, String>) -> Option<Callback> {
         if let Some(callback) = self.explicit.get(uri) {
@@ -387,20 +443,25 @@ fn search_params_router(
     (result, params)
 }
 
-fn validate_segments(segments: &Vec<String>) -> Result<(), String> {
-    let mut param_names = HashSet::new();
+#[cfg(test)]
+mod route_test {
+    use super::{Field, RouteMap};
 
-    for seg in segments {
-        if seg.starts_with(':') {
-            if seg.len() == 1 {
-                return Err(String::from("Route parameter name can't be null"));
-            } else if param_names.contains(seg) {
-                return Err(format!("Route parameters must have unique name: {}", seg));
-            } else {
-                param_names.insert(seg);
-            }
+    #[test]
+    fn params_parser_test_one() {
+        let base = vec![
+            Field::new(String::from("root"), false, None),
+            Field::new(String::from("api"), false, None),
+            Field::new(String::from("Tes中t(a=[/]bdc)"), true, None),
+            Field::new(String::from("this."), false, None),
+            Field::new(String::from("check"), true, None),
+        ];
+
+        let test = RouteMap::params_parser("/root/api/:Tes中t(a=[/]bdc)/this./:check/");
+        assert_eq!(test.len(), base.len());
+
+        for (base_field, test_field) in base.iter().zip(&test) {
+            assert_eq!(base_field, test_field);
         }
     }
-
-    Ok(())
 }
