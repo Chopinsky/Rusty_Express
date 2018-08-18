@@ -40,6 +40,12 @@ impl PartialEq for Field {
         } else if self.validation.is_some() != other.validation.is_some() {
             false
         } else {
+            if let Some(ref reg_one) = self.validation {
+                if let Some(ref reg_two) = other.validation {
+                    return reg_one.to_string() == reg_two.to_string()
+                }
+            }
+
             true
         }
     }

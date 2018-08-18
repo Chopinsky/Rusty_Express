@@ -1,4 +1,4 @@
-mod routetrie;
+mod trie;
 mod scheduler;
 
 #[cfg(feature = "session")]
@@ -13,6 +13,6 @@ pub(crate) mod shared_pool {
     pub(crate) use support::scheduler::{close, initialize_with, run};
 }
 
-pub(crate) use self::routetrie::*;
+pub(crate) use self::trie::{Field, RouteTrie};
 pub(crate) use self::scheduler::TaskType;
 pub(crate) use self::scheduler::ThreadPool;

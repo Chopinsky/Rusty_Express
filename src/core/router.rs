@@ -131,7 +131,10 @@ impl RouteMap {
 
     fn params_parser(source_uri: &'static str) -> Vec<Field> {
         let mut param_names = HashSet::new();
+
+        let mut validation: Option<Regex> = None;
         let mut name = "";
+        let mut is_param = false;
 
         // Status: 0 -- Normal; 1 -- Just split; 2 -- In params; 4 -- In params regex;
         //         8 -- Params regex just end, must split next or panic.
@@ -139,6 +142,7 @@ impl RouteMap {
 
         source_uri
             .split(|c|
+                // split status Automator
                 match c {
                     ':' if split_status == 1 => {
                         split_status <<= 1;  // 2 -- in params
@@ -181,6 +185,9 @@ impl RouteMap {
                     return None;
                 }
 
+                validation = None;
+                is_param = false;
+
                 if s.starts_with(':') {
                     name = &s[1..];
 
@@ -188,10 +195,27 @@ impl RouteMap {
                         panic!("Route parameter name can't be null");
                     }
 
-                    //TODO: must strip the regex first...
+                    is_param = true;
+                    if name.len() > 1 && name.ends_with(')') {
+                        let name_split: Vec<&str> =
+                            (&name[..name.len()-1]).splitn(2, '(').collect();
+
+                        if name_split.len() == 2 {
+                            if name_split[0].is_empty() {
+                                panic!("Route parameters with regex validation must have a non-null param name: {}", s);
+                            } else if name_split[1].is_empty() {
+                                panic!("Route parameters with regex validation must have a non-null regex: {}", s);
+                            }
+
+                            if let Ok(regex) = Regex::new(name_split[1]) {
+                                validation = Some(regex);
+                                name = name_split[0];
+                            }
+                        }
+                    }
 
                     if param_names.contains(name) {
-                        panic!(format!("Route parameters must have unique name: {}", s));
+                        panic!("Route parameters must have unique name: {}", s);
                     }
 
                     param_names.insert(name.to_owned());
@@ -199,10 +223,7 @@ impl RouteMap {
                     name = &s;
                 }
 
-                //TODO: parse the validation and panic if wrong format
-                let validation = None;
-
-                Some(Field::new(name.to_owned(), s.len() > 1 && s.starts_with(":"), validation))
+                Some(Field::new(name.to_owned(), is_param, validation.take()))
             })
             .collect()
     }
@@ -446,13 +467,15 @@ fn search_params_router(
 #[cfg(test)]
 mod route_test {
     use super::{Field, RouteMap};
+    use regex::*;
 
     #[test]
     fn params_parser_test_one() {
+        let regex = Regex::new("a=[/]bdc").unwrap();
         let base = vec![
             Field::new(String::from("root"), false, None),
             Field::new(String::from("api"), false, None),
-            Field::new(String::from("Tes中t(a=[/]bdc)"), true, None),
+            Field::new(String::from("Tes中t"), true, Some(regex)),
             Field::new(String::from("this."), false, None),
             Field::new(String::from("check"), true, None),
         ];
