@@ -80,7 +80,7 @@ impl Clone for RegexRoute {
     }
 }
 
-pub struct RouteMap {
+pub(crate) struct RouteMap {
     explicit: HashMap<String, Callback>,
     explicit_with_params: RouteTrie,
     wildcard: HashMap<String, RegexRoute>,
@@ -373,8 +373,8 @@ impl Router for Route {
     }
 }
 
-pub trait RouteHandler {
-    fn handle_request(callback: Callback, req: &Box<Request>, resp: &mut Box<Response>);
+pub(crate) trait RouteHandler {
+    fn parse_request(callback: Callback, req: &Box<Request>, resp: &mut Box<Response>);
     fn seek_handler(
         &self,
         method: &REST,
@@ -385,7 +385,7 @@ pub trait RouteHandler {
 }
 
 impl RouteHandler for Route {
-    fn handle_request(callback: Callback, req: &Box<Request>, resp: &mut Box<Response>) {
+    fn parse_request(callback: Callback, req: &Box<Request>, resp: &mut Box<Response>) {
         // callback function will decide what to be written into the response
         callback(req, resp);
 

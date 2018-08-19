@@ -5,6 +5,7 @@ use std::collections::HashMap;
 use std::io::prelude::*;
 use std::io::{BufReader, BufWriter, Error};
 use std::net::{Shutdown, TcpStream};
+use std::str::Lines;
 use std::sync::{mpsc, Arc};
 use std::time::Duration;
 
@@ -12,8 +13,9 @@ use super::config::ConnMetadata;
 use super::http::{
     Request, RequestWriter, Response, ResponseManager, ResponseStates, ResponseWriter,
 };
+
 use super::router::{AuthFunc, Callback, Route, RouteHandler, REST};
-use support::{common::flush_buffer, common::write_to_buff, debug, shared_pool, TaskType};
+use support::{common::flush_buffer, common::write_to_buff, common::MapUpdates, debug, shared_pool, TaskType};
 
 static HEADER_END: [u8; 2] = [13, 10];
 type ExecCode = u8;
@@ -36,7 +38,7 @@ enum ConnError {
 //        states: Arc<RwLock<T>>) -> Option<u8> {
 //
 //    let mut request = Box::new(Request::new());
-//    let handler = match handle_request(&stream, &mut request, router) {
+//    let handler = match parse_request(&stream, &mut request, router) {
 //        Err(err) => {
 //            debug::print("Error on parsing request", 3);
 //            return write_to_stream(stream, &build_err_response(&err, &metadata));
@@ -89,7 +91,7 @@ pub(crate) fn handle_connection(
 ) -> ExecCode {
     let mut request = Box::new(Request::new());
 
-    let handler = match handle_request(&stream, &mut request, router) {
+    let handler = match parse_request(&stream, &mut request, router) {
         Err(err) => {
             debug::print("Error on parsing request", 3);
 
@@ -138,7 +140,7 @@ fn handle_response(
         response.header_only(true);
     }
 
-    Route::handle_request(callback, request, response);
+    Route::parse_request(callback, request, response);
     response.validate_and_update(&metadata.get_status_pages());
 
     write_to_stream(&stream, response)
@@ -197,7 +199,7 @@ fn write_to_stream(stream: &TcpStream, response: &mut Box<Response>) -> ExecCode
     0
 }
 
-fn handle_request(
+fn parse_request(
     mut stream: &TcpStream,
     request: &mut Box<Request>,
     router: Arc<Route>,
@@ -215,7 +217,8 @@ fn handle_request(
         }
 
         let auth_func = router.get_auth_func();
-        let callback = parse_request(&request_raw, request, router);
+        let callback =
+            deserialize(request_raw.to_string(), request, router);
 
         let host = request.header("host");
         if let Some(host_addr) = host {
@@ -245,75 +248,86 @@ fn handle_request(
     }
 }
 
-fn parse_request(request: &str, store: &mut Box<Request>, router: Arc<Route>) -> Option<Callback> {
+fn deserialize(request: String, store: &mut Box<Request>, router: Arc<Route>) -> Option<Callback> {
     if request.is_empty() {
         return None;
     }
 
     debug::print(&format!("\r\nPrint request: \r\n{}", request), 2);
 
-    let mut lines = request.trim().lines();
-    let base_line = match lines.nth(0) {
+    let mut res = None;
+    let raw_lines: Vec<&str> = request.trim().splitn(2, '\n').collect();
+
+    let base_line = match raw_lines.get(0) {
         Some(line) => line.trim(),
         _ => return None,
     };
 
-    let rx = parse_request_base(base_line, store, router);
-    if rx.is_none() {
-        return None;
-    }
+    if let Some(rx) = deserialize_base_line(base_line, store, router) {
 
-    let mut is_body = false;
-    for line in lines {
-        if line.is_empty() && !is_body {
-            // meeting the empty line dividing header and body
-            is_body = true;
-            continue;
-        }
+        let req_chan =
+            if raw_lines.len() > 1 {
+                let remainder = raw_lines[1].to_owned();
+                let (tx_remainder, rx_remainder) = mpsc::channel();
 
-        parse_request_headers(store, line, is_body);
-    }
+                let mut header: HashMap<String, String> = HashMap::new();
+                let mut cookie: HashMap<String, String> = HashMap::new();
+                let mut body: Vec<String> = Vec::new();
 
-    if let Some(receiver) = rx {
-        if let Ok(received) = receiver.recv_timeout(Duration::from_millis(128)) {
-            if received.0.is_some() {
-                store.create_param(received.1);
-            }
+                shared_pool::run(move || {
+                    let mut is_body = false;
 
-            return received.0;
-        }
-    }
+                    for line in remainder.lines() {
+                        if line.is_empty() && !is_body {
+                            // meeting the empty line dividing header and body
+                            is_body = true;
+                            continue;
+                        }
 
-    None
-}
+                        deserialize_headers(line, is_body, &mut header, &mut cookie, &mut body);
+                    }
 
-fn parse_request_headers(store: &mut Box<Request>, line: &str, is_body: bool) {
-    if !is_body {
-        let header_info: Vec<&str> = line.trim().splitn(2, ':').collect();
+                    if let Err(e) = tx_remainder.send((header, cookie, body)) {
+                        eprintln!("Unable to construct the remainder of the request.");
+                    }
+                }, TaskType::Request);
 
-        if header_info.len() == 2 {
-            let header_key = &header_info[0].trim().to_lowercase()[..];
-            if header_key.eq("cookie") {
-                cookie_parser(store, header_info[1].trim());
+                Some(rx_remainder)
             } else {
-                store.write_header(header_key, header_info[1].trim(), true);
+                None
+            };
+
+        if let Ok(route_info) = rx.recv_timeout(Duration::from_millis(128)) {
+            if route_info.0.is_some() {
+                store.create_param(route_info.1);
+            }
+
+            res = route_info.0;
+        }
+
+        if let Some(chan) = req_chan {
+            if let Ok((header, cookie, body)) = chan.recv_timeout(Duration::from_secs(8)) {
+                store.set_headers(header);
+                store.set_cookies(cookie);
+                store.set_bodies(body);
             }
         }
-    } else {
-        store.extend_body(line);
     }
+
+    res
 }
 
-fn parse_request_base(
-    line: &str,
+pub(crate) fn deserialize_base_line(
+    source: &str,
     req: &mut Box<Request>,
     router: Arc<Route>,
-) -> Option<mpsc::Receiver<(Option<Callback>, HashMap<String, String>)>> {
+) -> Option<mpsc::Receiver<(Option<Callback>, HashMap<String, String>)>>
+{
     let mut header_only = false;
     let mut raw_scheme = String::new();
     let mut raw_fragment = String::new();
 
-    for (index, info) in line.split_whitespace().enumerate() {
+    for (index, info) in source.split_whitespace().enumerate() {
         if index < 2 && info.is_empty() {
             return None;
         }
@@ -373,6 +387,26 @@ fn parse_request_base(
     None
 }
 
+fn deserialize_headers(
+    line: &str, is_body: bool, header: &mut HashMap<String, String>,
+    cookie: &mut HashMap<String, String>, body: &mut Vec<String>)
+{
+    if !is_body {
+        let header_info: Vec<&str> = line.trim().splitn(2, ':').collect();
+
+        if header_info.len() == 2 {
+            let header_key = &header_info[0].trim().to_lowercase()[..];
+            if header_key.eq("cookie") {
+                cookie_parser(cookie, header_info[1].trim());
+            } else {
+                header.add(header_key, header_info[1].trim().to_owned(), true);
+            }
+        }
+    } else {
+        body.push(line.to_owned());
+    }
+}
+
 fn split_path(
     full_uri: &str,
     final_uri: &mut String,
@@ -423,7 +457,7 @@ fn split_path(
 /// field is the key of the map, which map to a single value of the key from the Cookie
 /// header field. Assuming no duplicate cookie keys, or the first cookie key-value pair
 /// will be stored.
-fn cookie_parser(store: &mut Box<Request>, cookie_body: &str) {
+fn cookie_parser(cookie: &mut HashMap<String, String>, cookie_body: &str) {
     if cookie_body.is_empty() {
         return;
     }
@@ -431,9 +465,9 @@ fn cookie_parser(store: &mut Box<Request>, cookie_body: &str) {
     for set in cookie_body.trim().split(";").into_iter() {
         let pair: Vec<&str> = set.trim().splitn(2, "=").collect();
         if pair.len() == 2 {
-            store.set_cookie(pair[0].trim(), pair[1].trim(), false);
+            cookie.add(pair[0].trim(), pair[1].trim().to_owned(), false);
         } else if pair.len() > 0 {
-            store.set_cookie(pair[0].trim(), "", false);
+            cookie.add(pair[0].trim(), String::from(""), false);
         }
     }
 }

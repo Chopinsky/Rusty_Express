@@ -1,7 +1,8 @@
 # 2018-08
 ## 0.3.5
 - Now you can define regular expressions for validating the `RequestPath::ExplicitWithParams` 
-routes. This will help reduce the server burden if the incoming request is trying to guess the parameters.
+routes. For example, your parameterized route can now be defined as: `/api/:userId(\d{7})` which only allows users with 
+7 digits IDs. This will help reduce the server burden if the incoming request is trying to guess the parameters.
 - Heads up: next version will be published in 0.4.x.
 
 ## 0.3.4

@@ -31,13 +31,13 @@ static LONG_CONN_TIMEOUT: Duration = Duration::from_secs(8);
 pub struct Request {
     pub method: REST,
     pub uri: String,
+    header: HashMap<String, String>,
     cookie: HashMap<String, String>,
+    body: Vec<String>,
     scheme: HashMap<String, Vec<String>>,
     fragment: String,
     params: HashMap<String, String>,
-    header: HashMap<String, String>,
     ip: Option<SocketAddr>,
-    body: Vec<String>,
 }
 
 impl Request {
@@ -46,10 +46,10 @@ impl Request {
             method: REST::GET,
             uri: String::new(),
             cookie: HashMap::new(),
+            header: HashMap::new(),
             scheme: HashMap::new(),
             fragment: String::new(),
             params: HashMap::new(),
-            header: HashMap::new(),
             ip: None,
             body: Vec::new(),
         }
@@ -59,6 +59,7 @@ impl Request {
         if field.is_empty() {
             return None;
         }
+
         if self.header.is_empty() {
             return None;
         }
@@ -73,6 +74,7 @@ impl Request {
         if key.is_empty() {
             return None;
         }
+
         if self.cookie.is_empty() {
             return None;
         }
@@ -121,6 +123,18 @@ impl Request {
     #[inline]
     pub fn ip_info(&self) -> Option<SocketAddr> {
         self.ip
+    }
+
+    pub(crate) fn set_headers(&mut self, header: HashMap<String, String>) {
+        self.header = header;
+    }
+
+    pub(crate) fn set_cookies(&mut self, cookie: HashMap<String, String>) {
+        self.cookie = cookie;
+    }
+
+    pub(crate) fn set_bodies(&mut self, body: Vec<String>) {
+        self.body = body;
     }
 }
 
