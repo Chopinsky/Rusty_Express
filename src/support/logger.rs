@@ -32,21 +32,23 @@ struct LogInfo {
 
 struct LoggerConfig {
     refresh_period: Duration,
-    store_folder: String,
+    store_location: String,
 }
 
 impl LoggerConfig {
     fn initialize() -> Self {
         LoggerConfig {
             refresh_period: Duration::from_secs(1800),
-            store_folder: String::new(),
+            store_location: String::new(),
         }
     }
 
+    #[inline]
     fn get_refresh_period(&self) -> Duration {
         self.refresh_period.to_owned()
     }
 
+    #[inline]
     fn set_refresh_period(&mut self, period: Duration) {
         self.refresh_period = period;
     }
@@ -56,21 +58,20 @@ pub(crate) fn initialize() {
     ONCE.call_once(|| {
         let (tx, rx): (channel::Sender<LogInfo>, channel::Receiver<LogInfo>) = channel::unbounded();
 
-        unsafe {
-            SENDER = Some(tx);
+        unsafe { SENDER = Some(tx); }
 
-            if let Ok(config) = CONFIG.read() {
-                if config.store_folder.is_empty() {
-                    return;
-                } else {
-                    let refresh = config.refresh_period.as_secs();
-                    println!(
-                        "The logger has started, it will refresh log to folder {} every {} seconds",
-                        config.store_folder, refresh
-                    );
+        if let Ok(config) = CONFIG.read() {
+            if config.store_location.is_empty() {
+                return;
+            } else {
+                let refresh = config.refresh_period.as_secs();
 
-                    start_refresh(config.refresh_period.clone());
-                }
+                println!(
+                    "The logger has started, it will refresh log to folder {} every {} seconds",
+                    config.store_location, refresh
+                );
+
+                start_refresh(config.refresh_period.clone());
             }
         }
     });
@@ -78,6 +79,10 @@ pub(crate) fn initialize() {
 
 fn start_refresh(period: Duration) {
     unsafe {
+        if REFRESH_HANDLER.is_some() {
+            stop_refresh();
+        }
+
         REFRESH_HANDLER = Some(thread::spawn(move || loop {
             thread::sleep(period);
             write_to_file();
@@ -102,18 +107,25 @@ fn reset_refresh(period: Option<Duration>) {
     thread::spawn(move || {
         stop_refresh();
 
-        let new_period = if let Ok(mut config) = CONFIG.write() {
-            if let Some(p) = period {
-                config.set_refresh_period(p);
-            }
+        let new_period =
+            if let Ok(mut config) = CONFIG.write() {
+                if let Some(p) = period {
+                    config.set_refresh_period(p);
+                }
 
-            config.get_refresh_period()
-        } else {
-            Duration::from_secs(1800)
-        };
+                config.get_refresh_period()
+
+            } else {
+
+                Duration::from_secs(1800)
+            };
 
         start_refresh(new_period);
     });
 }
 
-fn write_to_file() {}
+fn write_to_file() {
+    if let Ok(mut config) = CONFIG.read() {
+
+    }
+}
