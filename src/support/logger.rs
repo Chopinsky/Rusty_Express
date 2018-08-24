@@ -2,7 +2,9 @@
 
 use channel;
 use chrono::{DateTime, Utc};
-use std::sync::{Mutex, Once, RwLock, ONCE_INIT};
+use std::env;
+use std::path::PathBuf;
+use std::sync::{atomic::{AtomicBool, Ordering}, Mutex, Once, RwLock, ONCE_INIT};
 use std::thread;
 use std::time::Duration;
 
@@ -14,8 +16,9 @@ lazy_static! {
 static ONCE: Once = ONCE_INIT;
 static mut SENDER: Option<channel::Sender<LogInfo>> = None;
 static mut REFRESH_HANDLER: Option<thread::JoinHandle<()>> = None;
+static mut DUMPING_RUNNING: AtomicBool = AtomicBool::new(false);
 
-pub enum LogLevel {
+pub enum InfoLevel {
     Trace,
     Debug,
     Info,
@@ -26,20 +29,24 @@ pub enum LogLevel {
 
 struct LogInfo {
     message: String,
-    level: LogLevel,
+    level: InfoLevel,
     time: DateTime<Utc>,
 }
 
 struct LoggerConfig {
     refresh_period: Duration,
-    store_location: String,
+    log_folder_path: Option<PathBuf>,
+    meta_info_provider: Option<fn() -> String>,
+    rx_handler: Option<thread::JoinHandle<()>>
 }
 
 impl LoggerConfig {
     fn initialize() -> Self {
         LoggerConfig {
             refresh_period: Duration::from_secs(1800),
-            store_location: String::new(),
+            log_folder_path: None,
+            meta_info_provider: None,
+            rx_handler: None,
         }
     }
 
@@ -52,27 +59,111 @@ impl LoggerConfig {
     fn set_refresh_period(&mut self, period: Duration) {
         self.refresh_period = period;
     }
+
+    pub fn set_log_folder_path(&mut self, path: &str) {
+        let mut path_buff = PathBuf::new();
+
+        let location: Option<PathBuf> =
+            if path.is_empty() {
+                match env::var_os("LOG_FOLDER_PATH") {
+                    Some(p) => {
+                        path_buff.push(p);
+                        Some(path_buff)
+                    },
+                    None => None,
+                }
+            } else {
+                path_buff.push(path);
+                Some(path_buff)
+            };
+
+        if let Some(loc) = location {
+            if loc.as_path().is_dir() {
+                self.log_folder_path = Some(loc);
+            }
+        }
+    }
+
+    #[inline]
+    pub fn get_log_folder_path(&self) -> Option<PathBuf> {
+        self.log_folder_path.clone()
+    }
 }
 
-pub(crate) fn initialize() {
+pub fn log(message: &str, level: InfoLevel) -> Result<(), String> {
+    if let Ok(mut store) = TEMP_STORE.lock() {
+        let info = LogInfo {
+            message: message.to_owned(),
+            level,
+            time: Utc::now(),
+        };
+
+        store.push(info);
+        return Ok(());
+    }
+
+    Err(String::from("Failed to add the info to the backlog"))
+}
+
+pub(crate) fn logger_run(
+    period: Option<u64>,
+    log_folder_path: Option<&str>,
+    meta_info_provider: Option<fn() -> String>)
+{
+    if let Ok(mut config) = CONFIG.write() {
+        if let Some(time) = period {
+            if time != 1800 {
+                config.refresh_period = Duration::from_secs(time);
+            }
+        }
+
+        if let Some(path) = log_folder_path {
+            config.set_log_folder_path(path);
+        }
+        
+        config.meta_info_provider = meta_info_provider;
+    }
+
+    initialize();
+}
+
+pub(crate) fn logger_cleanup() {
+    stop_refresh();
+
+    if let Ok(mut config) = CONFIG.write() {
+        if let Some(rx) = config.rx_handler.take() {
+            rx.join().unwrap_or_else(|err| {
+                eprintln!("Encountered error while closing the logger: {:?}", err);
+            });
+        }
+    }
+}
+
+fn initialize() {
     ONCE.call_once(|| {
         let (tx, rx): (channel::Sender<LogInfo>, channel::Receiver<LogInfo>) = channel::unbounded();
 
         unsafe { SENDER = Some(tx); }
 
-        if let Ok(config) = CONFIG.read() {
-            if config.store_location.is_empty() {
-                return;
-            } else {
+        if let Ok(mut config) = CONFIG.write() {
+            if let Some(ref path) = config.log_folder_path {
                 let refresh = config.refresh_period.as_secs();
 
                 println!(
-                    "The logger has started, it will refresh log to folder {} every {} seconds",
-                    config.store_location, refresh
+                    "The logger has started, it will refresh log to folder {:?} every {} seconds",
+                    path.to_str().unwrap(), refresh
                 );
 
                 start_refresh(config.refresh_period.clone());
             }
+
+            config.rx_handler = Some(thread::spawn(move || {
+                for info in rx {
+                    if let Ok(mut store) = TEMP_STORE.lock() {
+                        store.push(info);
+                    }
+                }
+            }));
         }
     });
 }
@@ -83,10 +174,14 @@ fn start_refresh(period: Duration) {
             stop_refresh();
         }
 
-        REFRESH_HANDLER = Some(thread::spawn(move || loop {
-            thread::sleep(period);
-            write_to_file();
-        }));
+        REFRESH_HANDLER = Some(thread::spawn(move ||
+            loop {
+                thread::sleep(period);
+                thread::spawn(|| {
+                    dump_to_file();
+                });
+            }
+        ));
     }
 }
 
@@ -124,8 +219,24 @@ fn reset_refresh(period: Option<Duration>) {
     });
 }
 
-fn write_to_file() {
-    if let Ok(mut config) = CONFIG.read() {
+fn dump_to_file() {
+    unsafe {
+        if DUMPING_RUNNING.load(Ordering::Relaxed) {
+            //TODO: write only the meta info + why we skip this dump
+        }
 
+        if let Ok(config) = CONFIG.read() {
+            *DUMPING_RUNNING.get_mut() = true;
+
+            //TODO: writing to file
+            if let Ok(mut store) = TEMP_STORE.lock() {
+                let mut content: String;
+                while let Some(info) = store.pop() {
+                    content = format!("{}", info.message);
+                }
+            }
+
+            *DUMPING_RUNNING.get_mut() = false;
+        }
     }
 }

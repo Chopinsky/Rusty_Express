@@ -49,7 +49,7 @@ pub mod prelude {
     pub use support::session::*;
 
     #[cfg(feature = "logger")]
-    pub use support::logger::LogLevel;
+    pub use support::logger::InfoLevel;
 }
 
 use std::collections::HashMap;
