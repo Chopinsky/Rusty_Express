@@ -8,14 +8,15 @@ use std::net::{Shutdown, TcpStream};
 use std::str::Lines;
 use std::sync::{mpsc, Arc};
 use std::time::Duration;
-
 use super::config::ConnMetadata;
+use super::router::{AuthFunc, Callback, Route, RouteHandler, REST};
 use super::http::{
     Request, RequestWriter, Response, ResponseManager, ResponseStates, ResponseWriter,
 };
 
-use super::router::{AuthFunc, Callback, Route, RouteHandler, REST};
-use support::{common::flush_buffer, common::write_to_buff, common::MapUpdates, debug, shared_pool, TaskType};
+use support::{
+    common::flush_buffer, common::write_to_buff, common::MapUpdates, debug, shared_pool, TaskType
+};
 
 static HEADER_END: [u8; 2] = [13, 10];
 type ExecCode = u8;

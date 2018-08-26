@@ -19,7 +19,6 @@
 //! }
 //! ```
 
-#![allow(deprecated)]
 #![allow(unused_variables)]
 
 #[macro_use]
@@ -37,6 +36,7 @@ pub mod prelude {
     pub use core::config::{
         EngineContext, PageGenerator, ServerConfig, ViewEngine, ViewEngineDefinition,
     };
+
     pub use core::context as ServerContext;
     pub use core::context::ContextProvider;
     pub use core::cookie::*;

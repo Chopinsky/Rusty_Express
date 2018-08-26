@@ -4,7 +4,7 @@
 use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
 use std::io::Error;
-use std::sync::mpsc;
+use std::sync::{mpsc, RwLock};
 use std::time::Duration;
 
 use super::http::{Request, RequestWriter, Response, ResponseStates, ResponseWriter};
@@ -16,7 +16,8 @@ use support::TaskType;
 use support::{shared_pool, RouteTrie};
 
 lazy_static! {
-    static ref ROUTE_ALL: REST = REST::OTHER(String::from("*"));
+    static ref ROUTE_FOR_ALL_CONST: REST = REST::OTHER(String::from("*"));
+    static ref ROUTER: RwLock<Route> = RwLock::new(Route::new());
 }
 
 #[derive(PartialEq, Eq, Hash, Clone)]
@@ -423,7 +424,7 @@ impl RouteHandler for Route {
         }
 
         if result.is_none() {
-            if let Some(all_routes) = self.store.get(&ROUTE_ALL) {
+            if let Some(all_routes) = self.store.get(&ROUTE_FOR_ALL_CONST) {
                 result = all_routes.seek_path(uri, &mut params);
             }
         }
