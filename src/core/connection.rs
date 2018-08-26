@@ -88,7 +88,6 @@ enum ConnError {
 pub(crate) fn handle_connection(
     stream: TcpStream,
     router: Arc<Route>,
-    metadata: Arc<ConnMetadata>,
 ) -> ExecCode {
     let mut request = Box::new(Request::new());
 
@@ -103,34 +102,23 @@ pub(crate) fn handle_connection(
                 ConnError::ReadStreamFailure => 500,
             };
 
-            return write_to_stream(&stream, &mut build_err_response(status, &metadata));
+            return write_to_stream(&stream, &mut build_err_response(status));
         }
         Ok(cb) => cb,
     };
 
-    handle_response(
-        stream,
-        handler,
-        &request,
-        &mut initialize_response(&metadata),
-        &metadata,
-    )
+    handle_response(stream,handler, &request, &mut initialize_response())
 }
 
-pub(crate) fn send_err_resp(
-    stream: TcpStream,
-    err_code: u16,
-    metadata: Arc<ConnMetadata>,
-) -> ExecCode {
-    return write_to_stream(&stream, &mut build_err_response(err_code, &metadata));
+pub(crate) fn send_err_resp(stream: TcpStream, err_code: u16) -> ExecCode {
+    return write_to_stream(&stream, &mut build_err_response(err_code));
 }
 
 fn handle_response(
     stream: TcpStream,
     callback: Callback,
     request: &Box<Request>,
-    response: &mut Box<Response>,
-    metadata: &Arc<ConnMetadata>,
+    response: &mut Box<Response>
 ) -> ExecCode {
     match request.header("connection") {
         Some(ref val) if val.eq(&String::from("close")) => response.can_keep_alive(false),
@@ -142,16 +130,16 @@ fn handle_response(
     }
 
     Route::parse_request(callback, request, response);
-    response.validate_and_update(&metadata.get_status_pages());
+    response.validate_and_update();
 
     write_to_stream(&stream, response)
 }
 
-fn initialize_response(metadata: &Arc<ConnMetadata>) -> Box<Response> {
-    let header = metadata.get_default_header();
-    match header.is_empty() {
-        true => Box::new(Response::new()),
-        _ => Box::new(Response::new_with_default_header(header)),
+fn initialize_response() -> Box<Response> {
+    let header = ConnMetadata::get_default_header();
+    match header {
+        None => Box::new(Response::new()),
+        Some(h) => Box::new(Response::new_with_default_header(h)),
     }
 }
 
@@ -499,11 +487,11 @@ fn scheme_parser(scheme: String) -> HashMap<String, Vec<String>> {
     scheme_result
 }
 
-fn build_err_response(err_status: u16, metadata: &Arc<ConnMetadata>) -> Box<Response> {
+fn build_err_response(err_status: u16) -> Box<Response> {
     let mut resp = Box::new(Response::new());
 
     resp.status(err_status);
-    resp.validate_and_update(&metadata.get_status_pages());
+    resp.validate_and_update();
     resp.keep_alive(false);
 
     if resp.get_content_type().is_empty() {

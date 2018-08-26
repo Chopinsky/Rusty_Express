@@ -3,7 +3,7 @@
 
 use std::cmp;
 use std::collections::HashMap;
-use std::sync::{Arc, RwLock};
+use std::sync::RwLock;
 use std::time::Duration;
 
 use chrono;
@@ -14,6 +14,7 @@ use support::common::*;
 
 lazy_static! {
     static ref VIEW_ENGINES: RwLock<HashMap<String, Box<ViewEngine>>> = RwLock::new(HashMap::new());
+    static ref METADATA_STORE: RwLock<ConnMetadata> = RwLock::new(ConnMetadata::new());
 }
 
 pub struct ServerConfig {
@@ -58,9 +59,7 @@ impl ServerConfig {
 
     pub fn set_status_page_generator(&mut self, status: u16, generator: PageGenerator) {
         if status > 0 {
-            if let Some(generators) = Arc::get_mut(&mut self.meta_data.status_page_generators) {
-                generators.insert(status, generator);
-            }
+            self.meta_data.status_page_generators.insert(status, generator.clone());
         }
     }
 
@@ -73,6 +72,12 @@ impl ServerConfig {
         match self.session_auto_clean_period {
             Some(period) => chrono_to_std(period),
             _ => None,
+        }
+    }
+
+    pub(crate) fn store_metadata(&self) {
+        if let Ok(mut store) = METADATA_STORE.write() {
+            *store = self.meta_data.clone();
         }
     }
 }
@@ -167,25 +172,42 @@ pub type PageGenerator = fn() -> String;
 
 pub struct ConnMetadata {
     header: Box<HashMap<String, String>>,
-    status_page_generators: Arc<Box<HashMap<u16, PageGenerator>>>,
+    status_page_generators: Box<HashMap<u16, PageGenerator>>,
 }
 
 impl ConnMetadata {
     pub fn new() -> Self {
         ConnMetadata {
             header: Box::new(HashMap::new()),
-            status_page_generators: Arc::new(Box::new(HashMap::new())),
+            status_page_generators: Box::new(HashMap::new()),
         }
     }
 
     #[inline]
-    pub fn get_default_header(&self) -> HashMap<String, String> {
-        (*self.header).clone()
+    pub fn get_default_header() -> Option<HashMap<String, String>> {
+        if let Ok(store) = METADATA_STORE.read() {
+            if !store.header.is_empty() {
+                return Some((*store.header).clone());
+            }
+        }
+
+        None
     }
 
     #[inline]
-    pub fn get_status_pages(&self) -> Arc<Box<HashMap<u16, PageGenerator>>> {
-        Arc::clone(&self.status_page_generators)
+    pub(crate) fn get_status_pages(status: u16) -> Option<PageGenerator> {
+        if let Ok(store) = METADATA_STORE.read() {
+            if store.status_page_generators.is_empty() {
+                return None;
+            }
+
+            return match store.status_page_generators.get(&status) {
+                Some(generator) => Some(generator.clone()),
+                _ => None,
+            };
+        }
+
+        None
     }
 }
 

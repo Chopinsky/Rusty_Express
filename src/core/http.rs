@@ -12,7 +12,7 @@ use std::sync::{mpsc, Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 
-use super::config::{EngineContext, PageGenerator, ServerConfig, ViewEngineParser};
+use super::config::{ConnMetadata, EngineContext, ServerConfig, ViewEngineParser};
 use super::cookie::*;
 use super::router::REST;
 use chrono::prelude::*;
@@ -697,7 +697,7 @@ impl ResponseWriter for Response {
 
 pub(crate) trait ResponseManager {
     fn header_only(&mut self, header_only: bool);
-    fn validate_and_update(&mut self, fallback: &HashMap<u16, PageGenerator>);
+    fn validate_and_update(&mut self);
     fn write_header(&self, buffer: &mut BufWriter<&TcpStream>);
     fn write_body(&self, buffer: &mut BufWriter<&TcpStream>);
     fn keep_long_conn(&mut self, clone: TcpStream, buffer: &mut BufWriter<&TcpStream>);
@@ -709,7 +709,7 @@ impl ResponseManager for Response {
         self.header_only = header_only;
     }
 
-    fn validate_and_update(&mut self, fallback: &HashMap<u16, PageGenerator>) {
+    fn validate_and_update(&mut self) {
         if self.body_tx.is_some() {
             // must drop the tx or we will hang indefinitely
             self.body_tx = None;
@@ -736,21 +736,21 @@ impl ResponseManager for Response {
         // if not setting the header only and not having a body, it's a failure
         match self.status {
             0 | 404 => {
-                if let Some(page_generator) = fallback.get(&404) {
+                if let Some(page_generator) = ConnMetadata::get_status_pages(404) {
                     self.body = Box::new(page_generator());
                 } else {
                     self.body = Box::new(FOUR_OH_FOUR.to_owned());
                 }
             }
             401 => {
-                if let Some(page_generator) = fallback.get(&401) {
+                if let Some(page_generator) = ConnMetadata::get_status_pages(401) {
                     self.body = Box::new(page_generator());
                 } else {
                     self.body = Box::new(FOUR_OH_ONE.to_owned());
                 }
             }
             _ => {
-                if let Some(page_generator) = fallback.get(&500) {
+                if let Some(page_generator) = ConnMetadata::get_status_pages(500) {
                     self.body = Box::new(page_generator());
                 } else {
                     self.body = Box::new(FIVE_HUNDRED.to_owned());

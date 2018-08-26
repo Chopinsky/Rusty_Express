@@ -20,8 +20,8 @@
 //! ```
 
 #![allow(unused_variables)]
-
 #[macro_use]
+
 extern crate lazy_static;
 extern crate chrono;
 extern crate crossbeam_channel as channel;
@@ -58,7 +58,7 @@ use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
-use core::config::{ConnMetadata, ServerConfig, ViewEngine, ViewEngineDefinition};
+use core::config::{ServerConfig, ViewEngine, ViewEngineDefinition};
 use core::connection::*;
 use core::router::*;
 use core::states::*;
@@ -184,16 +184,15 @@ impl HttpServer {
         let workers_pool = ThreadPool::new(self.config.pool_size);
         shared_pool::initialize_with(vec![self.config.pool_size]);
 
+        //TODO: replaced by lazy_statics
         let mut shared_router = Arc::new(self.router.to_owned());
-        let mut shared_metadata = Arc::new(self.config.get_meta_data());
 
         for stream in listener.incoming() {
             if let Some(message) = self.state.courier_try_recv() {
                 match message {
                     ControlMessage::Terminate => {
                         if let Ok(s) = stream {
-                            let conn_meta = Arc::clone(&shared_metadata);
-                            send_err_resp(s, 503, conn_meta);
+                            send_err_resp(s, 503);
                         }
 
                         break;
@@ -202,10 +201,13 @@ impl HttpServer {
                         self.router = r;
                         shared_router = Arc::new(self.router.to_owned());
                     }
+
+                    
                     ControlMessage::HotLoadConfig(c) => {
                         self.config = c;
+                        self.config.store_metadata();
+
                         session_auto_config(&self.config, &mut self.state);
-                        shared_metadata = Arc::new(self.config.get_meta_data());
                     }
                     ControlMessage::Custom(content) => {
                         println!("The message: {} is not yet supported.", content)
@@ -214,7 +216,7 @@ impl HttpServer {
             }
 
             match stream {
-                Ok(s) => handle_stream(s, &shared_router, &shared_metadata, &workers_pool),
+                Ok(s) => handle_stream(s, &shared_router, &workers_pool),
                 Err(e) => debug::print(
                     &format!("Failed to receive the upcoming stream: {}", e)[..],
                     1,
@@ -231,18 +233,17 @@ impl HttpServer {
 fn handle_stream(
     stream: TcpStream,
     router: &Arc<Route>,
-    meta: &Arc<ConnMetadata>,
     workers_pool: &ThreadPool,
 ) {
     // clone Arc-pointers
     let router_ptr = Arc::clone(&router);
-    let meta_ptr = Arc::clone(&meta);
 
     workers_pool.execute(move || {
         unsafe {
             stream.set_timeout(READ_TIMEOUT, WRITE_TIMEOUT);
         }
-        handle_connection(stream, router_ptr, meta_ptr);
+
+        handle_connection(stream, router_ptr);
     });
 }
 
