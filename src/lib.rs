@@ -202,7 +202,7 @@ impl HttpServer {
                         shared_router = Arc::new(self.router.to_owned());
                     }
 
-                    
+
                     ControlMessage::HotLoadConfig(c) => {
                         self.config = c;
                         self.config.store_metadata();
