@@ -3,6 +3,8 @@
 use channel;
 use chrono::{DateTime, Utc};
 use std::env;
+use std::fs;
+use std::fs::File;
 use std::path::PathBuf;
 use std::sync::{atomic::{AtomicBool, Ordering}, Mutex, Once, RwLock, ONCE_INIT};
 use std::thread;
@@ -10,9 +12,10 @@ use std::time::Duration;
 
 lazy_static! {
     static ref TEMP_STORE: Mutex<Vec<LogInfo>> = Mutex::new(Vec::new());
-    static ref CONFIG: RwLock<LoggerConfig> = RwLock::new(LoggerConfig::initialize());
+    static ref CONFIG: RwLock<LoggerConfig> = RwLock::new(LoggerConfig::initialize(""));
 }
 
+static DEFAULT_LOCATION: &'static str = "./logs";
 static ONCE: Once = ONCE_INIT;
 static mut SENDER: Option<channel::Sender<LogInfo>> = None;
 static mut REFRESH_HANDLER: Option<thread::JoinHandle<()>> = None;
@@ -34,6 +37,7 @@ struct LogInfo {
 }
 
 struct LoggerConfig {
+    id: String,
     refresh_period: Duration,
     log_folder_path: Option<PathBuf>,
     meta_info_provider: Option<fn() -> String>,
@@ -41,13 +45,24 @@ struct LoggerConfig {
 }
 
 impl LoggerConfig {
-    fn initialize() -> Self {
+    fn initialize(id: &str) -> Self {
         LoggerConfig {
+            id: id.to_owned(),
             refresh_period: Duration::from_secs(1800),
             log_folder_path: None,
             meta_info_provider: None,
             rx_handler: None,
         }
+    }
+
+    #[inline]
+    fn set_id(&mut self, id: &str) {
+        self.id = id.to_owned();
+    }
+
+    #[inline]
+    fn get_id(&self) -> String {
+        self.id.clone()
     }
 
     #[inline]
@@ -221,22 +236,60 @@ fn reset_refresh(period: Option<Duration>) {
 
 fn dump_to_file() {
     unsafe {
-        if DUMPING_RUNNING.load(Ordering::Relaxed) {
-            //TODO: write only the meta info + why we skip this dump
-        }
-
         if let Ok(config) = CONFIG.read() {
-            *DUMPING_RUNNING.get_mut() = true;
+            let file = match config.log_folder_path {
+                Some(ref location) if location.is_dir() => {
+                    create_dump_file(config.get_id(), location)
+                },
+                _ => {
+                    create_dump_file(config.get_id(), &PathBuf::from(DEFAULT_LOCATION))
+                },
+            };
 
-            //TODO: writing to file
-            if let Ok(mut store) = TEMP_STORE.lock() {
-                let mut content: String;
-                while let Some(info) = store.pop() {
-                    content = format!("{}", info.message);
+            if let Ok(file) = file {
+                if DUMPING_RUNNING.load(Ordering::Relaxed) {
+                    //TODO: write only the meta info + why we skip this dump
+
+
+                    return;
                 }
-            }
 
-            *DUMPING_RUNNING.get_mut() = false;
+                // Now start a new dump
+                *DUMPING_RUNNING.get_mut() = true;
+
+                //TODO: writing to file
+                if let Ok(mut store) = TEMP_STORE.lock() {
+                    let mut content: String;
+                    while let Some(info) = store.pop() {
+                        content = format!("{}", info.message);
+                    }
+                }
+
+                *DUMPING_RUNNING.get_mut() = false;
+            }
         }
+    }
+}
+
+fn create_dump_file(id: String, loc: &PathBuf) -> Result<File, String> {
+    if !loc.as_path().is_dir() {
+        if let Err(e) = fs::create_dir_all(loc) {
+            return Err(format!("Failed to dump the logging information: {}", e));
+        }
+    }
+
+    let base: String =
+        if id.is_empty() {
+            format!("{}.txt", Utc::now().to_string())
+        } else {
+            format!("{}-{}.txt", id, Utc::now().to_string())
+        };
+
+    let mut path = loc.to_owned();
+    path.push(base);
+
+    match File::create(path.as_path()) {
+        Ok(file) => Ok(file),
+        _ => Err(String::from("Unable to create the dump file")),
     }
 }
