@@ -210,12 +210,12 @@ fn parse_request(
             deserialize(request_raw.to_string(), request, router);
 
         let host = request.header("host");
-        if let Some(host_addr) = host {
-            request.set_host(host_addr);
-        } else {
-            if let Ok(socket_addr) = stream.peer_addr() {
-                request.set_host_socket(socket_addr);
-            }
+        if let Some(host_name) = host {
+            request.set_host(host_name);
+        }
+
+        if let Ok(client) = stream.peer_addr() {
+            request.set_client(client);
         }
 
         let has_access = if let Some(auth) = auth_func {

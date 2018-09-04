@@ -196,22 +196,20 @@ impl HttpServer {
                         }
 
                         break;
-                    }
+                    },
                     ControlMessage::HotLoadRouter(r) => {
                         self.router = r;
                         shared_router = Arc::new(self.router.to_owned());
-                    }
-
-
+                    },
                     ControlMessage::HotLoadConfig(c) => {
                         self.config = c;
                         self.config.store_metadata();
 
                         session_auto_config(&self.config, &mut self.state);
-                    }
+                    },
                     ControlMessage::Custom(content) => {
                         println!("The message: {} is not yet supported.", content)
-                    }
+                    },
                 }
             }
 

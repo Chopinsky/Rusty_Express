@@ -37,7 +37,8 @@ pub struct Request {
     scheme: HashMap<String, Vec<String>>,
     fragment: String,
     params: HashMap<String, String>,
-    ip: Option<SocketAddr>,
+    host: String,
+    client_info: Option<SocketAddr>,
 }
 
 impl Request {
@@ -45,13 +46,14 @@ impl Request {
         Request {
             method: REST::GET,
             uri: String::new(),
-            cookie: HashMap::new(),
             header: HashMap::new(),
+            cookie: HashMap::new(),
+            body: Vec::new(),
             scheme: HashMap::new(),
             fragment: String::new(),
             params: HashMap::new(),
-            ip: None,
-            body: Vec::new(),
+            host: String::new(),
+            client_info: None,
         }
     }
 
@@ -121,8 +123,13 @@ impl Request {
     }
 
     #[inline]
-    pub fn ip_info(&self) -> Option<SocketAddr> {
-        self.ip
+    pub fn client_info(&self) -> Option<SocketAddr> {
+        self.client_info.clone()
+    }
+
+    #[inline]
+    pub fn host_info(&self) -> String {
+        self.host.clone()
     }
 
     pub(crate) fn set_headers(&mut self, header: HashMap<String, String>) {
@@ -147,8 +154,8 @@ pub trait RequestWriter {
     fn set_param(&mut self, key: &str, val: &str);
     fn create_param(&mut self, params: HashMap<String, String>);
     fn set_fragment(&mut self, fragment: String);
-    fn set_host(&mut self, addr: String);
-    fn set_host_socket(&mut self, addr: SocketAddr);
+    fn set_host(&mut self, host: String);
+    fn set_client(&mut self, addr: SocketAddr);
     fn extend_body(&mut self, content: &str);
 }
 
@@ -188,16 +195,13 @@ impl RequestWriter for Request {
         self.fragment = fragment;
     }
 
-    fn set_host(&mut self, addr: String) {
-        let socket: Result<SocketAddr, _> = addr.parse();
-        if let Ok(socket_addr) = socket {
-            self.ip = Some(socket_addr);
-        }
+    fn set_host(&mut self, host: String) {
+        self.host = host;
     }
 
     #[inline]
-    fn set_host_socket(&mut self, addr: SocketAddr) {
-        self.ip = Some(addr)
+    fn set_client(&mut self, addr: SocketAddr) {
+        self.client_info = Some(addr)
     }
 
     fn extend_body(&mut self, content: &str) {

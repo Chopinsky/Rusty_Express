@@ -5,6 +5,7 @@ use chrono::{DateTime, Utc};
 use std::env;
 use std::fs;
 use std::fs::File;
+use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::{atomic::{AtomicBool, Ordering}, Mutex, Once, RwLock, ONCE_INIT};
 use std::thread;
@@ -32,6 +33,7 @@ pub enum InfoLevel {
 
 struct LogInfo {
     message: String,
+    client: Option<SocketAddr>,
     level: InfoLevel,
     time: DateTime<Utc>,
 }
@@ -105,10 +107,11 @@ impl LoggerConfig {
     }
 }
 
-pub fn log(message: &str, level: InfoLevel) -> Result<(), String> {
+pub fn log(message: &str, level: InfoLevel, client: Option<SocketAddr>) -> Result<(), String> {
     if let Ok(mut store) = TEMP_STORE.lock() {
         let info = LogInfo {
             message: message.to_owned(),
+            client,
             level,
             time: Utc::now(),
         };
