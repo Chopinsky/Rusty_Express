@@ -218,15 +218,11 @@ fn parse_request(
             request.set_client(client);
         }
 
-        let has_access = if let Some(auth) = auth_func {
+        if let Some(auth) = auth_func {
             let route_path = request.uri.to_owned();
-            auth(&request, route_path)
-        } else {
-            true
-        };
-
-        if !has_access {
-            return Err(ConnError::AccessDenied);
+            if !auth(&request, route_path) {
+                return Err(ConnError::AccessDenied);
+            }
         }
 
         if let Some(callback) = callback {

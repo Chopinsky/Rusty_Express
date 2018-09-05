@@ -5,8 +5,10 @@ use chrono::{DateTime, Utc};
 use std::env;
 use std::fs;
 use std::fs::File;
+use std::fmt;
 use std::net::SocketAddr;
 use std::path::PathBuf;
+use std::io::Write;
 use std::sync::{atomic::{AtomicBool, Ordering}, Mutex, Once, RwLock, ONCE_INIT};
 use std::thread;
 use std::time::Duration;
@@ -22,6 +24,7 @@ static mut SENDER: Option<channel::Sender<LogInfo>> = None;
 static mut REFRESH_HANDLER: Option<thread::JoinHandle<()>> = None;
 static mut DUMPING_RUNNING: AtomicBool = AtomicBool::new(false);
 
+#[derive(Debug)]
 pub enum InfoLevel {
     Trace,
     Debug,
@@ -29,6 +32,12 @@ pub enum InfoLevel {
     Warn,
     Error,
     Critical,
+}
+
+impl fmt::Display for InfoLevel {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{:?}", self)
+    }
 }
 
 struct LogInfo {
@@ -42,7 +51,7 @@ struct LoggerConfig {
     id: String,
     refresh_period: Duration,
     log_folder_path: Option<PathBuf>,
-    meta_info_provider: Option<fn() -> String>,
+    meta_info_provider: Option<fn(bool) -> String>,
     rx_handler: Option<thread::JoinHandle<()>>
 }
 
@@ -108,25 +117,27 @@ impl LoggerConfig {
 }
 
 pub fn log(message: &str, level: InfoLevel, client: Option<SocketAddr>) -> Result<(), String> {
-    if let Ok(mut store) = TEMP_STORE.lock() {
-        let info = LogInfo {
-            message: message.to_owned(),
-            client,
-            level,
-            time: Utc::now(),
-        };
+    let info = LogInfo {
+        message: message.to_owned(),
+        client,
+        level,
+        time: Utc::now(),
+    };
 
-        store.push(info);
-        return Ok(());
+    unsafe {
+        if let Some(ref tx) = SENDER {
+            tx.send(info);
+            return Ok(());
+        }
     }
 
-    Err(String::from("Failed to add the info to the backlog"))
+    Err(String::from("The logging service is not running..."))
 }
 
-pub(crate) fn logger_run(
+pub(crate) fn start(
     period: Option<u64>,
     log_folder_path: Option<&str>,
-    meta_info_provider: Option<fn() -> String>)
+    meta_info_provider: Option<fn(bool) -> String>)
 {
     if let Ok(mut config) = CONFIG.write() {
         if let Some(time) = period {
@@ -145,7 +156,7 @@ pub(crate) fn logger_run(
     initialize();
 }
 
-pub(crate) fn logger_cleanup() {
+pub(crate) fn shutdown() {
     stop_refresh();
 
     if let Ok(mut config) = CONFIG.write() {
@@ -155,6 +166,22 @@ pub(crate) fn logger_cleanup() {
             });
         }
     }
+
+    unsafe {
+        let final_msg = LogInfo {
+            message: String::from("Shutting down the logging service..."),
+            client: None,
+            level: InfoLevel::Info,
+            time: Utc::now(),
+        };
+
+        if let Some(ref tx) = SENDER.take() {
+            tx.send(final_msg);
+        }
+    }
+
+    // Need to block because otherwise the lazy_static contents may go expired too soon
+    dump_to_file();
 }
 
 fn initialize() {
@@ -249,11 +276,14 @@ fn dump_to_file() {
                 },
             };
 
-            if let Ok(file) = file {
+            if let Ok(mut file) = file {
                 if DUMPING_RUNNING.load(Ordering::Relaxed) {
-                    //TODO: write only the meta info + why we skip this dump
+                    if let Some(meta_func) = config.meta_info_provider {
+                        write_to_file(&mut file, meta_func(false));
+                    }
 
-
+                    write_to_file(&mut file,
+                                  format_content(InfoLevel::Info, "A dumping process is already in progress, skipping this scheduled dump."));
                     return;
                 }
 
@@ -272,6 +302,16 @@ fn dump_to_file() {
             }
         }
     }
+}
+
+fn write_to_file(file: &mut File, content: String) {
+    file.write_all(content.as_bytes()).unwrap_or_else(|err| {
+        eprintln!("Failed to write to dump file: {}...", err);
+    });
+}
+
+fn format_content(level: InfoLevel, message: &str) -> String {
+    format!("\n[{}] @ {}: {}", level.to_string(), Utc::now().to_rfc3339(), message)
 }
 
 fn create_dump_file(id: String, loc: &PathBuf) -> Result<File, String> {
