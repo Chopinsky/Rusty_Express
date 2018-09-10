@@ -279,22 +279,42 @@ fn dump_to_file() {
             if let Ok(mut file) = file {
                 if DUMPING_RUNNING.load(Ordering::Relaxed) {
                     if let Some(meta_func) = config.meta_info_provider {
-                        write_to_file(&mut file, meta_func(false));
+                        write_to_file(&mut file, &meta_func(false));
                     }
 
-                    write_to_file(&mut file,
-                                  format_content(InfoLevel::Info, "A dumping process is already in progress, skipping this scheduled dump."));
+                    write_to_file(&mut file, &format_content(
+                        InfoLevel::Info,
+                        "A dumping process is already in progress, skipping this scheduled dump.",
+                        Utc::now()
+                    ));
+
                     return;
                 }
 
                 // Now start a new dump
                 *DUMPING_RUNNING.get_mut() = true;
 
-                //TODO: writing to file
                 if let Ok(mut store) = TEMP_STORE.lock() {
-                    let mut content: String;
+                    if let Some(meta_func) = config.meta_info_provider {
+                        write_to_file(&mut file, &meta_func(true));
+                    }
+
+                    let mut content: String = String::new();
+                    let mut count = 0;
+
                     while let Some(info) = store.pop() {
-                        content = format!("{}", info.message);
+                        count += 1;
+                        content.push_str(&format_content(info.level, &info.message, info.time));
+
+                        if count % 10 == 0 {
+                            write_to_file(&mut file, &content);
+                            content.clear();
+                        }
+                    }
+
+                    // write the remainder of the content
+                    if !content.is_empty() {
+                        write_to_file(&mut file, &content);
                     }
                 }
 
@@ -304,14 +324,14 @@ fn dump_to_file() {
     }
 }
 
-fn write_to_file(file: &mut File, content: String) {
+fn write_to_file(file: &mut File, content: &str) {
     file.write_all(content.as_bytes()).unwrap_or_else(|err| {
         eprintln!("Failed to write to dump file: {}...", err);
     });
 }
 
-fn format_content(level: InfoLevel, message: &str) -> String {
-    format!("\n[{}] @ {}: {}", level.to_string(), Utc::now().to_rfc3339(), message)
+fn format_content(level: InfoLevel, message: &str, timestamp: DateTime<Utc>) -> String {
+    format!("\n[{}] @ {}: {}", level.to_string(), timestamp.to_rfc3339(), message)
 }
 
 fn create_dump_file(id: String, loc: &PathBuf) -> Result<File, String> {

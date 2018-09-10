@@ -6,7 +6,6 @@ use std::collections::HashMap;
 use std::sync::RwLock;
 use std::time::Duration;
 
-use chrono;
 use num_cpus;
 use support::common::*;
 
@@ -17,13 +16,30 @@ lazy_static! {
     static ref METADATA_STORE: RwLock<ConnMetadata> = RwLock::new(ConnMetadata::new());
 }
 
+//TODO: separate meta_data out
 pub struct ServerConfig {
-    pub pool_size: usize,
-    pub read_timeout: u16,
-    pub write_timeout: u16,
-    pub use_session_autoclean: bool,
-    session_auto_clean_period: Option<chrono::Duration>,
+    store: ConfigStore,
     meta_data: ConnMetadata,
+}
+
+pub(crate) struct ConfigStore {
+    pool_size: usize,
+    read_timeout: u16,
+    write_timeout: u16,
+    use_session_autoclean: bool,
+    session_auto_clean_period: Option<Duration>,
+}
+
+impl ConfigStore {
+    pub fn new() -> Self {
+        ConfigStore {
+            pool_size: cmp::max(num_cpus::get(), 4),
+            read_timeout: 256,
+            write_timeout: 1024,
+            use_session_autoclean: false,
+            session_auto_clean_period: Some(Duration::from_secs(3600)),
+        }
+    }
 }
 
 impl ServerConfig {
@@ -31,18 +47,63 @@ impl ServerConfig {
         ServerConfig {
             /// Be aware that we will create 4 times more worker threads in separate pools
             /// to support the main pool.
-            pool_size: cmp::max(num_cpus::get(), 4),
-            read_timeout: 256,
-            write_timeout: 1024,
-            use_session_autoclean: false,
-            session_auto_clean_period: Some(chrono::Duration::seconds(3600)),
+            store: ConfigStore::new(),
             meta_data: ConnMetadata::new(),
         }
     }
 
     #[inline]
-    pub fn get_meta_data(&self) -> ConnMetadata {
-        self.meta_data.to_owned()
+    pub fn get_pool_size(&self) -> usize {
+        self.store.pool_size
+    }
+
+    #[inline]
+    pub fn set_pool_size(&mut self, size: usize) {
+        self.store.pool_size = size;
+    }
+
+    #[inline]
+    pub fn get_read_timeout(&self) -> u16 {
+        self.store.read_timeout
+    }
+
+    #[inline]
+    pub fn set_read_timeout(&mut self, timeout: u16) {
+        self.store.read_timeout = timeout;
+    }
+
+    #[inline]
+    pub fn get_write_timeout(&self) -> u16 {
+        self.store.write_timeout
+    }
+
+    #[inline]
+    pub fn set_write_timeout(&mut self, timeout: u16) {
+        self.store.write_timeout = timeout;
+    }
+
+    #[inline]
+    pub fn set_session_auto_clean(&mut self, auto_clean: bool) {
+        self.store.use_session_autoclean = auto_clean;
+    }
+
+    #[inline]
+    pub fn get_session_auto_clean(&self) -> bool {
+        self.store.use_session_autoclean
+    }
+
+    #[inline]
+    pub fn clear_session_auto_clean(&mut self) {
+        self.store.session_auto_clean_period = None;
+    }
+
+    pub fn get_session_auto_clean_period(&self) -> Option<Duration> {
+        self.store.session_auto_clean_period.clone()
+    }
+
+    #[inline]
+    pub fn set_session_auto_clean_period(&mut self, auto_clean_sec: Duration) {
+        self.store.session_auto_clean_period = Some(auto_clean_sec);
     }
 
     pub fn use_default_header(&mut self, header: HashMap<String, String>) {
@@ -53,10 +114,6 @@ impl ServerConfig {
         self.meta_data.header.add(&field[..], value, replace);
     }
 
-    pub fn set_session_auto_clean(&mut self, auto_clean_period: Duration) {
-        self.session_auto_clean_period = std_to_chrono(auto_clean_period);
-    }
-
     pub fn set_status_page_generator(&mut self, status: u16, generator: PageGenerator) {
         if status > 0 {
             self.meta_data.status_page_generators.insert(status, generator.clone());
@@ -64,15 +121,8 @@ impl ServerConfig {
     }
 
     #[inline]
-    pub fn reset_session_auto_clean(&mut self) {
-        self.session_auto_clean_period = None;
-    }
-
-    pub fn get_session_auto_clean_period(&self) -> Option<Duration> {
-        match self.session_auto_clean_period {
-            Some(period) => chrono_to_std(period),
-            _ => None,
-        }
+    pub fn get_meta_data(&self) -> ConnMetadata {
+        self.meta_data.to_owned()
     }
 
     pub(crate) fn store_metadata(&self) {

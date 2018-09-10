@@ -15,29 +15,21 @@ pub enum ControlMessage {
 }
 
 pub struct ServerStates {
+    running: bool,
     courier_channel: (
         channel::Sender<ControlMessage>,
         channel::Receiver<ControlMessage>,
     ),
-    going_to_shutdown: bool,
     session_auto_clean_handler: Option<JoinHandle<()>>,
 }
 
 impl ServerStates {
     pub fn new() -> Self {
         ServerStates {
+            running: false,
             courier_channel: channel::bounded(1),
-            going_to_shutdown: false,
             session_auto_clean_handler: None,
         }
-    }
-
-    pub fn is_terminating(&self) -> bool {
-        self.going_to_shutdown
-    }
-
-    pub fn ack_to_terminate(&mut self) {
-        self.going_to_shutdown = true;
     }
 
     pub fn set_session_handler(&mut self, handler: Option<JoinHandle<()>>) {
@@ -58,5 +50,15 @@ impl ServerStates {
     #[inline]
     pub(crate) fn courier_try_recv(&self) -> Option<ControlMessage> {
         self.courier_channel.1.try_recv()
+    }
+
+    #[inline]
+    pub(crate) fn toggle_running_state(&mut self, running: bool) {
+        self.running = true;
+    }
+
+    #[inline]
+    pub(crate) fn is_running(&self) -> bool {
+        self.running
     }
 }
