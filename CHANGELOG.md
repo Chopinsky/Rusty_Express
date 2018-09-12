@@ -3,7 +3,13 @@
 - Now you can define regular expressions for validating the `RequestPath::ExplicitWithParams` 
 routes. For example, your parameterized route can now be defined as: `/api/:userId(\d{7})` which only allows users with 
 7 digits IDs. This will help reduce the server burden if the incoming request is trying to guess the parameters.
-- Heads up: next version will be published in 0.4.x.
+- The following config related APIs are changed to be static methods, and you can use them thread-safe now:
+ 
+ Before 0.3.5  | After 0.3.5
+ ------------- | -------------
+ config.use_default_header(...)  | ServerConfig::use_default_header(...)
+ config.set_default_header(...)  | ServerConfig::set_default_header(...)
+ config.set_status_page_generator(...)  | ServerConfig::set_status_page_generator(...)
 
 ## 0.3.4
 - Fixing bugs

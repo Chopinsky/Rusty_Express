@@ -54,7 +54,7 @@ pub mod prelude {
 
 use std::collections::HashMap;
 use std::net::{SocketAddr, TcpListener, TcpStream};
-use std::sync::{atomic::{AtomicBool, AtomicUsize, Ordering}, Arc};
+use std::sync::{Arc};
 use std::thread;
 use std::time::Duration;
 
@@ -68,12 +68,6 @@ use support::{shared_pool, ThreadPool};
 
 //TODO: Impl middlewear
 
-static mut READ_TIMEOUT: Option<Duration> = None;
-static mut WRITE_TIMEOUT: Option<Duration> = None;
-static mut SESSION_AUTOCLEAN: AtomicBool = AtomicBool::new(false);
-static mut SESSION_AUTOCLEAN_PERIOD: Option<AtomicUsize> = Some(AtomicUsize::new(3600));
-//TODO: static-ize pool size
-
 pub struct HttpServer {
     router: Route,
     config: ServerConfig,
@@ -82,25 +76,19 @@ pub struct HttpServer {
 
 impl HttpServer {
     pub fn new() -> Self {
-        let server = HttpServer {
+        HttpServer {
             router: Route::new(),
             config: ServerConfig::new(),
             state: ServerStates::new(),
-        };
-
-        setup_config(&server.config);
-        server
+        }
     }
 
     pub fn new_with_config(config: ServerConfig) -> Self {
-        let server = HttpServer {
+        HttpServer {
             router: Route::new(),
             config,
             state: ServerStates::new(),
-        };
-
-        setup_config(&server.config);
-        server
+        }
     }
 
     /// `listen` will take 1 parameter for the port that the server will be monitoring at, aka
@@ -175,7 +163,7 @@ impl HttpServer {
 
     fn launch_with(&mut self, listener: &TcpListener) {
         // if using the session module and allow auto clean up, launch the service now.
-        session_cleanup_config(&mut self.state);
+        self.session_cleanup_config();
 
         let workers_pool = setup_worker_pools(&self.config.get_pool_size());
 
@@ -202,13 +190,8 @@ impl HttpServer {
                             eprintln!("Change size of the thread pool is not supported while the server is running");
                         }
 
-                        setup_config(&c);
                         self.config = c;
-
-                        //TODO: detach metadata from the config?
-                        self.config.store_metadata();
-
-                        session_cleanup_config(&mut self.state);
+                        self.session_cleanup_config();
                     },
                     ControlMessage::Custom(content) => {
                         println!("The message: {} is not yet supported.", content)
@@ -217,7 +200,7 @@ impl HttpServer {
             }
 
             match stream {
-                Ok(s) => handle_stream(s, &shared_router, &workers_pool),
+                Ok(s) => self.handle_stream(s, &shared_router, &workers_pool),
                 Err(e) => debug::print(
                     &format!("Failed to receive the upcoming stream: {}", e)[..],
                     1,
@@ -231,23 +214,31 @@ impl HttpServer {
 
         self.state.toggle_running_state(false);
     }
-}
 
-fn handle_stream(
-    stream: TcpStream,
-    router: &Arc<Route>,
-    workers_pool: &ThreadPool,
-) {
-    // clone Arc-pointers
-    let router_ptr = Arc::clone(&router);
+    fn handle_stream(
+        &self,
+        stream: TcpStream,
+        router: &Arc<Route>,
+        workers_pool: &ThreadPool,
+    ) {
+        // clone Arc-pointers
+        let router_ptr = Arc::clone(&router);
+        let read_timeout = self.config.get_read_timeout() as u64;
+        let write_timeout = self.config.get_write_timeout() as u64;
 
-    workers_pool.execute(move || {
-        unsafe {
-            stream.set_timeout(READ_TIMEOUT, WRITE_TIMEOUT);
+        workers_pool.execute(move || {
+            stream.set_timeout(read_timeout, write_timeout);
+            handle_connection(stream, router_ptr);
+        });
+    }
+
+    fn session_cleanup_config(&mut self) {
+        if self.config.get_session_auto_clean() && !ExchangeConfig::auto_clean_is_running() {
+            if let Some(duration) = self.config.get_session_auto_clean_period() {
+                self.state.set_session_handler(ExchangeConfig::auto_clean_start(duration));
+            }
         }
-
-        handle_connection(stream, router_ptr);
-    });
+    }
 }
 
 fn setup_worker_pools(size: &usize) -> ThreadPool {
@@ -255,58 +246,23 @@ fn setup_worker_pools(size: &usize) -> ThreadPool {
     ThreadPool::new(*size)
 }
 
-fn setup_config(config: &ServerConfig) {
-    set_timeout(config);
-    set_autoclean_config(config);
-    set_autoclean_period(config);
-}
-
-fn set_timeout(config: &ServerConfig) {
-    unsafe {
-        READ_TIMEOUT = Some(Duration::from_millis(config.get_read_timeout() as u64));
-        WRITE_TIMEOUT = Some(Duration::from_millis(config.get_write_timeout() as u64));
-    }
-}
-
-fn set_autoclean_config(config: &ServerConfig) {
-    unsafe {
-        SESSION_AUTOCLEAN.store(config.get_session_auto_clean(), Ordering::Relaxed);
-    }
-}
-
-fn set_autoclean_period(config: &ServerConfig) {
-    unsafe {
-        match config.get_session_auto_clean_period() {
-            Some(period) => SESSION_AUTOCLEAN_PERIOD = Some(AtomicUsize::new(period.as_secs() as usize)),
-            _ => SESSION_AUTOCLEAN_PERIOD = None,
-        };
-    }
-}
-
-fn session_cleanup_config(state: &mut ServerStates) {
-    unsafe {
-        if SESSION_AUTOCLEAN.load(Ordering::Relaxed) && !ExchangeConfig::auto_clean_is_running() {
-            if let Some(ref duration) = SESSION_AUTOCLEAN_PERIOD {
-                let duration = Duration::from_secs(duration.load(Ordering::Relaxed) as u64);
-                state.set_session_handler(ExchangeConfig::auto_clean_start(duration));
-            }
-        }
-    }
-}
-
 trait StreamTimeoutConfig {
-    fn set_timeout(&self, read_timeout: Option<Duration>, write_timeout: Option<Duration>);
+    fn set_timeout(&self, read_timeout: u64, write_timeout: u64);
 }
 
 impl StreamTimeoutConfig for TcpStream {
-    fn set_timeout(&self, read_timeout: Option<Duration>, write_timeout: Option<Duration>) {
-        self.set_read_timeout(read_timeout).unwrap_or_else(|err| {
-            debug::print(&format!("Unable to set read timeout: {}", err)[..], 1);
-        });
+    fn set_timeout(&self, read_timeout: u64, write_timeout: u64) {
+        if read_timeout > 0 {
+            self.set_read_timeout(Some(Duration::from_millis(read_timeout))).unwrap_or_else(|err| {
+                debug::print(&format!("Unable to set read timeout: {}", err)[..], 1);
+            });
+        }
 
-        self.set_write_timeout(write_timeout).unwrap_or_else(|err| {
-            debug::print(&format!("Unable to set write timeout: {}", err)[..], 1);
-        });
+        if write_timeout > 0 {
+            self.set_write_timeout(Some(Duration::from_millis(write_timeout))).unwrap_or_else(|err| {
+                debug::print(&format!("Unable to set write timeout: {}", err)[..], 1);
+            });
+        }
     }
 }
 
@@ -339,24 +295,30 @@ impl ServerDef for HttpServer {
     }
 
     fn set_read_timeout(&mut self, timeout: u16) {
-        unsafe {
-            READ_TIMEOUT = Some(Duration::from_millis(timeout as u64));
+        if self.state.is_running() {
+            eprintln!("Change size of the thread pool is not supported while the server is running");
+            return;
         }
+
+        self.config.set_read_timeout(timeout);
     }
 
     fn set_write_timeout(&mut self, timeout: u16) {
-        unsafe {
-            WRITE_TIMEOUT = Some(Duration::from_millis(timeout as u64));
+        if self.state.is_running() {
+            eprintln!("Change size of the thread pool is not supported while the server is running");
+            return;
         }
+
+        self.config.set_write_timeout(timeout);
     }
 
     //TODO: detatch meta_data from config
     fn def_default_response_header(&mut self, header: HashMap<String, String>) {
-        self.config.use_default_header(header);
+        ServerConfig::use_default_header(header);
     }
 
     fn set_default_response_header(&mut self, field: String, value: String) {
-        self.config.set_default_header(field, value, true);
+        ServerConfig::set_default_header(field, value, true);
     }
 
     fn enable_session_auto_clean(&mut self, auto_clean_period: Duration) {

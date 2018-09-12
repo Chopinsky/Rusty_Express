@@ -16,13 +16,7 @@ lazy_static! {
     static ref METADATA_STORE: RwLock<ConnMetadata> = RwLock::new(ConnMetadata::new());
 }
 
-//TODO: separate meta_data out
 pub struct ServerConfig {
-    store: ConfigStore,
-    meta_data: ConnMetadata,
-}
-
-pub(crate) struct ConfigStore {
     pool_size: usize,
     read_timeout: u16,
     write_timeout: u16,
@@ -30,9 +24,9 @@ pub(crate) struct ConfigStore {
     session_auto_clean_period: Option<Duration>,
 }
 
-impl ConfigStore {
+impl ServerConfig {
     pub fn new() -> Self {
-        ConfigStore {
+        ServerConfig {
             pool_size: cmp::max(num_cpus::get(), 4),
             read_timeout: 256,
             write_timeout: 1024,
@@ -40,94 +34,90 @@ impl ConfigStore {
             session_auto_clean_period: Some(Duration::from_secs(3600)),
         }
     }
-}
-
-impl ServerConfig {
-    pub fn new() -> Self {
-        ServerConfig {
-            /// Be aware that we will create 4 times more worker threads in separate pools
-            /// to support the main pool.
-            store: ConfigStore::new(),
-            meta_data: ConnMetadata::new(),
-        }
-    }
 
     #[inline]
     pub fn get_pool_size(&self) -> usize {
-        self.store.pool_size
+        self.pool_size
     }
 
     #[inline]
     pub fn set_pool_size(&mut self, size: usize) {
-        self.store.pool_size = size;
+        self.pool_size = size;
     }
 
     #[inline]
     pub fn get_read_timeout(&self) -> u16 {
-        self.store.read_timeout
+        self.read_timeout
     }
 
     #[inline]
     pub fn set_read_timeout(&mut self, timeout: u16) {
-        self.store.read_timeout = timeout;
+        self.read_timeout = timeout;
     }
 
     #[inline]
     pub fn get_write_timeout(&self) -> u16 {
-        self.store.write_timeout
+        self.write_timeout
     }
 
     #[inline]
     pub fn set_write_timeout(&mut self, timeout: u16) {
-        self.store.write_timeout = timeout;
+        self.write_timeout = timeout;
     }
 
     #[inline]
     pub fn set_session_auto_clean(&mut self, auto_clean: bool) {
-        self.store.use_session_autoclean = auto_clean;
+        self.use_session_autoclean = auto_clean;
     }
 
     #[inline]
     pub fn get_session_auto_clean(&self) -> bool {
-        self.store.use_session_autoclean
+        self.use_session_autoclean
     }
 
     #[inline]
     pub fn clear_session_auto_clean(&mut self) {
-        self.store.session_auto_clean_period = None;
+        self.session_auto_clean_period = None;
     }
 
     pub fn get_session_auto_clean_period(&self) -> Option<Duration> {
-        self.store.session_auto_clean_period.clone()
+        self.session_auto_clean_period.clone()
     }
 
     #[inline]
     pub fn set_session_auto_clean_period(&mut self, auto_clean_sec: Duration) {
-        self.store.session_auto_clean_period = Some(auto_clean_sec);
+        self.session_auto_clean_period = Some(auto_clean_sec);
     }
 
-    pub fn use_default_header(&mut self, header: HashMap<String, String>) {
-        self.meta_data.header = Box::new(header);
-    }
-
-    pub fn set_default_header(&mut self, field: String, value: String, replace: bool) {
-        self.meta_data.header.add(&field[..], value, replace);
-    }
-
-    pub fn set_status_page_generator(&mut self, status: u16, generator: PageGenerator) {
-        if status > 0 {
-            self.meta_data.status_page_generators.insert(status, generator.clone());
+    pub fn use_default_header(header: HashMap<String, String>) {
+        if let Ok(mut store) = METADATA_STORE.write() {
+            store.header = Box::new(header);
         }
     }
 
-    #[inline]
-    pub fn get_meta_data(&self) -> ConnMetadata {
-        self.meta_data.to_owned()
+    pub fn set_default_header(field: String, value: String, replace: bool) {
+        if let Ok(mut store) = METADATA_STORE.write() {
+            store.header.add(&field[..], value, replace);
+        }
     }
 
-    pub(crate) fn store_metadata(&self) {
-        if let Ok(mut store) = METADATA_STORE.write() {
-            *store = self.meta_data.clone();
+    pub fn set_status_page_generator(status: u16, generator: PageGenerator) {
+        if status > 0 {
+            if let Ok(mut store) = METADATA_STORE.write() {
+                store.status_page_generators.insert(status, generator.clone());
+            }
+        }
+    }
+}
+
+impl Clone for ServerConfig {
+    fn clone(&self) -> Self {
+        ServerConfig {
+        pool_size: self.pool_size,
+        read_timeout: self.read_timeout,
+        write_timeout: self.write_timeout,
+        use_session_autoclean: self.use_session_autoclean,
+        session_auto_clean_period: self.session_auto_clean_period.clone(),
         }
     }
 }
