@@ -161,6 +161,16 @@ impl HttpServer {
         self.state.drop_session_auto_clean();
     }
 
+    pub fn config_hot_reload(&self) {
+        if !self.state.is_running() {
+            eprintln!("The function is meant to be used for hot-loading a new server configuration when it's running...");
+            return;
+        }
+
+        let sender = self.state.get_courier_sender();
+        sender.send(ControlMessage::HotLoadConfig(self.config.clone()));
+    }
+
     fn launch_with(&mut self, listener: &TcpListener) {
         // if using the session module and allow auto clean up, launch the service now.
         self.session_cleanup_config();
@@ -277,9 +287,7 @@ pub trait ServerDef {
     fn disable_session_auto_clean(&mut self);
 }
 
-
 //TODO: update with the config cache
-//TODO: check if server is running -- if so, must send update via courier
 impl ServerDef for HttpServer {
     fn def_router(&mut self, router: Route) {
         self.router = router;
@@ -295,24 +303,21 @@ impl ServerDef for HttpServer {
     }
 
     fn set_read_timeout(&mut self, timeout: u16) {
-        if self.state.is_running() {
-            eprintln!("Change size of the thread pool is not supported while the server is running");
-            return;
-        }
-
         self.config.set_read_timeout(timeout);
+
+        if self.state.is_running() {
+            self.config_hot_reload();
+        }
     }
 
     fn set_write_timeout(&mut self, timeout: u16) {
-        if self.state.is_running() {
-            eprintln!("Change size of the thread pool is not supported while the server is running");
-            return;
-        }
-
         self.config.set_write_timeout(timeout);
+
+        if self.state.is_running() {
+            self.config_hot_reload();
+        }
     }
 
-    //TODO: detatch meta_data from config
     fn def_default_response_header(&mut self, header: HashMap<String, String>) {
         ServerConfig::use_default_header(header);
     }
@@ -323,10 +328,18 @@ impl ServerDef for HttpServer {
 
     fn enable_session_auto_clean(&mut self, auto_clean_period: Duration) {
         self.config.set_session_auto_clean_period(auto_clean_period);
+
+        if self.state.is_running() {
+            self.config_hot_reload();
+        }
     }
 
     fn disable_session_auto_clean(&mut self) {
         self.config.clear_session_auto_clean();
+
+        if self.state.is_running() {
+            self.config_hot_reload();
+        }
     }
 }
 
