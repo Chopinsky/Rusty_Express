@@ -113,11 +113,11 @@ impl ServerConfig {
 impl Clone for ServerConfig {
     fn clone(&self) -> Self {
         ServerConfig {
-        pool_size: self.pool_size,
-        read_timeout: self.read_timeout,
-        write_timeout: self.write_timeout,
-        use_session_autoclean: self.use_session_autoclean,
-        session_auto_clean_period: self.session_auto_clean_period.clone(),
+            pool_size: self.pool_size,
+            read_timeout: self.read_timeout,
+            write_timeout: self.write_timeout,
+            use_session_autoclean: self.use_session_autoclean,
+            session_auto_clean_period: self.session_auto_clean_period.clone(),
         }
     }
 }

@@ -287,7 +287,6 @@ pub trait ServerDef {
     fn disable_session_auto_clean(&mut self);
 }
 
-//TODO: update with the config cache
 impl ServerDef for HttpServer {
     fn def_router(&mut self, router: Route) {
         self.router = router;
