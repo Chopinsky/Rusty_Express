@@ -85,13 +85,10 @@ enum ConnError {
 //    result
 //}
 
-pub(crate) fn handle_connection(
-    stream: TcpStream,
-    router: Arc<Route>,
-) -> ExecCode {
+pub(crate) fn handle_connection(stream: TcpStream) -> ExecCode {
     let mut request = Box::new(Request::new());
 
-    let handler = match parse_request(&stream, &mut request, router) {
+    let handler = match parse_request(&stream, &mut request) {
         Err(err) => {
             debug::print("Error on parsing request", 3);
 
@@ -191,7 +188,6 @@ fn write_to_stream(stream: &TcpStream, response: &mut Box<Response>) -> ExecCode
 fn parse_request(
     mut stream: &TcpStream,
     request: &mut Box<Request>,
-    router: Arc<Route>,
 ) -> Result<Callback, ConnError> {
     let mut buffer = [0; 1024];
 
@@ -205,9 +201,9 @@ fn parse_request(
             return Err(ConnError::EmptyRequest);
         }
 
-        let auth_func = router.get_auth_func();
+        let auth_func = Route::get_auth_func();
         let callback =
-            deserialize(request_raw.to_string(), request, router);
+            deserialize(request_raw.to_string(), request);
 
         let host = request.header("host");
         if let Some(host_name) = host {
@@ -233,7 +229,7 @@ fn parse_request(
     }
 }
 
-fn deserialize(request: String, store: &mut Box<Request>, router: Arc<Route>) -> Option<Callback> {
+fn deserialize(request: String, store: &mut Box<Request>) -> Option<Callback> {
     if request.is_empty() {
         return None;
     }
@@ -248,7 +244,7 @@ fn deserialize(request: String, store: &mut Box<Request>, router: Arc<Route>) ->
         _ => return None,
     };
 
-    if let Some(rx) = deserialize_base_line(base_line, store, router) {
+    if let Some(rx) = deserialize_base_line(base_line, store) {
 
         let req_chan =
             if raw_lines.len() > 1 {
@@ -304,8 +300,7 @@ fn deserialize(request: String, store: &mut Box<Request>, router: Arc<Route>) ->
 
 pub(crate) fn deserialize_base_line(
     source: &str,
-    req: &mut Box<Request>,
-    router: Arc<Route>,
+    req: &mut Box<Request>
 ) -> Option<mpsc::Receiver<(Option<Callback>, HashMap<String, String>)>>
 {
     let mut header_only = false;
@@ -350,12 +345,9 @@ pub(crate) fn deserialize_base_line(
         let req_method = req.method.clone();
 
         let (tx, rx) = mpsc::channel();
-        shared_pool::run(
-            move || {
-                router.seek_handler(&req_method, &uri, header_only, tx);
-            },
-            TaskType::Request,
-        );
+        shared_pool::run(move || {
+            Route::seek_handler(&req_method, &uri, header_only, tx);
+        },TaskType::Request);
 
         // now do more work on non-essential parsing
         if !raw_fragment.is_empty() {

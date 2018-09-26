@@ -54,7 +54,6 @@ pub mod prelude {
 
 use std::collections::HashMap;
 use std::net::{SocketAddr, TcpListener, TcpStream};
-use std::sync::{Arc};
 use std::thread;
 use std::time::Duration;
 
@@ -176,9 +175,6 @@ impl HttpServer {
         self.session_cleanup_config();
 
         let workers_pool = setup_worker_pools(&self.config.get_pool_size());
-
-        //TODO: replaced by lazy_statics
-        let mut shared_router = Arc::new(self.router.to_owned());
         self.state.toggle_running_state(true);
 
         for stream in listener.incoming() {
@@ -192,8 +188,9 @@ impl HttpServer {
                         break;
                     },
                     ControlMessage::HotLoadRouter(r) => {
-                        self.router = r;
-                        shared_router = Arc::new(self.router.to_owned());
+                        if let Err(err) = Route::use_router(r) {
+                            eprintln!("An error has taken place when trying to update the router: {}", err);
+                        }
                     },
                     ControlMessage::HotLoadConfig(c) => {
                         if c.get_pool_size() != self.config.get_pool_size() {
@@ -210,7 +207,7 @@ impl HttpServer {
             }
 
             match stream {
-                Ok(s) => self.handle_stream(s, &shared_router, &workers_pool),
+                Ok(s) => self.handle_stream(s, &workers_pool),
                 Err(e) => debug::print(
                     &format!("Failed to receive the upcoming stream: {}", e)[..],
                     1,
@@ -228,17 +225,15 @@ impl HttpServer {
     fn handle_stream(
         &self,
         stream: TcpStream,
-        router: &Arc<Route>,
         workers_pool: &ThreadPool,
     ) {
         // clone Arc-pointers
-        let router_ptr = Arc::clone(&router);
         let read_timeout = self.config.get_read_timeout() as u64;
         let write_timeout = self.config.get_write_timeout() as u64;
 
         workers_pool.execute(move || {
             stream.set_timeout(read_timeout, write_timeout);
-            handle_connection(stream, router_ptr);
+            handle_connection(stream);
         });
     }
 
@@ -289,7 +284,9 @@ pub trait ServerDef {
 
 impl ServerDef for HttpServer {
     fn def_router(&mut self, router: Route) {
-        self.router = router;
+        if let Err(err) = Route::use_router(router) {
+            eprintln!("An error has taken place when trying to update the router: {}", err);
+        }
     }
 
     fn set_pool_size(&mut self, size: usize) {

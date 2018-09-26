@@ -1,3 +1,7 @@
+# 2018-10
+## 0.3.6
+
+
 # 2018-08
 ## 0.3.5
 - Now you can define regular expressions for validating the `RequestPath::ExplicitWithParams` 

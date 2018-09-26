@@ -278,36 +278,46 @@ impl Route {
         }
     }
 
-    #[inline]
-    pub fn get_auth_func(&self) -> Option<AuthFunc> {
-        self.auth_func.clone()
-    }
-
-    #[inline]
-    pub fn set_auth_func(&mut self, auth_func: Option<AuthFunc>) {
-        self.auth_func = auth_func;
-    }
-
-    fn add_route(&mut self, method: REST, uri: RequestPath, callback: Callback) {
-        if let Some(route) = self.store.get_mut(&method) {
-            //find, insert, done.
-            route.insert(uri, callback);
-            return;
+    pub fn get_auth_func() -> Option<AuthFunc> {
+        if let Ok(route) = ROUTER.read() {
+            return route.auth_func.clone();
         }
 
-        // the route for the given method has not yet initialized
-        let mut route = RouteMap::new();
-        route.insert(uri, callback);
-
-        self.store.insert(method, route);
+        None
     }
-}
 
-impl Clone for Route {
-    fn clone(&self) -> Self {
-        Route {
-            store: self.store.clone(),
-            auth_func: self.auth_func.clone(),
+    pub fn set_auth_func(auth_func: Option<AuthFunc>) {
+        if let Ok(mut route) = ROUTER.write() {
+            route.auth_func = auth_func;
+        }
+    }
+
+    pub fn use_router(another: Route) -> Result<(), String> {
+        if let Ok(mut route) = ROUTER.write() {
+            route.replace_with(another);
+            return Ok(());
+        }
+
+        Err(String::from("Unable to define the router, please try again..."))
+    }
+
+    fn replace_with(&mut self, mut another: Route) {
+        self.store = another.store;
+        self.auth_func = another.auth_func.take();
+    }
+
+    fn add_route(method: REST, uri: RequestPath, callback: Callback) {
+        if let Ok(mut route) = ROUTER.write() {
+            if let Some(mut r) = route.store.get_mut(&method) {
+                //find, insert, done.
+                r.insert(uri, callback);
+                return;
+            }
+
+            let mut map = RouteMap::new();
+            map.insert(uri, callback);
+
+            route.store.insert(method, map);
         }
     }
 }
@@ -325,32 +335,32 @@ pub trait Router {
 
 impl Router for Route {
     fn get(&mut self, uri: RequestPath, callback: Callback) -> &mut Route {
-        self.add_route(REST::GET, uri, callback);
+        Route::add_route(REST::GET, uri, callback);
         self
     }
 
     fn patch(&mut self, uri: RequestPath, callback: Callback) -> &mut Route {
-        self.add_route(REST::PATCH, uri, callback);
+        Route::add_route(REST::PATCH, uri, callback);
         self
     }
 
     fn post(&mut self, uri: RequestPath, callback: Callback) -> &mut Route {
-        self.add_route(REST::POST, uri, callback);
+        Route::add_route(REST::POST, uri, callback);
         self
     }
 
     fn put(&mut self, uri: RequestPath, callback: Callback) -> &mut Route {
-        self.add_route(REST::PUT, uri, callback);
+        Route::add_route(REST::PUT, uri, callback);
         self
     }
 
     fn delete(&mut self, uri: RequestPath, callback: Callback) -> &mut Route {
-        self.add_route(REST::DELETE, uri, callback);
+        Route::add_route(REST::DELETE, uri, callback);
         self
     }
 
     fn options(&mut self, uri: RequestPath, callback: Callback) -> &mut Route {
-        self.add_route(REST::OPTIONS, uri, callback);
+        Route::add_route(REST::OPTIONS, uri, callback);
         self
     }
 
@@ -360,7 +370,7 @@ impl Router for Route {
         }
 
         let request_method = REST::OTHER(method.to_uppercase());
-        self.add_route(request_method, uri, callback);
+        Route::add_route(request_method, uri, callback);
 
         self
     }
@@ -377,7 +387,6 @@ impl Router for Route {
 pub(crate) trait RouteHandler {
     fn parse_request(callback: Callback, req: &Box<Request>, resp: &mut Box<Response>);
     fn seek_handler(
-        &self,
         method: &REST,
         uri: &str,
         header_only: bool,
@@ -403,7 +412,6 @@ impl RouteHandler for Route {
     }
 
     fn seek_handler(
-        &self,
         method: &REST,
         uri: &str,
         header_only: bool,
@@ -412,20 +420,20 @@ impl RouteHandler for Route {
         let mut result = None;
         let mut params = HashMap::new();
 
-        if let Some(routes) = self.store.get(method) {
-            result = routes.seek_path(uri, &mut params);
-
-        } else if header_only {
-            //if a header only request, fallback to search with REST::GET
-            if let Some(routes) = self.store.get(&REST::GET) {
+        if let Ok(route_store) = ROUTER.read() {
+            if let Some(routes) = route_store.store.get(method) {
                 result = routes.seek_path(uri, &mut params);
+            } else if header_only {
+                //if a header only request, fallback to search with REST::GET
+                if let Some(routes) = route_store.store.get(&REST::GET) {
+                    result = routes.seek_path(uri, &mut params);
+                }
             }
 
-        }
-
-        if result.is_none() {
-            if let Some(all_routes) = self.store.get(&ROUTE_FOR_ALL_CONST) {
-                result = all_routes.seek_path(uri, &mut params);
+            if result.is_none() {
+                if let Some(all_routes) = route_store.store.get(&ROUTE_FOR_ALL_CONST) {
+                    result = all_routes.seek_path(uri, &mut params);
+                }
             }
         }
 
