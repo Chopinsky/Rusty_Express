@@ -132,6 +132,27 @@ impl Request {
         self.host.clone()
     }
 
+    pub fn json() -> String {
+        //TODO: implement
+
+//        pub method: REST,
+//        pub uri: String,
+//        header: HashMap<String, String>,
+//        cookie: HashMap<String, String>,
+//        body: Vec<String>,
+//        scheme: HashMap<String, Vec<String>>,
+//        fragment: String,
+//        params: HashMap<String, String>,
+//        host: String,
+//        client_info: Option<SocketAddr>,
+
+        let mut req: String = String::new();
+
+
+
+        req
+    }
+
     pub(crate) fn set_headers(&mut self, header: HashMap<String, String>) {
         self.header = header;
     }
