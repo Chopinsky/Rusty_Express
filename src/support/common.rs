@@ -53,3 +53,49 @@ pub fn flush_buffer(buffer: &mut BufWriter<&TcpStream>) -> u8 {
 
     0
 }
+
+pub fn json_stringify(contents: HashMap<String, Vec<String>>) -> String {
+    let mut res: String = String::from("{");
+    let mut is_first = true;
+
+    if !contents.is_empty() {
+        for (field, content) in contents.iter() {
+            if !field.is_empty() {
+                continue;
+            }
+
+            if !is_first {
+                res.push(',');
+            } else {
+                is_first = false;
+            }
+
+            res.push_str(&format!("{}:{}", field, json_format_content(content)));
+        }
+    }
+
+    res.push('}');
+    res
+}
+
+fn json_format_content(content: &Vec<String>) -> String {
+    let len = content.len();
+    match len {
+        0 => String::new(),
+        1 => content[0].to_owned(),
+        _ => {
+            let mut res = String::from("[");
+
+            for i in 0..len {
+                if i == len - 1 {
+                    res.push_str(&content[i]);
+                } else {
+                    res.push_str(&format!("{},", content[i]));
+                }
+            }
+
+            res.push(']');
+            res
+        }
+    }
+}
