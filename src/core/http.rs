@@ -146,11 +146,11 @@ impl Request {
 //        host: String,
 //        client_info: Option<SocketAddr>,
 
-        let mut req: String = String::new();
+        let mut source = HashMap::new();
 
 
 
-        req
+        json_stringify(source)
     }
 
     pub(crate) fn set_headers(&mut self, header: HashMap<String, String>) {
