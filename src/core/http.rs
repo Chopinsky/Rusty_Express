@@ -132,7 +132,7 @@ impl Request {
         self.host.clone()
     }
 
-    pub fn json() -> String {
+    pub fn json(&self) -> String {
         //TODO: implement
 
 //        pub method: REST,
@@ -148,7 +148,7 @@ impl Request {
 
         let mut source = HashMap::new();
 
-
+        source.insert(String::from("method"), vec!(self.method.to_string()));
 
         json_stringify(source)
     }

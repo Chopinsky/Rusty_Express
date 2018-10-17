@@ -3,6 +3,7 @@
 
 use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
+use std::fmt;
 use std::io::Error;
 use std::sync::{mpsc, RwLock};
 use std::time::Duration;
@@ -29,6 +30,20 @@ pub enum REST {
     DELETE,
     OPTIONS,
     OTHER(String),
+}
+
+impl fmt::Display for REST {
+    fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            REST::GET => write!(fmt, "GET"),
+            REST::PATCH => write!(fmt, "PATCH"),
+            REST::POST => write!(fmt, "POST"),
+            REST::PUT => write!(fmt, "PUT"),
+            REST::DELETE => write!(fmt, "DELETE"),
+            REST::OPTIONS => write!(fmt, "OPTIONS"),
+            REST::OTHER(ref s) => write!(fmt, "{}", s),
+        }
+    }
 }
 
 #[derive(PartialEq, Eq, Hash, Clone, Copy)]
