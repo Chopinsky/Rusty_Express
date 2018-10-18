@@ -148,7 +148,14 @@ impl Request {
 
         let mut source = HashMap::new();
 
-        source.insert(String::from("method"), vec!(self.method.to_string()));
+        source.insert(String::from("method"), self.method.to_string());
+        source.insert(String::from("uri"), self.uri.to_owned());
+
+        //TODO: needs to format the content first.
+        source.merge(&self.header);
+        source.merge(&self.cookie);
+        //source.merge(self.scheme);
+        source.merge(&self.params);
 
         json_stringify(source)
     }

@@ -6,6 +6,7 @@ use std::net::TcpStream;
 
 pub trait MapUpdates<T> {
     fn add(&mut self, field: &str, value: T, allow_replace: bool) -> Option<T>;
+    fn merge(&mut self, other: &HashMap<String, T>);
 }
 
 impl<T> MapUpdates<T> for HashMap<String, T> {
@@ -23,6 +24,10 @@ impl<T> MapUpdates<T> for HashMap<String, T> {
             self.entry(f).or_insert(value);
             None
         }
+    }
+
+    fn merge(&mut self, other: &HashMap<String, T>) {
+
     }
 }
 
@@ -54,7 +59,7 @@ pub fn flush_buffer(buffer: &mut BufWriter<&TcpStream>) -> u8 {
     0
 }
 
-pub fn json_stringify(contents: HashMap<String, Vec<String>>) -> String {
+pub fn json_stringify(contents: HashMap<String, String>) -> String {
     let mut res: String = String::from("{");
     let mut is_first = true;
 
@@ -78,24 +83,10 @@ pub fn json_stringify(contents: HashMap<String, Vec<String>>) -> String {
     res
 }
 
-fn json_format_content(content: &Vec<String>) -> String {
+fn json_format_content(content: &String) -> String {
     let len = content.len();
     match len {
         0 => String::new(),
-        1 => content[0].to_owned(),
-        _ => {
-            let mut res = String::from("[");
-
-            for i in 0..len {
-                if i == len - 1 {
-                    res.push_str(&content[i]);
-                } else {
-                    res.push_str(&format!("{},", content[i]));
-                }
-            }
-
-            res.push(']');
-            res
-        }
+        _ => content.to_owned(),
     }
 }
