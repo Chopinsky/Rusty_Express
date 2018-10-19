@@ -152,12 +152,13 @@ impl Request {
         source.insert(String::from("uri"), self.uri.to_owned());
 
         //TODO: needs to format the content first.
-        source.merge(&self.header);
-        source.merge(&self.cookie);
-        //source.merge(self.scheme);
-        source.merge(&self.params);
+        source.insert(String::from("headers"), json_stringify(&self.header));
+        source.insert(String::from("cookies"), json_stringify(&self.cookie));
+        source.insert(String::from("uri_params"), json_stringify(&self.params));
 
-        json_stringify(source)
+        //source.merge(self.scheme);
+
+        json_stringify(&source)
     }
 
     pub(crate) fn set_headers(&mut self, header: HashMap<String, String>) {
