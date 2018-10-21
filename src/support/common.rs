@@ -75,7 +75,7 @@ pub fn json_stringify(contents: &HashMap<String, String>) -> String {
                 is_first = false;
             }
 
-            res.push_str(&format!("{}:{}", field, json_format_content(content)));
+            res.push_str(&format!("{}:{}", field, json_format_content(&vec!(content.to_owned()))));
         }
     }
 
@@ -93,7 +93,6 @@ pub fn json_flat_stringify(contents: &HashMap<String, Vec<String>>) -> String {
                 continue;
             }
 
-            //TODO: flag the vec
             if !is_first {
                 res.push(',');
             } else {
@@ -109,10 +108,11 @@ pub fn json_flat_stringify(contents: &HashMap<String, Vec<String>>) -> String {
     res
 }
 
-fn json_format_content(content: &String) -> String {
+fn json_format_content(content: &Vec<String>) -> String {
     let len = content.len();
     match len {
         0 => String::new(),
-        _ => content.to_owned(),
+        1 => content[0].to_owned(),
+        _ => content[0].to_owned(),
     }
 }
