@@ -113,6 +113,19 @@ fn json_format_content(content: &Vec<String>) -> String {
     match len {
         0 => String::new(),
         1 => content[0].to_owned(),
-        _ => content[0].to_owned(),
+        _ => {
+            let mut base = String::from("[");
+
+            for i in 0..len {
+                base.push_str(&content[i]);
+
+                if i != len - 1 {
+                    base.push(',');
+                }
+            }
+
+            base.push(']');
+            base
+        },
     }
 }
