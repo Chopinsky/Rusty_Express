@@ -6,7 +6,6 @@ use std::net::TcpStream;
 
 pub trait MapUpdates<T> {
     fn add(&mut self, field: &str, value: T, allow_replace: bool) -> Option<T>;
-    fn merge(&mut self, other: &HashMap<String, T>);
 }
 
 impl<T> MapUpdates<T> for HashMap<String, T> {
@@ -25,9 +24,22 @@ impl<T> MapUpdates<T> for HashMap<String, T> {
             None
         }
     }
+}
 
-    fn merge(&mut self, other: &HashMap<String, T>) {
+pub trait VecExtension {
+    fn flat(&self) -> String;
+}
 
+
+impl VecExtension for Vec<String> {
+    fn flat(&self) -> String {
+        let mut result = String::new();
+
+        for content in self.iter() {
+            result.push_str(content);
+        }
+
+        result
     }
 }
 

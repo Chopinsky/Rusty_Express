@@ -151,10 +151,26 @@ impl Request {
         source.insert(String::from("method"), self.method.to_string());
         source.insert(String::from("uri"), self.uri.to_owned());
 
+        if !self.body.is_empty() {
+            source.insert(String::from("body"), (&self.body).flat());
+        }
+
         //TODO: needs to format the content first.
-        source.insert(String::from("headers"), json_stringify(&self.header));
-        source.insert(String::from("cookies"), json_stringify(&self.cookie));
-        source.insert(String::from("uri_params"), json_stringify(&self.params));
+        if !self.header.is_empty() {
+            source.insert(String::from("headers"), json_stringify(&self.header));
+        }
+
+        if !self.cookie.is_empty() {
+            source.insert(String::from("cookies"), json_stringify(&self.cookie));
+        }
+
+        if !self.params.is_empty() {
+            source.insert(String::from("uri_params"), json_stringify(&self.params));
+        }
+
+        if !self.scheme.is_empty() {
+            source.insert(String::from("schemes"), json_flat_stringify(&self.scheme));
+        }
 
         //source.merge(self.scheme);
 
