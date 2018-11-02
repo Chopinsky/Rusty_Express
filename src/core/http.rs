@@ -133,29 +133,27 @@ impl Request {
     }
 
     pub fn json(&self) -> String {
-        //TODO: implement
-
-//        pub method: REST,
-//        pub uri: String,
-//        header: HashMap<String, String>,
-//        cookie: HashMap<String, String>,
-//        body: Vec<String>,
-//        scheme: HashMap<String, Vec<String>>,
-//        fragment: String,
-//        params: HashMap<String, String>,
-//        host: String,
-//        client_info: Option<SocketAddr>,
-
         let mut source = HashMap::new();
 
         source.insert(String::from("method"), self.method.to_string());
         source.insert(String::from("uri"), self.uri.to_owned());
 
+        if !self.params.is_empty() {
+            source.insert(String::from("uri_params"), json_stringify(&self.params));
+        }
+
+        if !self.scheme.is_empty() {
+            source.insert(String::from("uri_schemes"), json_flat_stringify(&self.scheme));
+        }
+
+        if !self.fragment.is_empty() {
+            source.insert(String::from("uri_fragment"), self.fragment.to_owned());
+        }
+
         if !self.body.is_empty() {
             source.insert(String::from("body"), (&self.body).flat());
         }
 
-        //TODO: needs to format the content first.
         if !self.header.is_empty() {
             source.insert(String::from("headers"), json_stringify(&self.header));
         }
@@ -164,15 +162,13 @@ impl Request {
             source.insert(String::from("cookies"), json_stringify(&self.cookie));
         }
 
-        if !self.params.is_empty() {
-            source.insert(String::from("uri_params"), json_stringify(&self.params));
+        if !self.host.is_empty() {
+            source.insert(String::from("host"), self.host.to_owned());
         }
 
-        if !self.scheme.is_empty() {
-            source.insert(String::from("schemes"), json_flat_stringify(&self.scheme));
+        if let Some(addr) = self.client_info.clone() {
+            source.insert(String::from("socket_address"), addr.to_string());
         }
-
-        //source.merge(self.scheme);
 
         json_stringify(&source)
     }
