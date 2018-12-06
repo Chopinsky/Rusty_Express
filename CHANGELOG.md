@@ -1,6 +1,8 @@
 # 2018-10
 ## 0.3.6
-
+- Router has been updated for better performance.
+- Native logger service. More documentation coming in 0.4.0.
+- Next version will be in 0.4.x after updating to the Rust 20118 version and fixing lexical differences. 
 
 # 2018-08
 ## 0.3.5

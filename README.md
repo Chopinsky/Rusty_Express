@@ -25,17 +25,10 @@ expect to make less, if none, break changes, but please do let us know if you've
 that we should fix, or have met performance bottle necks that we shall try to improve.
 
 
-## 0.3.5
-- Now you can define regular expressions for validating the `RequestPath::ExplicitWithParams` 
-routes. For example, your parameterized route can now be defined as: `/api/:userId(\d{7})` which only allows users with 
-7 digits IDs. This will help reduce the server burden if the incoming request is trying to guess the parameters.
-- The following config related APIs are changed to be static methods, and you can use them thread-safe now:
- 
- Before 0.3.5  | After 0.3.5
- ------------- | -------------
- config.use_default_header(...)  | ServerConfig::use_default_header(...)
- config.set_default_header(...)  | ServerConfig::set_default_header(...)
- config.set_status_page_generator(...)  | ServerConfig::set_status_page_generator(...)
+## What's new in 0.3.6
+- Router has been updated for better performance.
+- Native logger service. More documentation coming in 0.4.0.
+- Next version will be in 0.4.x after updating to the Rust 20118 version and fixing lexical differences. 
 
 
 ## Migrating from 0.2.x to 0.3.0 
