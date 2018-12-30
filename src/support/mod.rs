@@ -10,7 +10,7 @@ pub mod logger;
 pub(crate) mod common;
 pub(crate) mod debug;
 pub(crate) mod shared_pool {
-    pub(crate) use support::scheduler::{close, initialize_with, run};
+    pub(crate) use crate::support::scheduler::{close, initialize_with, run};
 }
 
 pub(crate) use self::trie::{Field, RouteTrie};

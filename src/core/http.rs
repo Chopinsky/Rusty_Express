@@ -1,5 +1,4 @@
 #![allow(dead_code)]
-#![allow(unused_variables)]
 
 use std::collections::hash_map::Iter;
 use std::collections::HashMap;
@@ -16,7 +15,7 @@ use super::config::{ConnMetadata, EngineContext, ServerConfig, ViewEngineParser}
 use super::cookie::*;
 use super::router::REST;
 use chrono::prelude::*;
-use support::{common::*, debug, shared_pool, TaskType};
+use crate::support::{common::*, debug, shared_pool, TaskType};
 
 static FOUR_OH_FOUR: &'static str = include_str!("../default/404.html");
 static FOUR_OH_ONE: &'static str = include_str!("../default/401.html");

@@ -70,7 +70,7 @@ use std::time::{Duration, SystemTime};
 use chrono;
 use chrono::prelude::*;
 use rand::{thread_rng, Rng};
-use support::ThreadPool;
+use crate::support::ThreadPool;
 
 static DELEM_LV_1: char = '\u{0005}';
 static DELEM_LV_2: char = '\u{0006}';

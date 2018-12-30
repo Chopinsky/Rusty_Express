@@ -1,4 +1,3 @@
-#![allow(unused_variables)]
 #![allow(dead_code)]
 
 use std::cmp;
@@ -7,7 +6,7 @@ use std::sync::RwLock;
 use std::time::Duration;
 
 use num_cpus;
-use support::common::*;
+use crate::support::common::*;
 
 //TODO: load config from file, e.g. config.toml
 

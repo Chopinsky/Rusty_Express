@@ -1,6 +1,6 @@
 #![allow(dead_code)]
 
-use core::router::Callback;
+use crate::core::router::Callback;
 use regex::Regex;
 use std::collections::HashMap;
 

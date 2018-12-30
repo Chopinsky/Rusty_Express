@@ -1,11 +1,10 @@
-#![allow(unused_variables)]
 #![allow(dead_code)]
 
 use super::config::ServerConfig;
 use super::router::Route;
-use channel;
+use crate::channel;
 use std::thread::*;
-use support::session::*;
+use crate::support::session::*;
 
 pub enum ControlMessage {
     Terminate,

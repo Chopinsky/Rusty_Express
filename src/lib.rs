@@ -33,37 +33,38 @@ pub(crate) mod core;
 pub(crate) mod support;
 
 pub mod prelude {
-    pub use core::config::{
+    pub use crate::core::config::{
         EngineContext, PageGenerator, ServerConfig, ViewEngine, ViewEngineDefinition,
     };
 
-    pub use core::context as ServerContext;
-    pub use core::context::ContextProvider;
-    pub use core::cookie::*;
-    pub use core::http::{Request, RequestWriter, Response, ResponseStates, ResponseWriter};
-    pub use core::router::{RequestPath, Route, Router, REST};
-    pub use core::states::ControlMessage;
-    pub use {HttpServer, ServerDef};
+    pub use crate::core::context as ServerContext;
+    pub use crate::core::context::ContextProvider;
+    pub use crate::core::cookie::*;
+    pub use crate::core::http::{Request, RequestWriter, Response, ResponseStates, ResponseWriter};
+    pub use crate::core::router::{RequestPath, Route, Router, REST};
+    pub use crate::core::states::ControlMessage;
+    pub use crate::{HttpServer, ServerDef};
 
     #[cfg(feature = "session")]
-    pub use support::session::*;
+    pub use crate::support::session::*;
 
     #[cfg(feature = "logger")]
-    pub use support::logger::InfoLevel;
+    pub use crate::support::logger::InfoLevel;
 }
 
 use std::collections::HashMap;
 use std::net::{SocketAddr, TcpListener, TcpStream};
+use std::path::Path;
 use std::thread;
 use std::time::Duration;
 
-use core::config::{ServerConfig, ViewEngine, ViewEngineDefinition};
-use core::connection::*;
-use core::router::*;
-use core::states::*;
-use support::debug;
-use support::session::*;
-use support::{shared_pool, ThreadPool};
+use crate::core::config::{ServerConfig, ViewEngine, ViewEngineDefinition};
+use crate::core::connection::*;
+use crate::core::router::*;
+use crate::core::states::*;
+use crate::support::debug;
+use crate::support::session::*;
+use crate::support::{shared_pool, ThreadPool};
 
 //TODO: Impl middlewear
 
@@ -283,6 +284,8 @@ pub trait ServerDef {
 }
 
 impl ServerDef for HttpServer {
+    //todo: impl 'static_folder' or 'static_loc'
+
     fn def_router(&mut self, router: Route) {
         if let Err(err) = Route::use_router(router) {
             eprintln!("An error has taken place when trying to update the router: {}", err);
@@ -377,6 +380,11 @@ impl Router for HttpServer {
 
     fn all(&mut self, uri: RequestPath, callback: Callback) -> &mut Route {
         self.router.all(uri, callback);
+        &mut self.router
+    }
+
+    fn use_static(&mut self, path: &Path) -> &mut Route {
+        self.router.use_static(path);
         &mut self.router
     }
 }

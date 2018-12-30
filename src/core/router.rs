@@ -1,20 +1,16 @@
-#![allow(unused_imports)]
-#![allow(unused_variables)]
+#![allow(dead_code)]
 
-use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
 use std::fmt;
-use std::io::Error;
+use std::path::{Path, PathBuf};
 use std::sync::{mpsc, RwLock};
-use std::time::Duration;
 
-use super::http::{Request, RequestWriter, Response, ResponseStates, ResponseWriter};
+use super::http::{Request, Response, ResponseStates, ResponseWriter};
 use regex::Regex;
-use support::common::MapUpdates;
-use support::debug;
-use support::Field;
-use support::TaskType;
-use support::{shared_pool, RouteTrie};
+use crate::support::common::MapUpdates;
+use crate::support::debug;
+use crate::support::Field;
+use crate::support::RouteTrie;
 
 lazy_static! {
     static ref ROUTE_FOR_ALL_CONST: REST = REST::OTHER(String::from("*"));
@@ -96,10 +92,17 @@ impl Clone for RegexRoute {
     }
 }
 
+struct StaticLocRoute {
+    location: PathBuf,
+    black_list: HashSet<String>,
+    white_list: HashSet<String>,
+}
+
 pub(crate) struct RouteMap {
     explicit: HashMap<String, Callback>,
     explicit_with_params: RouteTrie,
     wildcard: HashMap<String, RegexRoute>,
+    static_path: Option<StaticLocRoute>,
 }
 
 impl RouteMap {
@@ -108,6 +111,7 @@ impl RouteMap {
             explicit: HashMap::new(),
             explicit_with_params: RouteTrie::initialize(),
             wildcard: HashMap::new(),
+            static_path: None,
         }
     }
 
@@ -276,6 +280,7 @@ impl Clone for RouteMap {
             explicit: self.explicit.clone(),
             explicit_with_params: self.explicit_with_params.clone(),
             wildcard: self.wildcard.clone(),
+            static_path: None,
         }
     }
 }
@@ -323,7 +328,7 @@ impl Route {
 
     fn add_route(method: REST, uri: RequestPath, callback: Callback) {
         if let Ok(mut route) = ROUTER.write() {
-            if let Some(mut r) = route.store.get_mut(&method) {
+            if let Some(r) = route.store.get_mut(&method) {
                 //find, insert, done.
                 r.insert(uri, callback);
                 return;
@@ -346,6 +351,7 @@ pub trait Router {
     fn options(&mut self, uri: RequestPath, callback: Callback) -> &mut Route;
     fn other(&mut self, method: &str, uri: RequestPath, callback: Callback) -> &mut Route;
     fn all(&mut self, uri: RequestPath, callback: Callback) -> &mut Route;
+    fn use_static(&mut self, path: &Path) -> &mut Route;
 }
 
 impl Router for Route {
@@ -396,6 +402,14 @@ impl Router for Route {
     /// post, etc.), it will be matched and invoked instead of the "match all" callback functions.
     fn all(&mut self, uri: RequestPath, callback: Callback) -> &mut Route {
         self.other("*", uri.clone(), callback)
+    }
+
+    fn use_static(&mut self, path: &Path) -> &mut Route {
+        assert!(path.is_dir(), "The static folder location must point to a folder");
+
+        //TODO: impl
+
+        self
     }
 }
 

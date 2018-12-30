@@ -1,6 +1,6 @@
 #![allow(dead_code)]
 
-use channel;
+use crate::channel;
 use chrono::{DateTime, Utc};
 use std::env;
 use std::fs;

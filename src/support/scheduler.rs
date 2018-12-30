@@ -4,7 +4,7 @@ use std::mem;
 use std::sync::{mpsc, Arc, Mutex, Once, ONCE_INIT};
 use std::thread;
 use std::time::Duration;
-use support::debug;
+use crate::support::debug;
 
 static TIMEOUT: Duration = Duration::from_millis(200);
 
