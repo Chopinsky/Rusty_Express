@@ -4,7 +4,7 @@ use std::mem;
 use std::sync::{mpsc, Arc, Mutex, Once, ONCE_INIT};
 use std::thread;
 use std::time::Duration;
-use crate::support::debug;
+use crate::support::debug::{self, InfoLevel};
 
 static TIMEOUT: Duration = Duration::from_millis(200);
 
@@ -65,7 +65,7 @@ impl ThreadPool {
         if let Ok(sender) = self.sender.lock() {
             if let Err(err) = sender.send(Message::NewJob(job)) {
                 print!("Failed: {}", err);
-                debug::print(&format!("Unable to distribute the job: {}", err), 3);
+                debug::print(&format!("Unable to distribute the job: {}", err), InfoLevel::Error);
             };
         }
     }
@@ -74,7 +74,7 @@ impl ThreadPool {
         if let Ok(sender) = self.sender.lock() {
             for _ in &mut self.workers {
                 sender.send(Message::Terminate).unwrap_or_else(|err| {
-                    debug::print(&format!("Unable to send message: {}", err), 3);
+                    debug::print(&format!("Unable to send message: {}", err), InfoLevel::Error);
                 });
             }
         }
@@ -91,7 +91,7 @@ impl ThreadPool {
 
 impl Drop for ThreadPool {
     fn drop(&mut self) {
-        debug::print("Job done, sending terminate message to all workers.", 3);
+        debug::print("Job done, sending terminate message to all workers.", InfoLevel::Error);
         self.clear();
     }
 }

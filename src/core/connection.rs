@@ -7,11 +7,11 @@ use std::time::Duration;
 use super::config::ConnMetadata;
 use super::router::{Callback, Route, RouteHandler, REST};
 use super::http::{
-    Request, RequestWriter, Response, ResponseManager, ResponseStates, ResponseWriter,
+    Request, RequestWriter, Response, ResponseManager, ResponseStates, ResponseWriter
 };
 
 use crate::support::{
-    common::flush_buffer, common::write_to_buff, common::MapUpdates, debug, shared_pool, TaskType
+    common::flush_buffer, common::write_to_buff, common::MapUpdates, debug, debug::InfoLevel, shared_pool, TaskType
 };
 
 static HEADER_END: [u8; 2] = [13, 10];
@@ -86,7 +86,10 @@ pub(crate) fn handle_connection(stream: TcpStream) -> ExecCode {
 
     let handler = match parse_request(&stream, &mut request) {
         Err(err) => {
-            debug::print("Error on parsing request", 3);
+            debug::print(
+                "Error on parsing request",
+                InfoLevel::Error
+            );
 
             let status: u16 = match err {
                 ConnError::EmptyRequest => 400,
@@ -172,7 +175,7 @@ fn write_to_stream(stream: &TcpStream, response: &mut Box<Response>) -> ExecCode
                 "Encountered errors while shutting down the trunked body stream: {}",
                 err
             ),
-            1,
+            InfoLevel::Warning,
         );
         return 1;
     }
@@ -188,7 +191,10 @@ fn parse_request(
     let mut buffer = [0; 1024];
 
     if let Err(e) = stream.read(&mut buffer) {
-        debug::print(&format!("Reading stream error -- {}", e), 3);
+        debug::print(
+            &format!("Reading stream error -- {}", e),
+            InfoLevel::Error
+        );
         Err(ConnError::ReadStreamFailure)
     } else {
         let request_raw = String::from_utf8_lossy(&buffer[..]);
@@ -230,7 +236,10 @@ fn deserialize(request: String, store: &mut Box<Request>) -> Option<Callback> {
         return None;
     }
 
-    debug::print(&format!("\r\nPrint request: \r\n{}", request), 2);
+    debug::print(
+        &format!("\r\nPrint request: \r\n{}", request),
+        InfoLevel::Error
+    );
 
     let mut res = None;
     let raw_lines: Vec<&str> = request.trim().splitn(2, '\n').collect();

@@ -24,7 +24,6 @@
 
 extern crate lazy_static;
 extern crate chrono;
-extern crate crossbeam_channel as channel;
 extern crate num_cpus;
 extern crate rand;
 extern crate regex;
@@ -58,11 +57,12 @@ use std::path::Path;
 use std::thread;
 use std::time::Duration;
 
+use crossbeam_channel as channel;
 use crate::core::config::{ServerConfig, ViewEngine, ViewEngineDefinition};
 use crate::core::connection::*;
 use crate::core::router::*;
 use crate::core::states::*;
-use crate::support::debug;
+use crate::support::debug::{self, InfoLevel};
 use crate::support::session::*;
 use crate::support::{shared_pool, ThreadPool};
 
@@ -145,7 +145,10 @@ impl HttpServer {
         // now terminate the callback function as well.
         if let Some(handler) = control_handler {
             handler.join().unwrap_or_else(|err| {
-                debug::print("Failed to shut down the callback handler, the service is teared down correctly", 1);
+                debug::print(
+                    "Failed to shut down the callback handler, the service is teared down correctly",
+                    InfoLevel::Warning
+                );
             });
         }
     }
@@ -168,7 +171,10 @@ impl HttpServer {
         }
 
         let sender = self.state.get_courier_sender();
-        sender.send(ControlMessage::HotLoadConfig(self.config.clone()));
+
+        if let Err(_) = sender.send(ControlMessage::HotLoadConfig(self.config.clone())) {
+            debug::print("Failed to hot reload the configuration", InfoLevel::Error);
+        }
     }
 
     fn launch_with(&mut self, listener: &TcpListener) {
@@ -190,12 +196,18 @@ impl HttpServer {
                     },
                     ControlMessage::HotLoadRouter(r) => {
                         if let Err(err) = Route::use_router(r) {
-                            eprintln!("An error has taken place when trying to update the router: {}", err);
+                            debug::print(
+                                &format!("An error has taken place when trying to update the router: {}", err)[..],
+                                InfoLevel::Warning
+                            );
                         }
                     },
                     ControlMessage::HotLoadConfig(c) => {
                         if c.get_pool_size() != self.config.get_pool_size() {
-                            eprintln!("Change size of the thread pool is not supported while the server is running");
+                            debug::print(
+                                "Change size of the thread pool is not supported while the server is running",
+                                InfoLevel::Warning
+                            );
                         }
 
                         self.config = c;
@@ -211,7 +223,7 @@ impl HttpServer {
                 Ok(s) => self.handle_stream(s, &workers_pool),
                 Err(e) => debug::print(
                     &format!("Failed to receive the upcoming stream: {}", e)[..],
-                    1,
+                    InfoLevel::Warning,
                 ),
             }
         }
@@ -260,13 +272,19 @@ impl StreamTimeoutConfig for TcpStream {
     fn set_timeout(&self, read_timeout: u64, write_timeout: u64) {
         if read_timeout > 0 {
             self.set_read_timeout(Some(Duration::from_millis(read_timeout))).unwrap_or_else(|err| {
-                debug::print(&format!("Unable to set read timeout: {}", err)[..], 1);
+                debug::print(
+                    &format!("Unable to set read timeout: {}", err)[..],
+                    InfoLevel::Warning
+                );
             });
         }
 
         if write_timeout > 0 {
             self.set_write_timeout(Some(Duration::from_millis(write_timeout))).unwrap_or_else(|err| {
-                debug::print(&format!("Unable to set write timeout: {}", err)[..], 1);
+                debug::print(
+                    &format!("Unable to set write timeout: {}", err)[..],
+                    InfoLevel::Warning
+                );
             });
         }
     }

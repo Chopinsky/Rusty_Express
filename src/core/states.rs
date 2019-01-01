@@ -2,9 +2,10 @@
 
 use super::config::ServerConfig;
 use super::router::Route;
-use crate::channel;
 use std::thread::*;
+use crate::channel;
 use crate::support::session::*;
+use crate::support::debug::{self, InfoLevel};
 
 pub enum ControlMessage {
     Terminate,
@@ -48,7 +49,13 @@ impl ServerStates {
 
     #[inline]
     pub(crate) fn courier_try_recv(&self) -> Option<ControlMessage> {
-        self.courier_channel.1.try_recv()
+        match self.courier_channel.1.try_recv() {
+            Ok(msg) => Some(msg),
+            Err(e) => {
+                debug::print("error parsing header: {:?}", InfoLevel::Warning);
+                None
+            },
+        }
     }
 
     #[inline]

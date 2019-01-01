@@ -8,7 +8,7 @@ use std::sync::{mpsc, RwLock};
 use super::http::{Request, Response, ResponseStates, ResponseWriter};
 use regex::Regex;
 use crate::support::common::MapUpdates;
-use crate::support::debug;
+use crate::support::debug::{self, InfoLevel};
 use crate::support::Field;
 use crate::support::RouteTrie;
 
@@ -467,7 +467,7 @@ impl RouteHandler for Route {
         }
 
         if let Err(e) = tx.send((result, params)) {
-            debug::print("Unable to find the route handler", 2);
+            debug::print("Unable to find the route handler", InfoLevel::Error);
         }
     }
 }

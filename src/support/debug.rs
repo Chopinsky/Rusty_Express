@@ -3,40 +3,49 @@ use std::env;
 use std::sync::{Once, ONCE_INIT};
 
 static ONCE: Once = ONCE_INIT;
-static mut DEBUG_LEVEL: u8 = 0;
+static mut DEBUG_LEVEL: InfoLevel = InfoLevel::Silent;
+
+#[derive(PartialEq)]
+pub enum InfoLevel {
+    Silent,
+    Info,
+    Warning,
+    Error,
+}
 
 pub fn initialize() {
     ONCE.call_once(|| {
         if let Ok(debug_mode) = env::var("DEBUG_LEVEL") {
             match &debug_mode[..] {
-                "1" => set_debug_level(1),
-                "2" => set_debug_level(2),
-                "3" => set_debug_level(3),
-                _ => set_debug_level(0),
+                "1" => set_debug_level(InfoLevel::Info),
+                "2" => set_debug_level(InfoLevel::Warning),
+                "3" => set_debug_level(InfoLevel::Error),
+                _ => set_debug_level(InfoLevel::Silent),
             }
         }
     });
 }
 
-pub fn print(info: &str, level: u8) {
+pub fn print(info: &str, level: InfoLevel) {
     if !in_debug_mode() {
         return;
     }
     if info.is_empty() {
         return;
     }
-    if !print_level_allowed(level) {
+    if !print_level_allowed(&level) {
         return;
     }
 
     let now: DateTime<Utc> = Utc::now();
     let level_label = match level {
-        0 => String::from("info"),
-        1 => String::from("warning"),
-        _ => String::from(format!("error [{}]", level)),
+        InfoLevel::Info => String::from("info"),
+        InfoLevel::Warning => String::from("warning"),
+        InfoLevel::Error => String::from("error"),
+        InfoLevel::Silent => return,
     };
 
-    println!(
+    eprintln!(
         "{}: {} at {}",
         level_label,
         now.format("%Y-%m-%d %H:%M:%S GMT").to_string(),
@@ -46,15 +55,37 @@ pub fn print(info: &str, level: u8) {
 
 #[inline]
 fn in_debug_mode() -> bool {
-    unsafe { DEBUG_LEVEL > 0 }
+    unsafe {
+        match DEBUG_LEVEL {
+            InfoLevel::Silent => false,
+            _ => true,
+        }
+    }
 }
 
 #[inline]
-fn print_level_allowed(level: u8) -> bool {
-    unsafe { DEBUG_LEVEL >= level }
+fn print_level_allowed(level: &InfoLevel) -> bool {
+    unsafe {
+        let raw_level = cast_info_level(level);
+        match DEBUG_LEVEL {
+            InfoLevel::Silent => false,
+            InfoLevel::Error => raw_level > 2,
+            InfoLevel::Warning => raw_level > 1,
+            _ => true,
+        }
+    }
 }
 
-fn set_debug_level(debug: u8) {
+fn cast_info_level(level: &InfoLevel) -> u8 {
+    match level {
+        InfoLevel::Silent => 0,
+        InfoLevel::Info => 1,
+        InfoLevel::Warning => 2,
+        InfoLevel::Error => 3,
+    }
+}
+
+fn set_debug_level(debug: InfoLevel) {
     unsafe {
         DEBUG_LEVEL = debug;
 

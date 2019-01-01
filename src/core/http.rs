@@ -15,7 +15,7 @@ use super::config::{ConnMetadata, EngineContext, ServerConfig, ViewEngineParser}
 use super::cookie::*;
 use super::router::REST;
 use chrono::prelude::*;
-use crate::support::{common::*, debug, shared_pool, TaskType};
+use crate::support::{common::*, debug, debug::InfoLevel, shared_pool, TaskType};
 
 static FOUR_OH_FOUR: &'static str = include_str!("../default/404.html");
 static FOUR_OH_ONE: &'static str = include_str!("../default/401.html");
@@ -462,7 +462,7 @@ impl ResponseStates for Response {
             }
         }
 
-        debug::print("Unable to create channels", 1);
+        debug::print("Unable to create channels", InfoLevel::Warning);
         Err("Unable to create channels")
     }
 }
@@ -830,7 +830,7 @@ impl ResponseManager for Response {
                     "Failed to establish a reading channel on a keep-alive stream: {}",
                     e
                 ),
-                1,
+                InfoLevel::Warning,
             );
             return;
         }
@@ -862,14 +862,17 @@ fn broadcast_new_communications(
 
         loop {
             if let Err(e) = stream_clone.take_error() {
-                debug::print(&format!("Keep-alive stream can't continue: {}", e), 1);
+                debug::print(
+                    &format!("Keep-alive stream can't continue: {}", e),
+                    InfoLevel::Warning
+                );
                 break;
             }
 
             if let Err(e) = stream_clone.read(&mut buffer) {
                 debug::print(
                     &format!("Unable to continue reading from a keep-alive stream: {}", e),
-                    1,
+                    InfoLevel::Warning,
                 );
                 break;
             }
@@ -885,7 +888,7 @@ fn broadcast_new_communications(
                         // the informative level of the message.
                         debug::print(
                             &format!("Unable to broadcast the communications: {}", err),
-                            2,
+                            InfoLevel::Error,
                         );
                         break;
                     }
@@ -926,13 +929,13 @@ fn write_default_page(status: u16, buffer: &mut BufWriter<&TcpStream>) {
 
 fn get_file_path(path: &str) -> Option<PathBuf> {
     if path.is_empty() {
-        debug::print("Undefined file path to retrieve data from...", 1);
+        debug::print("Undefined file path to retrieve data from...", InfoLevel::Warning);
         return None;
     }
 
     let file_path = Path::new(path);
     if !file_path.is_file() {
-        debug::print("Can't locate requested file", 1);
+        debug::print("Can't locate requested file", InfoLevel::Warning);
         return None;
     }
 
@@ -945,7 +948,7 @@ fn open_file(file_path: &PathBuf, buf: &mut Box<String>) -> u16 {
         let mut buf_reader = BufReader::new(file);
         return match buf_reader.read_to_string(buf) {
             Err(e) => {
-                debug::print(&format!("Unable to read file: {}", e), 1);
+                debug::print(&format!("Unable to read file: {}", e), InfoLevel::Warning);
                 500
             }
             Ok(_) => {
@@ -954,7 +957,7 @@ fn open_file(file_path: &PathBuf, buf: &mut Box<String>) -> u16 {
             }
         };
     } else {
-        debug::print("Unable to open requested file for path", 1);
+        debug::print("Unable to open requested file for path", InfoLevel::Warning);
         404
     }
 }
@@ -969,7 +972,10 @@ fn open_file_async(file_path: PathBuf, tx: mpsc::Sender<Box<String>>) {
     }
 
     if let Err(e) = tx.send(buf) {
-        debug::print(&format!("Unable to write the file to the stream: {}", e), 1);
+        debug::print(
+            &format!("Unable to write the file to the stream: {}", e),
+            InfoLevel::Warning
+        );
     }
 }
 
@@ -1129,6 +1135,9 @@ fn write_header_cookie(cookie: Arc<HashMap<String, Cookie>>, tx: mpsc::Sender<St
     }
 
     tx.send(cookie_output).unwrap_or_else(|e| {
-        debug::print(&format!("Unable to write response cookies: {}", e), 1);
+        debug::print(
+            &format!("Unable to write response cookies: {}", e),
+            InfoLevel::Warning
+        );
     });
 }

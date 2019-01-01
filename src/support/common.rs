@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use super::debug;
+use super::debug::{self, InfoLevel};
 use std::io::{BufWriter, Write};
 use std::net::TcpStream;
 
@@ -50,7 +50,7 @@ pub fn write_to_buff(buffer: &mut BufWriter<&TcpStream>, content: &[u8]) {
                 "An error has taken place when writing the response header to the stream: {}",
                 err
             ),
-            1,
+            InfoLevel::Warning,
         );
     }
 }
@@ -62,7 +62,7 @@ pub fn flush_buffer(buffer: &mut BufWriter<&TcpStream>) -> u8 {
                 "An error has taken place when flushing the response to the stream: {}",
                 err
             )[..],
-            1,
+            InfoLevel::Warning,
         );
 
         return 1;

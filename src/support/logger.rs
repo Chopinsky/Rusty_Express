@@ -1,6 +1,7 @@
 #![allow(dead_code)]
 
-use crate::channel;
+use crate::channel::{self, SendError};
+use crate::debug;
 use chrono::{DateTime, Utc};
 use std::env;
 use std::fs;
@@ -126,8 +127,11 @@ pub fn log(message: &str, level: InfoLevel, client: Option<SocketAddr>) -> Resul
 
     unsafe {
         if let Some(ref tx) = SENDER {
-            tx.send(info);
-            return Ok(());
+            if let Err(SendError(msg)) = tx.send(info) {
+                return Err(format!("Failed to log the message: {}", msg.message));
+            }
+
+            return Ok(())
         }
     }
 
@@ -176,7 +180,12 @@ pub(crate) fn shutdown() {
         };
 
         if let Some(ref tx) = SENDER.take() {
-            tx.send(final_msg);
+            if let Err(SendError(msg)) = tx.send(final_msg) {
+                debug::print(
+                    "Failed to log the final message",
+                    debug::InfoLevel::Warning
+                );
+            }
         }
     }
 
