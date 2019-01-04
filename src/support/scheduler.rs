@@ -8,8 +8,6 @@ use crate::support::debug::{self, InfoLevel};
 
 static TIMEOUT: Duration = Duration::from_millis(200);
 
-type Job = Box<FnBox + Send + 'static>;
-
 trait FnBox {
     fn call_box(self: Box<Self>);
 }
@@ -21,14 +19,20 @@ impl<F: FnOnce()> FnBox for F {
     }
 }
 
+type Job = Box<FnBox + Send + 'static>;
 enum Message {
     NewJob(Job),
     Terminate,
 }
 
+struct Inbox {
+    receiver: mpsc::Receiver<Message>,
+    is_closing: bool,
+}
+
 pub struct ThreadPool {
     workers: Vec<Worker>,
-    sender: Mutex<mpsc::Sender<Message>>,
+    sender: mpsc::Sender<Message>,
 }
 
 impl ThreadPool {
@@ -41,16 +45,19 @@ impl ThreadPool {
         let (sender, receiver) = mpsc::channel();
 
         // TODO: when switching to mpmc, try get rid of the Arc-Mutex structure
-        let receiver = Arc::new(Mutex::new(receiver));
+        let inbox = Arc::new(Mutex::new(Inbox {
+            receiver,
+            is_closing: false
+        }));
 
         let mut workers = Vec::with_capacity(pool_size);
         for id in 0..pool_size {
-            workers.push(Worker::new(id, Arc::clone(&receiver)));
+            workers.push(Worker::new(id, Arc::clone(&inbox)));
         }
 
         ThreadPool {
             workers,
-            sender: Mutex::new(sender),
+            sender,
         }
     }
 
@@ -62,22 +69,17 @@ impl ThreadPool {
 
         //TODO: switching to mpmc, and check sender.len() to determine if we need to add more workers
 
-        if let Ok(sender) = self.sender.lock() {
-            if let Err(err) = sender.send(Message::NewJob(job)) {
-                print!("Failed: {}", err);
-                debug::print(&format!("Unable to distribute the job: {}", err), InfoLevel::Error);
-            };
-        }
+        if let Err(err) = self.sender.send(Message::NewJob(job)) {
+            print!("Failed: {}", err);
+            debug::print(&format!("Unable to distribute the job: {}", err), InfoLevel::Error);
+        };
     }
 
     pub(crate) fn clear(&mut self) {
-        if let Ok(sender) = self.sender.lock() {
-            for _ in &mut self.workers {
-                sender.send(Message::Terminate).unwrap_or_else(|err| {
-                    debug::print(&format!("Unable to send message: {}", err), InfoLevel::Error);
-                });
-            }
-        }
+        self.sender.send(Message::Terminate).unwrap_or_else(|err| {
+            debug::print(&format!("Unable to send message: {}", err), InfoLevel::Error);
+            return;
+        });
 
         for worker in &mut self.workers {
             if let Some(thread) = worker.thread.take() {
@@ -102,22 +104,29 @@ struct Worker {
 }
 
 impl Worker {
-    fn new(id: usize, receiver: Arc<Mutex<mpsc::Receiver<Message>>>) -> Worker {
+    fn new(id: usize, inbox: Arc<Mutex<Inbox>>) -> Worker {
         let thread = thread::spawn(move || {
-            let mut new_assignment = None;
+            let mut assignment = None;
 
             loop {
-                if let Ok(rx) = receiver.lock() {
-                    if let Ok(message) = rx.recv() {
-                        new_assignment = Some(message);
+                if let Ok(mut locked_box) = inbox.lock() {
+                    if locked_box.is_closing {
+                        return;
+                    }
+
+                    if let Ok(message) = locked_box.receiver.recv() {
+                        match message {
+                            Message::NewJob(job) => assignment = Some(job),
+                            Message::Terminate => {
+                                locked_box.is_closing = true;
+                                return
+                            },
+                        }
                     }
                 }
 
-                if let Some(message) = new_assignment.take() {
-                    match message {
-                        Message::NewJob(job) => job.call_box(),
-                        Message::Terminate => break,
-                    }
+                if let Some(job) = assignment.take() {
+                    job.call_box()
                 }
             }
         });

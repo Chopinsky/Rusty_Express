@@ -3,7 +3,7 @@
 use super::config::ServerConfig;
 use super::router::Route;
 use std::thread::*;
-use crate::channel;
+use crate::channel::{self, TryRecvError};
 use crate::support::session::*;
 use crate::support::debug::{self, InfoLevel};
 
@@ -51,8 +51,11 @@ impl ServerStates {
     pub(crate) fn courier_try_recv(&self) -> Option<ControlMessage> {
         match self.courier_channel.1.try_recv() {
             Ok(msg) => Some(msg),
+            Err(TryRecvError::Empty) => {
+                None
+            },
             Err(e) => {
-                debug::print("error parsing header: {:?}", InfoLevel::Warning);
+                debug::print(&format!("Hot load channel disconnected: {:?}", e), InfoLevel::Warning);
                 None
             },
         }

@@ -1,15 +1,16 @@
+use std::borrow::Cow;
 use std::collections::HashMap;
 use std::io::prelude::*;
 use std::io::BufWriter;
 use std::net::{Shutdown, TcpStream};
-use std::sync::mpsc;
 use std::time::Duration;
-use super::config::ConnMetadata;
-use super::router::{Callback, Route, RouteHandler, REST};
-use super::http::{
+
+use crate::channel;
+use crate::core::config::ConnMetadata;
+use crate::core::router::{Callback, Route, RouteHandler, REST};
+use crate::core::http::{
     Request, RequestWriter, Response, ResponseManager, ResponseStates, ResponseWriter
 };
-
 use crate::support::{
     common::flush_buffer, common::write_to_buff, common::MapUpdates, debug, debug::InfoLevel, shared_pool, TaskType
 };
@@ -86,17 +87,24 @@ pub(crate) fn handle_connection(stream: TcpStream) -> ExecCode {
 
     let handler = match parse_request(&stream, &mut request) {
         Err(err) => {
-            debug::print(
-                "Error on parsing request",
-                InfoLevel::Error
-            );
-
             let status: u16 = match err {
                 ConnError::EmptyRequest => 400,
                 ConnError::AccessDenied => 401,
                 ConnError::ServiceUnavailable => 404,
-                ConnError::ReadStreamFailure => 500,
+                ConnError::ReadStreamFailure => {
+                    // connection is sour, shutdown now
+                    if let Err(err) = stream.shutdown(Shutdown::Both) {
+                        return 1;
+                    }
+
+                    return 0;
+                },
             };
+
+            debug::print(
+                &format!("Error on parsing request: {}", status),
+                InfoLevel::Error
+            );
 
             return write_to_stream(&stream, &mut build_err_response(status));
         }
@@ -192,20 +200,20 @@ fn parse_request(
 
     if let Err(e) = stream.read(&mut buffer) {
         debug::print(
-            &format!("Reading stream error -- {}", e),
-            InfoLevel::Error
+            &format!("Reading stream disconnected -- {}", e),
+            InfoLevel::Warning
         );
         Err(ConnError::ReadStreamFailure)
     } else {
         let request_raw = String::from_utf8_lossy(&buffer[..]);
 
-        if request_raw.is_empty() {
+        if request_raw.is_empty() || request_raw.trim_matches(|c| c == '\r' || c == '\n').is_empty() {
             return Err(ConnError::EmptyRequest);
         }
 
         let auth_func = Route::get_auth_func();
         let callback =
-            deserialize(request_raw.to_string(), request);
+            deserialize(request_raw, request);
 
         let host = request.header("host");
         if let Some(host_name) = host {
@@ -231,58 +239,61 @@ fn parse_request(
     }
 }
 
-fn deserialize(request: String, store: &mut Box<Request>) -> Option<Callback> {
+fn deserialize(request: Cow<str>, store: &mut Box<Request>) -> Option<Callback> {
     if request.is_empty() {
         return None;
     }
 
     debug::print(
-        &format!("\r\nPrint request: \r\n{}", request),
-        InfoLevel::Error
+        &format!("Printing request -- \r\n{}", request),
+        InfoLevel::Info
     );
 
     let mut res = None;
-    let raw_lines: Vec<&str> = request.trim().splitn(2, '\n').collect();
+    let mut baseline_chan = None;
+    let mut remainder_chan = None;
+    let mut idx: u8 = 0;
 
-    let base_line = match raw_lines.get(0) {
-        Some(line) => line.trim(),
-        _ => return None,
-    };
+    for info in request.trim().splitn(2, "\r\n") {
+        match idx {
+            0 => baseline_chan = deserialize_baseline(&info, store),
+            1 => {
+                let remainder: String = info.to_owned();
+                if !remainder.is_empty() {
+                    let (tx_remainder, rx_remainder) = channel::unbounded();
 
-    if let Some(rx) = deserialize_base_line(base_line, store) {
+                    let mut header: HashMap<String, String> = HashMap::new();
+                    let mut cookie: HashMap<String, String> = HashMap::new();
+                    let mut body: Vec<String> = Vec::new();
 
-        let req_chan =
-            if raw_lines.len() > 1 {
-                let remainder = raw_lines[1].to_owned();
-                let (tx_remainder, rx_remainder) = mpsc::channel();
+                    shared_pool::run(move || {
+                        let mut is_body = false;
 
-                let mut header: HashMap<String, String> = HashMap::new();
-                let mut cookie: HashMap<String, String> = HashMap::new();
-                let mut body: Vec<String> = Vec::new();
+                        for line in remainder.lines() {
+                            if line.is_empty() && !is_body {
+                                // meeting the empty line dividing header and body
+                                is_body = true;
+                                continue;
+                            }
 
-                shared_pool::run(move || {
-                    let mut is_body = false;
-
-                    for line in remainder.lines() {
-                        if line.is_empty() && !is_body {
-                            // meeting the empty line dividing header and body
-                            is_body = true;
-                            continue;
+                            deserialize_headers(line, is_body, &mut header, &mut cookie, &mut body);
                         }
 
-                        deserialize_headers(line, is_body, &mut header, &mut cookie, &mut body);
-                    }
+                        if let Err(e) = tx_remainder.send((header, cookie, body)) {
+                            eprintln!("Unable to construct the remainder of the request.");
+                        }
+                    }, TaskType::Request);
 
-                    if let Err(e) = tx_remainder.send((header, cookie, body)) {
-                        eprintln!("Unable to construct the remainder of the request.");
-                    }
-                }, TaskType::Request);
+                    remainder_chan = Some(rx_remainder)
+                }
+            },
+            _ => break,
+        }
 
-                Some(rx_remainder)
-            } else {
-                None
-            };
+        idx += 1;
+    }
 
+    if let Some(rx) = baseline_chan {
         if let Ok(route_info) = rx.recv_timeout(Duration::from_millis(128)) {
             if route_info.0.is_some() {
                 store.create_param(route_info.1);
@@ -291,7 +302,7 @@ fn deserialize(request: String, store: &mut Box<Request>) -> Option<Callback> {
             res = route_info.0;
         }
 
-        if let Some(chan) = req_chan {
+        if let Some(chan) = remainder_chan {
             if let Ok((header, cookie, body)) = chan.recv_timeout(Duration::from_secs(8)) {
                 store.set_headers(header);
                 store.set_cookies(cookie);
@@ -303,10 +314,10 @@ fn deserialize(request: String, store: &mut Box<Request>) -> Option<Callback> {
     res
 }
 
-pub(crate) fn deserialize_base_line(
+pub(crate) fn deserialize_baseline(
     source: &str,
     req: &mut Box<Request>
-) -> Option<mpsc::Receiver<(Option<Callback>, HashMap<String, String>)>>
+) -> Option<channel::Receiver<(Option<Callback>, HashMap<String, String>)>>
 {
     let mut header_only = false;
     let mut raw_scheme = String::new();
@@ -349,7 +360,7 @@ pub(crate) fn deserialize_base_line(
         let uri = req.uri.to_owned();
         let req_method = req.method.clone();
 
-        let (tx, rx) = mpsc::channel();
+        let (tx, rx) = channel::unbounded();
         shared_pool::run(move || {
             Route::seek_handler(&req_method, &uri, header_only, tx);
         },TaskType::Request);
@@ -374,15 +385,27 @@ fn deserialize_headers(
     cookie: &mut HashMap<String, String>, body: &mut Vec<String>)
 {
     if !is_body {
-        let header_info: Vec<&str> = line.trim().splitn(2, ':').collect();
+        let mut idx: u8 = 0;
+        let mut header_key: &str = "";
+        let mut is_cookie = false;
 
-        if header_info.len() == 2 {
-            let header_key = &header_info[0].trim().to_lowercase()[..];
-            if header_key.eq("cookie") {
-                cookie_parser(cookie, header_info[1].trim());
-            } else {
-                header.add(header_key, header_info[1].trim().to_owned(), true);
+        for info in line.trim().splitn(2, ':') {
+            match idx {
+                0 => {
+                    header_key = &info.trim()[..];
+                    is_cookie = header_key.eq("cookie");
+                },
+                1 => {
+                    if is_cookie {
+                        cookie_parser(cookie, info.trim());
+                    } else if !header_key.is_empty() {
+                        header.add(header_key, info.trim().to_owned(), true);
+                    }
+                },
+                _ => break,
             }
+
+            idx += 1;
         }
     } else {
         body.push(line.to_owned());

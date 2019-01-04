@@ -1,5 +1,5 @@
 pub mod config;
-pub(crate) mod connection;
+pub(crate) mod conn;
 pub mod context;
 pub mod cookie;
 pub mod http;

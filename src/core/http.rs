@@ -7,15 +7,16 @@ use std::io::prelude::*;
 use std::io::{BufReader, BufWriter};
 use std::net::{SocketAddr, TcpStream};
 use std::path::{Path, PathBuf};
-use std::sync::{mpsc, Arc, Mutex};
+use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 
-use super::config::{ConnMetadata, EngineContext, ServerConfig, ViewEngineParser};
-use super::cookie::*;
-use super::router::REST;
-use chrono::prelude::*;
+use crate::core::config::{ConnMetadata, EngineContext, ServerConfig, ViewEngineParser};
+use crate::core::cookie::*;
+use crate::core::router::REST;
 use crate::support::{common::*, debug, debug::InfoLevel, shared_pool, TaskType};
+use crate::channel;
+use chrono::prelude::*;
 
 static FOUR_OH_FOUR: &'static str = include_str!("../default/404.html");
 static FOUR_OH_ONE: &'static str = include_str!("../default/401.html");
@@ -95,6 +96,7 @@ impl Request {
         if field.is_empty() {
             return None;
         }
+
         if self.scheme.is_empty() {
             return None;
         }
@@ -259,11 +261,11 @@ pub struct Response {
     header: HashMap<String, String>,
     header_only: bool,
     body: Box<String>,
-    body_tx: Option<mpsc::Sender<Box<String>>>,
-    body_rx: Option<mpsc::Receiver<Box<String>>>,
+    body_tx: Option<channel::Sender<Box<String>>>,
+    body_rx: Option<channel::Receiver<Box<String>>>,
     redirect: String,
-    notifier: Option<(Arc<mpsc::Sender<Box<String>>>, mpsc::Receiver<Box<String>>)>,
-    subscriber: Option<(mpsc::Sender<Box<String>>, Arc<mpsc::Receiver<Box<String>>>)>,
+    notifier: Option<(Arc<channel::Sender<Box<String>>>, channel::Receiver<Box<String>>)>,
+    subscriber: Option<(channel::Sender<Box<String>>, Arc<channel::Receiver<Box<String>>>)>,
 }
 
 impl Response {
@@ -294,10 +296,10 @@ impl Response {
 
     fn resp_header(&self) -> Box<String> {
         // Get cookie parser to its own thread
-        let receiver: Option<mpsc::Receiver<String>> = match self.cookie.is_empty() {
+        let receiver: Option<channel::Receiver<String>> = match self.cookie.is_empty() {
             true => None,
             false => {
-                let (tx, rx) = mpsc::channel();
+                let (tx, rx) = channel::unbounded();
                 let cookie = Arc::clone(&self.cookie);
 
                 shared_pool::run(
@@ -382,8 +384,8 @@ pub trait ResponseStates {
         &mut self,
     ) -> Result<
         (
-            Arc<mpsc::Sender<Box<String>>>,
-            Arc<mpsc::Receiver<Box<String>>>,
+            Arc<channel::Sender<Box<String>>>,
+            Arc<channel::Receiver<Box<String>>>,
         ),
         &'static str,
     >;
@@ -439,20 +441,22 @@ impl ResponseStates for Response {
         &mut self,
     ) -> Result<
         (
-            Arc<mpsc::Sender<Box<String>>>,
-            Arc<mpsc::Receiver<Box<String>>>,
+            Arc<channel::Sender<Box<String>>>,
+            Arc<channel::Receiver<Box<String>>>,
         ),
         &'static str,
     > {
         if self.notifier.is_none() {
-            let (tx, rx): (mpsc::Sender<Box<String>>, mpsc::Receiver<Box<String>>) =
-                mpsc::channel();
+            let (tx, rx): (channel::Sender<Box<String>>, channel::Receiver<Box<String>>) =
+                channel::unbounded();
+
             self.notifier = Some((Arc::new(tx), rx));
         }
 
         if self.subscriber.is_none() {
-            let (tx, rx): (mpsc::Sender<Box<String>>, mpsc::Receiver<Box<String>>) =
-                mpsc::channel();
+            let (tx, rx): (channel::Sender<Box<String>>, channel::Receiver<Box<String>>) =
+                channel::unbounded();
+
             self.subscriber = Some((tx, Arc::new(rx)));
         }
 
@@ -616,7 +620,7 @@ impl ResponseWriter for Response {
 
         // lazy init the tx-rx pair.
         if self.body_tx.is_none() {
-            let (tx, rx) = mpsc::channel();
+            let (tx, rx) = channel::unbounded();
             self.body_tx = Some(tx);
             self.body_rx = Some(rx);
         }
@@ -625,7 +629,7 @@ impl ResponseWriter for Response {
             self.set_ext_mime_header(&path);
 
             if let &Some(ref tx) = &self.body_tx {
-                let tx_clone = mpsc::Sender::clone(tx);
+                let tx_clone = channel::Sender::clone(tx);
                 shared_pool::run(
                     move || {
                         open_file_async(path, tx_clone);
@@ -854,7 +858,7 @@ impl ResponseManager for Response {
 }
 
 fn broadcast_new_communications(
-    sender: Arc<Mutex<mpsc::Sender<Box<String>>>>,
+    sender: Arc<Mutex<channel::Sender<Box<String>>>>,
     mut stream_clone: TcpStream,
 ) {
     thread::spawn(move || {
@@ -962,7 +966,7 @@ fn open_file(file_path: &PathBuf, buf: &mut Box<String>) -> u16 {
     }
 }
 
-fn open_file_async(file_path: PathBuf, tx: mpsc::Sender<Box<String>>) {
+fn open_file_async(file_path: PathBuf, tx: channel::Sender<Box<String>>) {
     let mut buf: Box<String> = Box::new(String::new());
     match open_file(&file_path, &mut buf) {
         404 | 500 if buf.len() > 0 => {
@@ -1126,7 +1130,7 @@ fn write_headers(
     }
 }
 
-fn write_header_cookie(cookie: Arc<HashMap<String, Cookie>>, tx: mpsc::Sender<String>) {
+fn write_header_cookie(cookie: Arc<HashMap<String, Cookie>>, tx: channel::Sender<String>) {
     let mut cookie_output = String::new();
     for (_, cookie) in cookie.iter() {
         if cookie.is_valid() {

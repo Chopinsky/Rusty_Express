@@ -39,14 +39,15 @@ pub fn print(info: &str, level: InfoLevel) {
 
     let now: DateTime<Utc> = Utc::now();
     let level_label = match level {
-        InfoLevel::Info => String::from("info"),
-        InfoLevel::Warning => String::from("warning"),
-        InfoLevel::Error => String::from("error"),
+        InfoLevel::Info => String::from("Info"),
+        InfoLevel::Warning => String::from("Warning"),
+        InfoLevel::Error => String::from("Error"),
         InfoLevel::Silent => return,
     };
 
+    eprintln!("\r\n======================");
     eprintln!(
-        "{}: {} at {}",
+        "[{}] at {}:\r\n {}",
         level_label,
         now.format("%Y-%m-%d %H:%M:%S GMT").to_string(),
         info

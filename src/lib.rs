@@ -59,7 +59,7 @@ use std::time::Duration;
 
 use crossbeam_channel as channel;
 use crate::core::config::{ServerConfig, ViewEngine, ViewEngineDefinition};
-use crate::core::connection::*;
+use crate::core::conn::*;
 use crate::core::router::*;
 use crate::core::states::*;
 use crate::support::debug::{self, InfoLevel};

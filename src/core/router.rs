@@ -3,14 +3,16 @@
 use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::path::{Path, PathBuf};
-use std::sync::{mpsc, RwLock};
+use std::sync::RwLock;
 
-use super::http::{Request, Response, ResponseStates, ResponseWriter};
-use regex::Regex;
+use crate::channel;
+use crate::core::http::{Request, Response, ResponseStates, ResponseWriter};
 use crate::support::common::MapUpdates;
 use crate::support::debug::{self, InfoLevel};
 use crate::support::Field;
 use crate::support::RouteTrie;
+
+use regex::Regex;
 
 lazy_static! {
     static ref ROUTE_FOR_ALL_CONST: REST = REST::OTHER(String::from("*"));
@@ -419,7 +421,7 @@ pub(crate) trait RouteHandler {
         method: &REST,
         uri: &str,
         header_only: bool,
-        tx: mpsc::Sender<(Option<Callback>, HashMap<String, String>)>,
+        tx: channel::Sender<(Option<Callback>, HashMap<String, String>)>,
     );
 }
 
@@ -444,7 +446,7 @@ impl RouteHandler for Route {
         method: &REST,
         uri: &str,
         header_only: bool,
-        tx: mpsc::Sender<(Option<Callback>, HashMap<String, String>)>,
+        tx: channel::Sender<(Option<Callback>, HashMap<String, String>)>,
     ) {
         let mut result = None;
         let mut params = HashMap::new();

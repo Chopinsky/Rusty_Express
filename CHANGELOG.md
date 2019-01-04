@@ -1,3 +1,9 @@
+# 2019-01
+## 0.4.0
+- Performance improvement to request parser
+- Switching to use crossbeam_channel for async communications in the main connection workflow
+- Fixing various small bugs
+
 # 2018-10
 ## 0.3.6
 - Router has been updated for better performance.
