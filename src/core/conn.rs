@@ -16,6 +16,7 @@ use crate::support::{
 };
 
 static HEADER_END: [u8; 2] = [13, 10];
+static FLUSH_RETRY: u8 = 4;
 type ExecCode = u8;
 
 #[derive(PartialEq, Eq, Clone, Copy)]
@@ -25,62 +26,6 @@ enum ConnError {
     AccessDenied,
     ServiceUnavailable,
 }
-
-//TODO: switch 'mpsc' to 'crossbeam-channel'
-
-//TODO: still good for implementing middlewear
-//pub fn handle_connection_with_states<T: Send + Sync + Clone + StatesProvider>(
-//        stream: TcpStream,
-//        router: Arc<Route>,
-//        metadata: Arc<ConnMetadata>,
-//        states: Arc<RwLock<T>>) -> Option<u8> {
-//
-//    let mut request = Box::new(Request::new());
-//    let handler = match parse_request(&stream, &mut request, router) {
-//        Err(err) => {
-//            debug::print("Error on parsing request", 3);
-//            return write_to_stream(stream, &build_err_response(&err, &metadata));
-//        },
-//        Ok(cb) => cb,
-//    };
-//
-//    match metadata.get_state_interaction() {
-//        &StatesInteraction::WithRequest | &StatesInteraction::Both => {
-//            let require_updates = match states.read() {
-//                Ok(s) => s.on_request(&mut request),
-//                _ => false,
-//            };
-//
-//            if require_updates {
-//                if let Ok(mut s) = states.write() {
-//                    s.update(&request, None);
-//                }
-//            }
-//        },
-//        _ => { /* Nothing */ },
-//    };
-//
-//    let mut response = initialize_response(&metadata);
-//    let result = handle_response(stream, handler, &request, &mut response, &metadata);
-//
-//    match metadata.get_state_interaction() {
-//        &StatesInteraction::WithRequest | &StatesInteraction::Both => {
-//            let require_updates = match states.read() {
-//                Ok(s) => s.on_response(&mut response),
-//                _ => false,
-//            };
-//
-//            if require_updates {
-//                if let Ok(mut s) = states.write() {
-//                    s.update(&request, Some(&response));
-//                }
-//            }
-//        },
-//        _ => { /* Nothing */ },
-//    };
-//
-//    result
-//}
 
 pub(crate) fn handle_connection(stream: TcpStream) -> ExecCode {
     let mut request = Box::new(Request::new());
@@ -167,7 +112,16 @@ fn write_to_stream(stream: &TcpStream, response: &mut Box<Response>) -> ExecCode
 
         // flush the buffer and shutdown the connection: we're done; no need for explicit shutdown
         // the stream as it's dropped automatically on out-of-the-scope.
-        return flush_buffer(&mut writer);
+        let mut retry: u8 = 0;
+        while retry < FLUSH_RETRY {
+            retry += 1;
+            if flush_buffer(&mut writer) == 0 {
+                break;
+            }
+        }
+
+        // regardless of buffer being flushed, close the stream now.
+        return stream_shutdown(&stream);
     }
 
     if let Ok(clone) = stream.try_clone() {
@@ -177,6 +131,10 @@ fn write_to_stream(stream: &TcpStream, response: &mut Box<Response>) -> ExecCode
 
     // trunked keep-alive i/o is done, shut down the stream for good since copies
     // can be listening on read/write
+    stream_shutdown(&stream)
+}
+
+fn stream_shutdown(stream: &TcpStream) -> u8 {
     if let Err(err) = stream.shutdown(Shutdown::Both) {
         debug::print(
             &format!(
@@ -188,7 +146,6 @@ fn write_to_stream(stream: &TcpStream, response: &mut Box<Response>) -> ExecCode
         return 1;
     }
 
-    // Otherwise we're good to leave.
     0
 }
 
@@ -206,8 +163,7 @@ fn parse_request(
         Err(ConnError::ReadStreamFailure)
     } else {
         let request_raw = String::from_utf8_lossy(&buffer[..]);
-
-        if request_raw.is_empty() || request_raw.trim_matches(|c| c == '\r' || c == '\n').is_empty() {
+        if request_raw.trim_matches(|c| c == '\r' || c == '\n').is_empty() {
             return Err(ConnError::EmptyRequest);
         }
 
@@ -252,10 +208,9 @@ fn deserialize(request: Cow<str>, store: &mut Box<Request>) -> Option<Callback> 
     let mut res = None;
     let mut baseline_chan = None;
     let mut remainder_chan = None;
-    let mut idx: u8 = 0;
 
-    for info in request.trim().splitn(2, "\r\n") {
-        match idx {
+    for (index, info) in request.trim().splitn(2, "\r\n").enumerate() {
+        match index {
             0 => baseline_chan = deserialize_baseline(&info, store),
             1 => {
                 let remainder: String = info.to_owned();
@@ -279,8 +234,8 @@ fn deserialize(request: Cow<str>, store: &mut Box<Request>) -> Option<Callback> 
                             deserialize_headers(line, is_body, &mut header, &mut cookie, &mut body);
                         }
 
-                        if let Err(e) = tx_remainder.send((header, cookie, body)) {
-                            eprintln!("Unable to construct the remainder of the request.");
+                        if let Err(_) = tx_remainder.send((header, cookie, body)) {
+                            debug::print("Unable to construct the remainder of the request.", InfoLevel::Error);
                         }
                     }, TaskType::Request);
 
@@ -289,8 +244,6 @@ fn deserialize(request: Cow<str>, store: &mut Box<Request>) -> Option<Callback> 
             },
             _ => break,
         }
-
-        idx += 1;
     }
 
     if let Some(rx) = baseline_chan {

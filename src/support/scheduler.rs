@@ -1,12 +1,19 @@
 #![allow(dead_code)]
 
 use std::mem;
-use std::sync::{mpsc, Arc, Mutex, Once, ONCE_INIT};
+use std::sync::{atomic::AtomicBool, atomic::Ordering, Once, ONCE_INIT};
 use std::thread;
 use std::time::Duration;
 use crate::support::debug::{self, InfoLevel};
+use crate::channel::{self, Receiver, Sender, SendTimeoutError};
 
-static TIMEOUT: Duration = Duration::from_millis(200);
+const CHAN_SIZE: usize = 512;
+const POOL_CAP: usize = 65535;
+const POOL_INC_STEP: usize = 4;
+const TIMEOUT: Duration = Duration::from_millis(200);
+const YIELD_DURATION: Duration = Duration::from_millis(16);
+
+static IS_CLOSING: AtomicBool = AtomicBool::new(false);
 
 trait FnBox {
     fn call_box(self: Box<Self>);
@@ -25,76 +32,96 @@ enum Message {
     Terminate,
 }
 
-struct Inbox {
-    receiver: mpsc::Receiver<Message>,
-    is_closing: bool,
-}
-
 pub struct ThreadPool {
     workers: Vec<Worker>,
-    sender: mpsc::Sender<Message>,
+    sender: Sender<Message>,
+    receiver: Receiver<Message>,
+    auto_expansion: bool,
 }
 
 impl ThreadPool {
     pub(crate) fn new(size: usize) -> ThreadPool {
         let pool_size = match size {
             _ if size < 1 => 1,
+            _ if size > POOL_CAP => POOL_CAP,
             _ => size,
         };
 
-        let (sender, receiver) = mpsc::channel();
-
-        // TODO: when switching to mpmc, try get rid of the Arc-Mutex structure
-        let inbox = Arc::new(Mutex::new(Inbox {
-            receiver,
-            is_closing: false
-        }));
+        let (sender, receiver) = channel::bounded(CHAN_SIZE);
 
         let mut workers = Vec::with_capacity(pool_size);
-        for id in 0..pool_size {
-            workers.push(Worker::new(id, Arc::clone(&inbox)));
-        }
+        (0..pool_size).for_each(|id| {
+            workers.push(Worker::new(id, receiver.clone()));
+        });
 
         ThreadPool {
             workers,
             sender,
+            receiver,
+            auto_expansion: false,
         }
     }
 
-    pub(crate) fn execute<F>(&self, f: F)
-    where
-        F: FnOnce() + Send + 'static,
-    {
-        let job = Box::new(f);
-
-        //TODO: switching to mpmc, and check sender.len() to determine if we need to add more workers
-
-        if let Err(err) = self.sender.send(Message::NewJob(job)) {
-            print!("Failed: {}", err);
-            debug::print(&format!("Unable to distribute the job: {}", err), InfoLevel::Error);
-        };
+    pub(crate) fn toggle_auto_expansion(&mut self, on: bool) {
+        self.auto_expansion = on;
     }
 
-    pub(crate) fn clear(&mut self) {
-        self.sender.send(Message::Terminate).unwrap_or_else(|err| {
-            debug::print(&format!("Unable to send message: {}", err), InfoLevel::Error);
-            return;
-        });
+    pub(crate) fn execute<F>(&mut self, f: F)
+        where
+            F: FnOnce() + Send + 'static,
+    {
+        self.dispatch(Message::NewJob(Box::new(f)), 0);
+    }
 
-        for worker in &mut self.workers {
-            if let Some(thread) = worker.thread.take() {
-                thread
-                    .join()
-                    .expect("Couldn't join on the associated thread");
+    pub(crate) fn close(&mut self) {
+        let sent = self.sender.send(Message::Terminate).is_ok();
+
+        for mut worker in self.workers.drain(..) {
+            if let Some(t) = worker.thread.take() {
+                if sent {
+                    // only sync join the threads if channel has not been closed; otherwise, it's
+                    // possible that the worker may never receive the shutdown message and quit the
+                    // infinite-loop.
+                    t.join().unwrap_or_else(|err| {
+                        debug::print(
+                            &format!("Failed to retire worker: {}, error: {:?}", worker.id, err),
+                            InfoLevel::Error
+                        )
+                    });
+                }
             }
         }
+    }
+
+    fn dispatch(&mut self, message: Message, retry: u8) {
+        match self.sender.send_timeout(message, Duration::from_millis(2048)) {
+            Err(SendTimeoutError::Timeout(msg)) => {
+                debug::print("Unable to distribute the job: execution timed out, all workers are busy for too long", InfoLevel::Error);
+
+                if retry < 4 {
+                    if self.auto_expansion && self.workers.len() + POOL_INC_STEP < POOL_CAP {
+                        let start = self.workers.len();
+                        (0..POOL_INC_STEP).for_each(|id| {
+                            self.workers.push(Worker::new(start + id, self.receiver.clone()));
+                        });
+                    }
+
+                    debug::print(&format!("Try again for the {} times...", retry + 1), InfoLevel::Error);
+                    self.dispatch(msg, retry + 1);
+                }
+            },
+            Err(SendTimeoutError::Disconnected(_)) => {
+                debug::print("Unable to distribute the job: workers have been dropped: {}", InfoLevel::Error);
+            },
+            _ => {},
+        };
     }
 }
 
 impl Drop for ThreadPool {
     fn drop(&mut self) {
-        debug::print("Job done, sending terminate message to all workers.", InfoLevel::Error);
-        self.clear();
+        debug::print("Job done, sending terminate message to all workers.", InfoLevel::Info);
+        self.close();
     }
 }
 
@@ -104,29 +131,27 @@ struct Worker {
 }
 
 impl Worker {
-    fn new(id: usize, inbox: Arc<Mutex<Inbox>>) -> Worker {
+    fn new(id: usize, receiver: Receiver<Message>) -> Worker {
         let thread = thread::spawn(move || {
-            let mut assignment = None;
+            let mut work = None;
 
             loop {
-                if let Ok(mut locked_box) = inbox.lock() {
-                    if locked_box.is_closing {
-                        return;
-                    }
+                if IS_CLOSING.load(Ordering::SeqCst) {
+                    return;
+                }
 
-                    if let Ok(message) = locked_box.receiver.recv() {
-                        match message {
-                            Message::NewJob(job) => assignment = Some(job),
-                            Message::Terminate => {
-                                locked_box.is_closing = true;
-                                return
-                            },
-                        }
+                if let Ok(message) = receiver.recv_timeout(YIELD_DURATION) {
+                    match message {
+                        Message::NewJob(job) => work = Some(job),
+                        Message::Terminate => {
+                            IS_CLOSING.store(true, Ordering::SeqCst);
+                            return;
+                        },
                     }
                 }
 
-                if let Some(job) = assignment.take() {
-                    job.call_box()
+                if let Some(job) = work.take() {
+                    job.call_box();
                 }
             }
         });
@@ -134,6 +159,20 @@ impl Worker {
         Worker {
             id,
             thread: Some(thread),
+        }
+    }
+}
+
+impl Drop for Worker {
+    fn drop(&mut self) {
+        if let Some(thread) = self.thread.take() {
+            // make sure the work is done
+            thread.join().unwrap_or_else(|err| {
+                debug::print(
+                    &format!("Unable to drop worker: {}, error: {:?}", self.id, err),
+                    InfoLevel::Error
+                );
+            });
         }
     }
 }
@@ -207,8 +246,8 @@ where
 pub(crate) fn close() {
     unsafe {
         if let Some(mut pool) = POOL.take() {
-            pool.req_workers.clear();
-            pool.resp_workers.clear();
+            pool.req_workers.close();
+            pool.resp_workers.close();
         }
     }
 }

@@ -180,9 +180,10 @@ impl HttpServer {
     fn launch_with(&mut self, listener: &TcpListener) {
         // if using the session module and allow auto clean up, launch the service now.
         self.session_cleanup_config();
-
-        let workers_pool = setup_worker_pools(&self.config.get_pool_size());
         self.state.toggle_running_state(true);
+
+        let mut workers_pool = setup_worker_pools(&self.config.get_pool_size());
+        workers_pool.toggle_auto_expansion(true);
 
         for stream in listener.incoming() {
             if let Some(message) = self.state.courier_try_recv() {
@@ -220,7 +221,7 @@ impl HttpServer {
             }
 
             match stream {
-                Ok(s) => self.handle_stream(s, &workers_pool),
+                Ok(s) => self.handle_stream(s, &mut workers_pool),
                 Err(e) => debug::print(
                     &format!("Failed to receive the upcoming stream: {}", e)[..],
                     InfoLevel::Warning,
@@ -238,7 +239,7 @@ impl HttpServer {
     fn handle_stream(
         &self,
         stream: TcpStream,
-        workers_pool: &ThreadPool,
+        workers_pool: &mut ThreadPool,
     ) {
         // clone Arc-pointers
         let read_timeout = self.config.get_read_timeout() as u64;
