@@ -48,7 +48,7 @@ impl ServerStates {
     }
 
     #[inline]
-    pub(crate) fn courier_try_recv(&self) -> Option<ControlMessage> {
+    pub(crate) fn courier_fetch(&self) -> Option<ControlMessage> {
         match self.courier_channel.1.try_recv() {
             Ok(msg) => Some(msg),
             Err(TryRecvError::Empty) => {

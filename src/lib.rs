@@ -186,7 +186,7 @@ impl HttpServer {
         workers_pool.toggle_auto_expansion(true);
 
         for stream in listener.incoming() {
-            if let Some(message) = self.state.courier_try_recv() {
+            if let Some(message) = self.state.courier_fetch() {
                 match message {
                     ControlMessage::Terminate => {
                         if let Ok(s) = stream {
