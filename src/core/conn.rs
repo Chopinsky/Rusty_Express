@@ -160,38 +160,37 @@ fn parse_request(
             &format!("Reading stream disconnected -- {}", e),
             InfoLevel::Warning
         );
-        Err(ConnError::ReadStreamFailure)
+
+        return Err(ConnError::ReadStreamFailure)
+    }
+
+    let request_raw = String::from_utf8_lossy(&buffer);
+    if request_raw.trim_matches(|c| c == '\r' || c == '\n').is_empty() {
+        return Err(ConnError::EmptyRequest);
+    }
+
+    let callback =
+        deserialize(request_raw, request);
+
+    if let Some(host_name) = request.header("host") {
+        request.set_host(host_name);
+    }
+
+    if let Ok(client) = stream.peer_addr() {
+        request.set_client(client);
+    }
+
+    if let Some(auth) = Route::get_auth_func() {
+        let route_path = request.uri.to_owned();
+        if !auth(&request, route_path) {
+            return Err(ConnError::AccessDenied);
+        }
+    }
+
+    if let Some(callback) = callback {
+        Ok(callback)
     } else {
-        let request_raw = String::from_utf8_lossy(&buffer[..]);
-        if request_raw.trim_matches(|c| c == '\r' || c == '\n').is_empty() {
-            return Err(ConnError::EmptyRequest);
-        }
-
-        let auth_func = Route::get_auth_func();
-        let callback =
-            deserialize(request_raw, request);
-
-        let host = request.header("host");
-        if let Some(host_name) = host {
-            request.set_host(host_name);
-        }
-
-        if let Ok(client) = stream.peer_addr() {
-            request.set_client(client);
-        }
-
-        if let Some(auth) = auth_func {
-            let route_path = request.uri.to_owned();
-            if !auth(&request, route_path) {
-                return Err(ConnError::AccessDenied);
-            }
-        }
-
-        if let Some(callback) = callback {
-            Ok(callback)
-        } else {
-            Err(ConnError::ServiceUnavailable)
-        }
+        Err(ConnError::ServiceUnavailable)
     }
 }
 
@@ -334,15 +333,17 @@ pub(crate) fn deserialize_baseline(
 }
 
 fn deserialize_headers(
-    line: &str, is_body: bool, header: &mut HashMap<String, String>,
-    cookie: &mut HashMap<String, String>, body: &mut Vec<String>)
-{
+    line: &str,
+    is_body: bool,
+    header: &mut HashMap<String, String>,
+    cookie: &mut HashMap<String, String>,
+    body: &mut Vec<String>
+) {
     if !is_body {
-        let mut idx: u8 = 0;
         let mut header_key: &str = "";
         let mut is_cookie = false;
 
-        for info in line.trim().splitn(2, ':') {
+        for (idx, info) in line.trim().splitn(2, ':').enumerate() {
             match idx {
                 0 => {
                     header_key = &info.trim()[..];
@@ -357,8 +358,6 @@ fn deserialize_headers(
                 },
                 _ => break,
             }
-
-            idx += 1;
         }
     } else {
         body.push(line.to_owned());
