@@ -58,7 +58,7 @@ pub type Callback = fn(&Box<Request>, &mut Box<Response>);
 /// `AuthFunc` is a type alias to the authentication functions, which is optional, but if set, it
 /// will be invoked right after we parse the client request to determine if the requested URI is
 /// allowed to be visited by the client: if denied, we will generate the 403 error message as the
-/// respones. This function is generally to be used as the gate-keeper, e.g. if a use is logged in
+/// response. This function is generally to be used as the gate-keeper, e.g. if a use is logged in
 /// to see the dashboard routes.
 ///
 /// The function takes 2 input parameters: 1) request: &Box<Request>, which contains all information
@@ -72,7 +72,7 @@ pub type Callback = fn(&Box<Request>, &mut Box<Response>);
 /// The use of the AuthFunc is totally optional, you can also check authentication within individual
 /// request handlers as well. You can also use the `context` and/or `session` modules to store, or
 /// update persistent information regarding the client requestor.
-pub type AuthFunc = fn(&Box<Request>, String) -> bool;
+pub type AuthFunc = fn(&Box<Request>, &String) -> bool;
 
 struct RegexRoute {
     pub regex: Regex,

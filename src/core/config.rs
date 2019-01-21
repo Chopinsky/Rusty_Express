@@ -27,8 +27,8 @@ impl ServerConfig {
     pub fn new() -> Self {
         ServerConfig {
             pool_size: cmp::max(num_cpus::get(), 4),
-            read_timeout: 256,
-            write_timeout: 1024,
+            read_timeout: 0,
+            write_timeout: 0,
             use_session_autoclean: false,
             session_auto_clean_period: Some(Duration::from_secs(3600)),
         }

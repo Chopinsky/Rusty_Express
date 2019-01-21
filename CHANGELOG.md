@@ -1,4 +1,8 @@
 # 2019-01
+## 0.4.1
+- Default read/write timeout to 0, unless specified otherwise
+
+# 2019-01
 ## 0.4.0
 - Performance improvement to request parser
 - Switching to use crossbeam_channel for async communications in the main connection workflow

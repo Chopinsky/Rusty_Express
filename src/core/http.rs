@@ -176,6 +176,10 @@ impl Request {
 
     pub(crate) fn set_headers(&mut self, header: HashMap<String, String>) {
         self.header = header;
+
+        if let Some(host_name) = self.header.get(&String::from("host")) {
+            self.host = host_name.to_owned();
+        }
     }
 
     pub(crate) fn set_cookies(&mut self, cookie: HashMap<String, String>) {

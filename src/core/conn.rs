@@ -1,4 +1,3 @@
-use std::borrow::Cow;
 use std::collections::HashMap;
 use std::io::prelude::*;
 use std::io::BufWriter;
@@ -154,47 +153,51 @@ fn parse_request(
     request: &mut Box<Request>,
 ) -> Result<Callback, ConnError> {
     let mut buffer = [0; 1024];
-
     if let Err(e) = stream.read(&mut buffer) {
         debug::print(
             &format!("Reading stream disconnected -- {}", e),
             InfoLevel::Warning
         );
 
-        return Err(ConnError::ReadStreamFailure)
+        return Err(ConnError::ReadStreamFailure);
     }
 
-    let request_raw = String::from_utf8_lossy(&buffer);
-    if request_raw.trim_matches(|c| c == '\r' || c == '\n').is_empty() {
-        return Err(ConnError::EmptyRequest);
-    }
+    match String::from_utf8(buffer.to_vec()) {
+        Ok(raw) => {
+            if raw.trim_matches(|c| c == '\r' || c == '\n').is_empty() {
+                return Err(ConnError::EmptyRequest);
+            }
 
-    let callback =
-        deserialize(request_raw, request);
+            let callback = deserialize(raw, request);
 
-    if let Some(host_name) = request.header("host") {
-        request.set_host(host_name);
-    }
+            if let Ok(client) = stream.peer_addr() {
+                request.set_client(client);
+            }
 
-    if let Ok(client) = stream.peer_addr() {
-        request.set_client(client);
-    }
+            if let Some(auth) = Route::get_auth_func() {
+                if !auth(&request, &request.uri) {
+                    return Err(ConnError::AccessDenied);
+                }
+            }
 
-    if let Some(auth) = Route::get_auth_func() {
-        let route_path = request.uri.to_owned();
-        if !auth(&request, route_path) {
-            return Err(ConnError::AccessDenied);
+            if let Some(callback) = callback {
+                Ok(callback)
+            } else {
+                Err(ConnError::ServiceUnavailable)
+            }
+        },
+        Err(e) => {
+            debug::print(
+                &format!("Failed to deserialize the incoming stream -- {}", e),
+                InfoLevel::Warning
+            );
+
+            Err(ConnError::ReadStreamFailure)
         }
-    }
-
-    if let Some(callback) = callback {
-        Ok(callback)
-    } else {
-        Err(ConnError::ServiceUnavailable)
     }
 }
 
-fn deserialize(request: Cow<str>, store: &mut Box<Request>) -> Option<Callback> {
+fn deserialize(request: String, store: &mut Box<Request>) -> Option<Callback> {
     if request.is_empty() {
         return None;
     }
