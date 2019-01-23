@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::io::prelude::*;
 use std::io::BufWriter;
 use std::net::{Shutdown, TcpStream};
+use std::str;
 use std::time::Duration;
 
 use crate::channel;
@@ -11,7 +12,8 @@ use crate::core::http::{
     Request, RequestWriter, Response, ResponseManager, ResponseStates, ResponseWriter
 };
 use crate::support::{
-    common::flush_buffer, common::write_to_buff, common::MapUpdates, debug, debug::InfoLevel, shared_pool, TaskType
+    common::flush_buffer, common::write_to_buff, common::MapUpdates, debug, debug::InfoLevel,
+    shared_pool, TaskType, buffer,
 };
 
 static HEADER_END: [u8; 2] = [13, 10];
@@ -152,8 +154,8 @@ fn parse_request(
     mut stream: &TcpStream,
     request: &mut Box<Request>,
 ) -> Result<Callback, ConnError> {
-    let mut buffer = [0; 1024];
-    if let Err(e) = stream.read(&mut buffer) {
+    let mut buffer = buffer::get();
+    if let Err(e) = stream.read(buffer.write_into_as_slice()) {
         debug::print(
             &format!("Reading stream disconnected -- {}", e),
             InfoLevel::Warning
@@ -162,7 +164,7 @@ fn parse_request(
         return Err(ConnError::ReadStreamFailure);
     }
 
-    match String::from_utf8(buffer.to_vec()) {
+    match str::from_utf8(buffer.read().as_slice()) {
         Ok(raw) => {
             if raw.trim_matches(|c| c == '\r' || c == '\n').is_empty() {
                 return Err(ConnError::EmptyRequest);
@@ -188,7 +190,7 @@ fn parse_request(
         },
         Err(e) => {
             debug::print(
-                &format!("Failed to deserialize the incoming stream -- {}", e),
+                &format!("Failed to parse the request stream -- {}", e),
                 InfoLevel::Warning
             );
 
@@ -197,7 +199,7 @@ fn parse_request(
     }
 }
 
-fn deserialize(request: String, store: &mut Box<Request>) -> Option<Callback> {
+fn deserialize(request: &str, store: &mut Box<Request>) -> Option<Callback> {
     if request.is_empty() {
         return None;
     }

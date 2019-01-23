@@ -191,32 +191,32 @@ static ONCE: Once = ONCE_INIT;
 static mut POOL: Option<Pool> = None;
 
 pub(crate) fn initialize_with(sizes: Vec<usize>) {
-    unsafe {
-        ONCE.call_once(|| {
-            let pool_sizes: Vec<usize> = sizes
-                .iter()
-                .map(|val| match val {
-                    &0 => 1,
-                    _ => *val,
-                })
-                .collect();
+    ONCE.call_once(|| {
+        let pool_sizes: Vec<usize> = sizes
+            .iter()
+            .map(|val| match val {
+                &0 => 1,
+                _ => *val,
+            })
+            .collect();
 
-            let (req_size, resp_size) = match pool_sizes.len() {
-                1 => (pool_sizes[0], pool_sizes[0]),
-                2 => (pool_sizes[0], pool_sizes[1]),
-                _ => panic!("Requiring vec sizes of 2 for each, or 1 for all"),
-            };
+        let (req_size, resp_size) = match pool_sizes.len() {
+            1 => (pool_sizes[0], pool_sizes[0]),
+            2 => (pool_sizes[0], pool_sizes[1]),
+            _ => panic!("Requiring vec sizes of 2 for each, or 1 for all"),
+        };
 
-            // Make the pool
-            let pool = Some(Pool {
-                req_workers: Box::new(ThreadPool::new(req_size)),
-                resp_workers: Box::new(ThreadPool::new(2 * resp_size)),
-            });
-
-            // Put it in the heap so it can outlive this call
-            POOL = mem::transmute(pool);
+        // Make the pool
+        let pool = Some(Pool {
+            req_workers: Box::new(ThreadPool::new(req_size)),
+            resp_workers: Box::new(ThreadPool::new(2 * resp_size)),
         });
-    }
+
+        // Put it in the heap so it can outlive this call
+        unsafe {
+            POOL = mem::transmute(pool);
+        }
+    });
 }
 
 pub(crate) fn run<F>(f: F, task: TaskType)

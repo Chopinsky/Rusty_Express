@@ -1,11 +1,9 @@
-mod trie;
 mod scheduler;
+mod trie;
 
-#[cfg(feature = "session")]
-pub mod session;
-
-#[cfg(feature = "logger")]
-pub mod logger;
+pub mod buffer;
+#[cfg(feature = "logger")] pub mod logger;
+#[cfg(feature = "session")] pub mod session;
 
 pub(crate) mod common;
 pub(crate) mod debug;

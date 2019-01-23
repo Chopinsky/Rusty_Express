@@ -58,13 +58,14 @@ use std::thread;
 use std::time::Duration;
 
 use crossbeam_channel as channel;
-use crate::core::config::{ServerConfig, ViewEngine, ViewEngineDefinition};
-use crate::core::conn::*;
-use crate::core::router::*;
-use crate::core::states::*;
-use crate::support::debug::{self, InfoLevel};
-use crate::support::session::*;
-use crate::support::{shared_pool, ThreadPool};
+use self::core::config::{ServerConfig, ViewEngine, ViewEngineDefinition};
+use self::core::conn::*;
+use self::core::router::*;
+use self::core::states::*;
+use self::support::debug::{self, InfoLevel};
+use self::support::session::*;
+use self::support::{shared_pool, ThreadPool};
+use self::support::buffer;
 
 //TODO: Impl middlewear
 
@@ -182,8 +183,13 @@ impl HttpServer {
         self.session_cleanup_config();
         self.state.toggle_running_state(true);
 
-        let mut workers_pool = setup_worker_pools(&self.config.get_pool_size());
+        let pool_size = self.config.get_pool_size();
+
+        let mut workers_pool = setup_worker_pools(&pool_size);
         workers_pool.toggle_auto_expansion(true);
+
+        // create the byte buffer now: 4 times the pool size, plus 1024 bytes for each
+        buffer::init(4 * pool_size, 1024);
 
         for stream in listener.incoming() {
             if let Some(message) = self.state.courier_fetch() {
