@@ -154,8 +154,8 @@ fn parse_request(
     mut stream: &TcpStream,
     request: &mut Box<Request>,
 ) -> Result<Callback, ConnError> {
-    let mut buffer = buffer::get();
-    if let Err(e) = stream.read(buffer.write_into_as_slice()) {
+    let mut buffer = buffer::reserve();
+    if let Err(e) = stream.read(buffer.as_writable_slice()) {
         debug::print(
             &format!("Reading stream disconnected -- {}", e),
             InfoLevel::Warning
