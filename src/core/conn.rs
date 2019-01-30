@@ -13,7 +13,7 @@ use crate::core::http::{
 };
 use crate::support::{
     common::flush_buffer, common::write_to_buff, common::MapUpdates, debug, debug::InfoLevel,
-    shared_pool, TaskType, buffer,
+    shared_pool, TaskType, buffer::{self, BufferOp}
 };
 
 static HEADER_END: [u8; 2] = [13, 10];
@@ -162,9 +162,9 @@ fn parse_request(
         );
 
         return Err(ConnError::ReadStreamFailure);
-    }
+    };
 
-    match str::from_utf8(buffer.read().as_slice()) {
+    let res = match str::from_utf8(buffer.read()) {
         Ok(raw) => {
             if raw.trim_matches(|c| c == '\r' || c == '\n').is_empty() {
                 return Err(ConnError::EmptyRequest);
@@ -196,7 +196,10 @@ fn parse_request(
 
             Err(ConnError::ReadStreamFailure)
         }
-    }
+    };
+
+    buffer::release(buffer);
+    res
 }
 
 fn deserialize(request: &str, store: &mut Box<Request>) -> Option<Callback> {
@@ -205,7 +208,7 @@ fn deserialize(request: &str, store: &mut Box<Request>) -> Option<Callback> {
     }
 
     debug::print(
-        &format!("Printing request -- \r\n{}", request),
+        &format!(">>> Printing Request <<< \r\n{}", request),
         InfoLevel::Info
     );
 
@@ -356,7 +359,7 @@ fn deserialize_headers(
                 },
                 1 => {
                     if is_cookie {
-                        cookie_parser(cookie, info.trim());
+                        cookie_parser(info.trim(), cookie);
                     } else if !header_key.is_empty() {
                         header.add(header_key, info.trim().to_owned(), true);
                     }
@@ -370,14 +373,14 @@ fn deserialize_headers(
 }
 
 fn split_path(
-    full_uri: &str,
-    final_uri: &mut String,
-    final_scheme: &mut String,
-    final_frag: &mut String,
+    source: &str,
+    path: &mut String,
+    scheme: &mut String,
+    frag: &mut String,
 ) {
-    let uri = full_uri.trim();
+    let uri = source.trim();
     if uri.is_empty() {
-        final_uri.push_str("/");
+        path.push_str("/");
         return;
     }
 
@@ -385,32 +388,32 @@ fn split_path(
 
     // parse fragment out
     if let Some(pos) = uri_parts[0].find("#") {
-        let (remains, frag) = uri_parts[0].split_at(pos);
+        let (remains, raw_frag) = uri_parts[0].split_at(pos);
         uri_parts[0] = remains;
 
-        if !frag.is_empty() {
-            final_frag.push_str(frag);
+        if !raw_frag.is_empty() {
+            frag.push_str(raw_frag);
         }
     }
 
     // parse scheme out
     if let Some(pos) = uri_parts[0].find("?") {
-        let (remains, scheme) = uri_parts[0].split_at(pos);
+        let (remains, raw_scheme) = uri_parts[0].split_at(pos);
         uri_parts[0] = remains;
 
         if uri_parts[1].is_empty() {
-            final_uri.push_str(&format!("/{}", uri_parts[0])[..]);
+            path.push_str(&format!("/{}", uri_parts[0])[..]);
         } else {
-            final_uri.push_str(&format!("{}/{}", uri_parts[1], uri_parts[0])[..]);
+            path.push_str(&format!("{}/{}", uri_parts[1], uri_parts[0])[..]);
         };
 
-        final_scheme.push_str(scheme.trim());
+        scheme.push_str(raw_scheme.trim());
     } else {
         let uri_len = uri.len();
         if uri_len > 1 && uri.ends_with("/") {
-            final_uri.push_str(&uri[..uri_len - 1]);
+            path.push_str(&uri[..uri_len - 1]);
         } else {
-            final_uri.push_str(uri)
+            path.push_str(uri)
         };
     }
 }
@@ -419,12 +422,12 @@ fn split_path(
 /// field is the key of the map, which map to a single value of the key from the Cookie
 /// header field. Assuming no duplicate cookie keys, or the first cookie key-value pair
 /// will be stored.
-fn cookie_parser(cookie: &mut HashMap<String, String>, cookie_body: &str) {
-    if cookie_body.is_empty() {
+fn cookie_parser(raw: &str, cookie: &mut HashMap<String, String>) {
+    if raw.is_empty() {
         return;
     }
 
-    for set in cookie_body.trim().split(";").into_iter() {
+    for set in raw.trim().split(";").into_iter() {
         let pair: Vec<&str> = set.trim().splitn(2, "=").collect();
         if pair.len() == 2 {
             cookie.add(pair[0].trim(), pair[1].trim().to_owned(), false);

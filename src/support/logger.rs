@@ -19,11 +19,13 @@ lazy_static! {
     static ref CONFIG: RwLock<LoggerConfig> = RwLock::new(LoggerConfig::initialize(""));
 }
 
-static DEFAULT_LOCATION: &'static str = "./logs";
-static ONCE: Once = ONCE_INIT;
+const DEFAULT_LOCATION: &'static str = "./logs";
+const ONCE: Once = ONCE_INIT;
+
 static mut SENDER: Option<channel::Sender<LogInfo>> = None;
 static mut REFRESH_HANDLER: Option<thread::JoinHandle<()>> = None;
 static mut DUMPING_RUNNING: AtomicBool = AtomicBool::new(false);
+static mut LOG_WRITER: Option<Box<dyn LogWriter>> = None;
 
 #[derive(Debug)]
 pub enum InfoLevel {
@@ -41,11 +43,34 @@ impl fmt::Display for InfoLevel {
     }
 }
 
-struct LogInfo {
+pub struct LogInfo {
     message: String,
     client: Option<SocketAddr>,
     level: InfoLevel,
     time: DateTime<Utc>,
+}
+
+impl fmt::Display for LogInfo {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self.client {
+            Some(addr) =>
+                write!(
+                    f,
+                    "[{}] @ {} (from client {}): {}",
+                    self.level,
+                    self.time.to_string(),
+                    addr.to_string(),
+                    self.message
+                ),
+            None => write!(
+                f,
+                "[{}] @ {}: {}",
+                self.level,
+                self.time.to_string(),
+                self.message
+            ),
+        }
+    }
 }
 
 struct LoggerConfig {
@@ -53,7 +78,61 @@ struct LoggerConfig {
     refresh_period: Duration,
     log_folder_path: Option<PathBuf>,
     meta_info_provider: Option<fn(bool) -> String>,
-    rx_handler: Option<thread::JoinHandle<()>>
+    rx_handler: Option<thread::JoinHandle<()>>,
+}
+
+pub trait LogWriter {
+    fn dump(&self, log_store: Vec<LogInfo>) -> Result<(), Vec<LogInfo>>;
+}
+
+struct DefaultLogWriter {}
+
+impl DefaultLogWriter {
+    fn get_log_file(config: &LoggerConfig) -> Result<File, String> {
+        match config.log_folder_path {
+            Some(ref location) if location.is_dir() => {
+                create_dump_file(config.get_id(), location)
+            },
+            _ => {
+                create_dump_file(config.get_id(), &PathBuf::from(DEFAULT_LOCATION))
+            },
+        }
+    }
+}
+
+impl LogWriter for DefaultLogWriter {
+    fn dump(&self, log_store: Vec<LogInfo>) -> Result<(), Vec<LogInfo>> {
+        if let Ok(config) = CONFIG.read() {
+            if let Ok(mut file) = DefaultLogWriter::get_log_file(&config) {
+                // Now start a new dump
+                if let Some(meta_func) = config.meta_info_provider {
+                    write_to_file(&mut file, &meta_func(true));
+                }
+
+                let mut content: String = String::new();
+                let mut count = 0;
+
+                for info in log_store {
+                    count += 1;
+                    content.push_str(&format_content(info.level, &info.message, info.time));
+
+                    if count % 10 == 0 {
+                        write_to_file(&mut file, &content);
+                        content.clear();
+                    }
+                }
+
+                // write the remainder of the content
+                if !content.is_empty() {
+                    write_to_file(&mut file, &content);
+                }
+
+                return Ok(());
+            }
+        }
+
+        Err(log_store)
+    }
 }
 
 impl LoggerConfig {
@@ -138,6 +217,10 @@ pub fn log(message: &str, level: InfoLevel, client: Option<SocketAddr>) -> Resul
     Err(String::from("The logging service is not running..."))
 }
 
+pub fn set_log_writer<T: LogWriter + 'static>(writer: T) {
+    unsafe { LOG_WRITER = Some(Box::new(writer)); }
+}
+
 pub(crate) fn start(
     period: Option<u64>,
     log_folder_path: Option<&str>,
@@ -158,6 +241,8 @@ pub(crate) fn start(
     }
 
     initialize();
+
+    set_log_writer(DefaultLogWriter {});
 }
 
 pub(crate) fn shutdown() {
@@ -171,14 +256,14 @@ pub(crate) fn shutdown() {
         }
     }
 
-    unsafe {
-        let final_msg = LogInfo {
-            message: String::from("Shutting down the logging service..."),
-            client: None,
-            level: InfoLevel::Info,
-            time: Utc::now(),
-        };
+    let final_msg = LogInfo {
+        message: String::from("Shutting down the logging service..."),
+        client: None,
+        level: InfoLevel::Info,
+        time: Utc::now(),
+    };
 
+    unsafe {
         if let Some(ref tx) = SENDER.take() {
             if let Err(SendError(msg)) = tx.send(final_msg) {
                 debug::print(
@@ -190,7 +275,7 @@ pub(crate) fn shutdown() {
     }
 
     // Need to block because otherwise the lazy_static contents may go expired too soon
-    dump_to_file();
+    dump_log();
 }
 
 fn initialize() {
@@ -232,7 +317,7 @@ fn start_refresh(period: Duration) {
             loop {
                 thread::sleep(period);
                 thread::spawn(|| {
-                    dump_to_file();
+                    dump_log();
                 });
             }
         ));
@@ -273,58 +358,45 @@ fn reset_refresh(period: Option<Duration>) {
     });
 }
 
-fn dump_to_file() {
-    unsafe {
+fn dump_log() {
+    if unsafe { DUMPING_RUNNING.load(Ordering::SeqCst) } {
         if let Ok(config) = CONFIG.read() {
-            let file = match config.log_folder_path {
-                Some(ref location) if location.is_dir() => {
-                    create_dump_file(config.get_id(), location)
-                },
-                _ => {
-                    create_dump_file(config.get_id(), &PathBuf::from(DEFAULT_LOCATION))
-                },
-            };
-
-            if let Ok(mut file) = file {
-                if DUMPING_RUNNING.load(Ordering::Relaxed) {
-                    if let Some(meta_func) = config.meta_info_provider {
-                        write_to_file(&mut file, &meta_func(false));
-                    }
-
-                    write_to_file(&mut file, &format_content(
-                        InfoLevel::Info,
-                        "A dumping process is already in progress, skipping this scheduled dump.",
-                        Utc::now()
-                    ));
-
-                    return;
+            if let Ok(mut file) = DefaultLogWriter::get_log_file(&config) {
+                if let Some(meta_func) = config.meta_info_provider {
+                    write_to_file(&mut file, &meta_func(false));
                 }
 
-                // Now start a new dump
+                write_to_file(&mut file, &format_content(
+                    InfoLevel::Info,
+                    "A dumping process is already in progress, skipping this scheduled dump.",
+                    Utc::now()
+                ));
+            }
+        }
+
+        return;
+    }
+
+    let store =
+        if let Ok(mut res) = TEMP_STORE.lock() {
+            res.drain(..).collect()
+        } else {
+            Vec::new()
+        };
+
+    if !store.is_empty() {
+        unsafe {
+            if let Some(ref writer) = LOG_WRITER {
                 *DUMPING_RUNNING.get_mut() = true;
 
-                if let Ok(mut store) = TEMP_STORE.lock() {
-                    if let Some(meta_func) = config.meta_info_provider {
-                        write_to_file(&mut file, &meta_func(true));
-                    }
-
-                    let mut content: String = String::new();
-                    let mut count = 0;
-
-                    while let Some(info) = store.pop() {
-                        count += 1;
-                        content.push_str(&format_content(info.level, &info.message, info.time));
-
-                        if count % 10 == 0 {
-                            write_to_file(&mut file, &content);
-                            content.clear();
+                match writer.dump(store) {
+                    Ok(_) => {},
+                    Err(vec) => {
+                        if let Ok(mut res) = TEMP_STORE.lock() {
+                            // can't write the result, put them back.
+                            res.extend(vec)
                         }
-                    }
-
-                    // write the remainder of the content
-                    if !content.is_empty() {
-                        write_to_file(&mut file, &content);
-                    }
+                    },
                 }
 
                 *DUMPING_RUNNING.get_mut() = false;
