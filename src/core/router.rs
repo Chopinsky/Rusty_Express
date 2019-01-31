@@ -1,12 +1,12 @@
 #![allow(dead_code)]
 
-use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::path::{Path, PathBuf};
 use std::sync::RwLock;
 
 use crate::channel;
 use crate::core::http::{Request, Response, ResponseStates, ResponseWriter};
+use crate::hashbrown::{HashMap, HashSet};
 use crate::support::common::MapUpdates;
 use crate::support::debug::{self, InfoLevel};
 use crate::support::Field;

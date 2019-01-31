@@ -1,8 +1,8 @@
-use std::collections::HashMap;
-
-use super::debug::{self, InfoLevel};
 use std::io::{BufWriter, Write};
 use std::net::TcpStream;
+
+use crate::debug::{self, InfoLevel};
+use crate::hashbrown::HashMap;
 
 pub trait MapUpdates<T> {
     fn add(&mut self, field: &str, value: T, allow_replace: bool) -> Option<T>;

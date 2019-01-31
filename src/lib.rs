@@ -27,6 +27,7 @@ extern crate chrono;
 extern crate num_cpus;
 extern crate rand;
 extern crate regex;
+extern crate hashbrown;
 
 pub(crate) mod core;
 pub(crate) mod support;
@@ -51,13 +52,13 @@ pub mod prelude {
     pub use crate::support::logger::InfoLevel;
 }
 
-use std::collections::HashMap;
 use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::path::Path;
 use std::thread;
 use std::time::Duration;
 
 use crossbeam_channel as channel;
+use hashbrown::HashMap;
 use self::core::config::{ServerConfig, ViewEngine, ViewEngineDefinition};
 use self::core::conn::*;
 use self::core::router::*;

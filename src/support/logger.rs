@@ -1,8 +1,5 @@
 #![allow(dead_code)]
 
-use crate::channel::{self, SendError};
-use crate::debug;
-use chrono::{DateTime, Utc};
 use std::env;
 use std::fs;
 use std::fs::File;
@@ -13,6 +10,10 @@ use std::io::Write;
 use std::sync::{atomic::{AtomicBool, Ordering}, Mutex, Once, RwLock, ONCE_INIT};
 use std::thread;
 use std::time::Duration;
+
+use crate::channel::{self, SendError};
+use crate::debug;
+use chrono::{DateTime, Utc};
 
 lazy_static! {
     static ref TEMP_STORE: Mutex<Vec<LogInfo>> = Mutex::new(Vec::new());

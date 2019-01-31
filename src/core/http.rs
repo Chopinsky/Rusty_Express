@@ -1,7 +1,5 @@
 #![allow(dead_code)]
 
-use std::collections::hash_map::Iter;
-use std::collections::HashMap;
 use std::fs::File;
 use std::io::prelude::*;
 use std::io::{BufReader, BufWriter};
@@ -16,6 +14,7 @@ use crate::core::cookie::*;
 use crate::core::router::REST;
 use crate::support::{common::*, debug, debug::InfoLevel, shared_pool, TaskType};
 use crate::channel;
+use hashbrown::{hash_map::Iter, HashMap};
 use chrono::prelude::*;
 
 static FOUR_OH_FOUR: &'static str = include_str!("../default/404.html");

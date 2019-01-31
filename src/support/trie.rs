@@ -1,8 +1,8 @@
 #![allow(dead_code)]
 
+use crate::hashbrown::HashMap;
+use crate::regex::Regex;
 use crate::core::router::Callback;
-use regex::Regex;
-use std::collections::HashMap;
 
 #[derive(Debug)]
 pub(crate) struct Field {

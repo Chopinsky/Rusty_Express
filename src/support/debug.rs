@@ -1,6 +1,6 @@
-use chrono::prelude::{DateTime, Utc};
 use std::env;
 use std::sync::{Once, ONCE_INIT};
+use chrono::prelude::{DateTime, Utc};
 
 static ONCE: Once = ONCE_INIT;
 static mut DEBUG_LEVEL: InfoLevel = InfoLevel::Silent;

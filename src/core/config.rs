@@ -1,11 +1,11 @@
 #![allow(dead_code)]
 
 use std::cmp;
-use std::collections::HashMap;
 use std::sync::RwLock;
 use std::time::Duration;
 
-use num_cpus;
+use crate::num_cpus;
+use crate::hashbrown::HashMap;
 use crate::support::common::*;
 
 //TODO: load config from file, e.g. config.toml

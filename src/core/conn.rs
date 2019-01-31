@@ -1,4 +1,3 @@
-use std::collections::HashMap;
 use std::io::prelude::*;
 use std::io::BufWriter;
 use std::net::{Shutdown, TcpStream};
@@ -8,6 +7,7 @@ use std::time::Duration;
 use crate::channel;
 use crate::core::config::ConnMetadata;
 use crate::core::router::{Callback, Route, RouteHandler, REST};
+use crate::hashbrown::HashMap;
 use crate::core::http::{
     Request, RequestWriter, Response, ResponseManager, ResponseStates, ResponseWriter
 };

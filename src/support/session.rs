@@ -54,7 +54,6 @@
 //! ```
 
 use std::cmp::Ordering;
-use std::collections::HashMap;
 use std::fs::File;
 use std::io::{BufRead, BufReader, Write};
 use std::marker::Sized;
@@ -67,9 +66,9 @@ use std::thread;
 use std::thread::*;
 use std::time::{Duration, SystemTime};
 
-use chrono;
-use chrono::prelude::*;
-use rand::{thread_rng, Rng};
+use crate::chrono::{self, prelude::*};
+use crate::hashbrown::HashMap;
+use crate::rand::{thread_rng, Rng};
 use crate::support::ThreadPool;
 
 static DELEM_LV_1: char = '\u{0005}';
