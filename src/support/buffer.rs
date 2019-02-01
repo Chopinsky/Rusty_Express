@@ -1,235 +1,318 @@
 #![allow(dead_code)]
 
 use std::io::ErrorKind;
-use std::str;
 use std::sync::{atomic::AtomicBool, atomic::AtomicUsize, atomic::Ordering, Once, ONCE_INIT};
 use std::time::{Duration, SystemTime};
 use std::vec;
 
-static mut BUFFER: Option<Vec<ByteBuffer>> = None;
-static mut DEFAULT_CAPACITY: usize = 1;
-
-static mut LOCK: AtomicBool = AtomicBool::new(false);
-static mut BUF_SIZE: AtomicUsize = AtomicUsize::new(0);
-
 const ONCE: Once = ONCE_INIT;
 const LOCK_TIMEOUT: Duration = Duration::from_millis(64);
-const DEFAULT_GROWTH: usize = 4;
-const BUF_ROOF: usize = 65535;
+const DEFAULT_GROWTH: u8 = 4;
+const DEFAULT_CAPACITY: usize = 512;
 
-pub(crate) struct ByteBuffer {
-    buf: Vec<u8>,
-    is_lent: bool,
+static mut LOCK: AtomicBool = AtomicBool::new(false);
+static mut BUFFER: Option<BufferPool> = None;
+static mut SIZE_CAP: AtomicUsize = AtomicUsize::new(65535);
+
+enum BufOp {
+    Reserve(bool),
+    Release(usize),
+    ReleaseAndExtend(Vec<u8>),
+    Extend(usize),
 }
 
-impl ByteBuffer {
-    pub(crate) fn new(capacity: usize) -> Self {
-        ByteBuffer {
-            buf: vec::from_elem(0, capacity),
-            is_lent: false,
+struct BufferPool {
+    store: Vec<Vec<u8>>,
+    pool: Vec<usize>,
+    slice_capacity: usize,
+    closing: AtomicBool,
+}
+
+pub(crate) struct Buffer {}
+
+impl Buffer {
+    pub(crate) fn init(size: usize, capacity: usize) {
+        ONCE.call_once(|| {
+            let mut store = Vec::with_capacity(size);
+            let mut pool = Vec::with_capacity(size);
+
+            (0..size).for_each(|id| {
+                store.push(vec::from_elem(0, capacity));
+                pool.push(id);
+            });
+
+            BufferPool::make(BufferPool {
+                store,
+                pool,
+                slice_capacity: capacity,
+                closing: AtomicBool::new(false),
+            });
+        });
+    }
+
+    pub(crate) fn slice() -> ByteBuffer {
+        match BufferPool::manage(BufOp::Reserve(true)) {
+            Some(val) => val,
+            None => unsafe {
+                let capacity = if let Some(buf) = BUFFER.as_ref() {
+                    buf.slice_capacity
+                } else {
+                    // guess the capacity
+                    DEFAULT_CAPACITY
+                };
+
+                ByteBuffer { id: 0, fallback: Some(vec::from_elem(0, capacity)) }
+            },
         }
     }
 
-    pub(crate) fn update_status(&mut self, is_lent: bool) {
-        self.is_lent = is_lent;
-    }
-
-    // Super unsafe, as we're using super unsafe [`Vec::from_raw_parts`] here... Swap out the inner
-    // buf and replace it with a new Vec<u8>. The swapped out buf will transfer the ownership to
-    // the caller of this function.
-    fn buf_swap(&mut self, target: Vec<u8>) -> Vec<u8> {
-        let res = unsafe {
-            Vec::from_raw_parts(self.buf.as_mut_ptr(), self.buf.len(), self.buf.capacity())
-        };
-
-        self.buf = target;
-        res
+    #[inline]
+    pub(crate) fn try_slice() -> Option<ByteBuffer> {
+        BufferPool::manage(BufOp::Reserve(false))
     }
 }
 
-pub(crate) trait BufferOp {
-    fn as_writable(&mut self) -> &mut Vec<u8>;
-    fn as_writable_slice(&mut self) -> &mut [u8];
-    fn read(&self) -> &Vec<u8>;
-    fn read_as_slice(&self) -> &[u8];
-    fn reset(&mut self);
-    fn try_into_string(&self) -> Result<String, String>;
+trait BufferOperations {
+    fn reserve(&mut self, force: bool) -> Option<ByteBuffer>;
+    fn release(&mut self, id: usize);
+    fn reset(&mut self, id: usize);
+    fn extend(&mut self, count: usize) -> usize;
 }
 
-impl BufferOp for ByteBuffer {
-    fn as_writable(&mut self) -> &mut Vec<u8> {
-        &mut self.buf
+impl BufferOperations for BufferPool {
+    fn reserve(&mut self, force: bool) -> Option<ByteBuffer> {
+        match self.pool.pop() {
+            Some(id) => Some(ByteBuffer {
+                id,
+                fallback: None,
+            }),
+            None => {
+                if force {
+                    Some(ByteBuffer {
+                        id: self.extend(DEFAULT_GROWTH as usize),
+                        fallback: None,
+                    })
+                } else {
+                    None
+                }
+            }
+        }
     }
 
-    fn as_writable_slice(&mut self) -> &mut [u8] {
-        self.buf.as_mut_slice()
+    fn release(&mut self, id: usize) {
+        if id < self.store.len() {
+            self.pool.push(id);
+        }
     }
 
-    fn read(&self) -> &Vec<u8> {
-        &self.buf
-    }
+    fn reset(&mut self, id: usize) {
+        assert!(id < self.store.len());
 
-    fn read_as_slice(&self) -> &[u8] {
-        &self.buf.as_slice()
-    }
+        let capacity: usize = self.slice_capacity;
+        let vec_cap: usize = self.store[id].capacity();
 
-    fn reset(&mut self) {
-        self.buf.iter_mut().for_each(|val| {
+        if vec_cap > capacity {
+            self.store[id].truncate(capacity);
+        } else if vec_cap < capacity {
+            self.store[id].reserve(capacity - vec_cap);
+        }
+
+        self.store[id].iter_mut().for_each(|val| {
             *val = 0;
         });
     }
 
-    fn try_into_string(&self) -> Result<String, String> {
-        match str::from_utf8(&self.buf.as_slice()) {
-            Ok(raw) => Ok(String::from(raw)),
-            Err(e) => Err(format!(
-                "Unable to convert the buffered data into utf-8 string, error occurs at {}",
-                e.valid_up_to()
-            )),
+    fn extend(&mut self, count: usize) -> usize {
+        assert!(count > 0);
+
+        let capacity = self.slice_capacity;
+        let start = self.store.len();
+
+        self.store.reserve(count);
+        self.pool.reserve(count);
+
+        (0..count).for_each(|offset| {
+            self.store.push(vec::from_elem(0, capacity));
+            self.pool.push(start + offset);
+        });
+
+        // return the last element in the buffer
+        self.store.len() - 1
+    }
+}
+
+trait BufferManagement {
+    fn make(buf: BufferPool);
+    fn reset_slice(id: usize);
+    fn manage(command: BufOp) -> Option<ByteBuffer>;
+}
+
+impl BufferManagement for BufferPool {
+    fn make(buf: BufferPool) {
+        unsafe { BUFFER = Some(buf); }
+    }
+
+    fn reset_slice(id: usize) {
+        unsafe {
+            if let Some(buf) = BUFFER.as_mut() {
+                buf.reset(id);
+            }
         }
+    }
+
+    fn manage(command: BufOp) -> Option<ByteBuffer> {
+        if lock().is_err() {
+            return None;
+        }
+
+        let result = unsafe {
+            if let Some(buf) = BUFFER.as_mut() {
+                match command {
+                    BufOp::Reserve(forced) => buf.reserve(forced),
+                    BufOp::Release(id) => {
+                        buf.release(id);
+                        None
+                    },
+                    BufOp::Extend(count) => {
+                        buf.extend(count);
+                        None
+                    },
+                    BufOp::ReleaseAndExtend(vec) => {
+                        if buf.store.len() < SIZE_CAP.load(Ordering::SeqCst) {
+                            let id = buf.store.len();
+
+                            buf.store.push(vec);
+                            buf.pool.push(id);
+                            buf.reset(id);
+                        }
+
+                        None
+                    }
+                }
+            } else {
+                None
+            }
+        };
+
+        unlock();
+        result
+    }
+}
+
+impl Drop for BufferPool {
+    fn drop(&mut self) {
+        *self.closing.get_mut() = true;
+    }
+}
+
+pub(crate) struct ByteBuffer {
+    id: usize,
+    fallback: Option<Vec<u8>>,
+}
+
+impl ByteBuffer {
+    pub(crate) fn as_writable(&mut self) -> Result<&mut [u8], ErrorKind> {
+        match self.fallback {
+            Some(ref mut vec) => return Ok(vec.as_mut_slice()),
+            None => {},
+        }
+
+        unsafe {
+            if let Some(buf) = BUFFER.as_mut() {
+                if buf.closing.load(Ordering::SeqCst) {
+                    return Err(ErrorKind::NotConnected);
+                }
+
+                if self.id < buf.store.len() {
+                    return Ok(buf.store[self.id].as_mut_slice());
+                } else {
+                    return Err(ErrorKind::InvalidData);
+                }
+            }
+        }
+
+        Err(ErrorKind::NotConnected)
+    }
+
+    pub(crate) fn as_writable_vec(&mut self) -> Result<&mut Vec<u8>, ErrorKind> {
+        match self.fallback {
+            Some(ref mut vec) => return Ok(vec),
+            None => {},
+        }
+
+        unsafe {
+            if let Some(buf) = BUFFER.as_mut() {
+                if buf.closing.load(Ordering::SeqCst) {
+                    return Err(ErrorKind::NotConnected);
+                }
+
+                if self.id < buf.store.len() {
+                    return Ok(&mut buf.store[self.id]);
+                } else {
+                    return Err(ErrorKind::InvalidData);
+                }
+            }
+        }
+
+        Err(ErrorKind::NotConnected)
+    }
+
+    pub(crate) fn read(&self) -> Result<&[u8], ErrorKind> {
+        match self.fallback {
+            Some(ref vec) => return Ok(vec.as_slice()),
+            None => {},
+        }
+
+        unsafe {
+            if let Some(buf) = BUFFER.as_mut() {
+                if buf.closing.load(Ordering::SeqCst) {
+                    return Err(ErrorKind::NotConnected);
+                }
+
+                if self.id < buf.store.len() {
+                    return Ok(buf.store[self.id].as_slice());
+                } else {
+                    return Err(ErrorKind::InvalidData);
+                }
+            }
+        }
+
+        Err(ErrorKind::NotConnected)
+    }
+
+    pub(crate) fn copy_to_vec(&self) -> Result<Vec<u8>, ErrorKind> {
+        Ok(self.read()?.to_vec())
     }
 }
 
 impl Drop for ByteBuffer {
     fn drop(&mut self) {
-        // if buffer is dropped without being released back to the buffer pool, try save it.
-        if self.is_lent {
-            // swap the pointer out so it won't be killed by drop
-            let vec = self.buf_swap(Vec::new());
-
-            push_back(ByteBuffer {
-                buf: vec,
-                is_lent: false,
-            });
-        }
-    }
-}
-
-pub(crate) fn init(size: usize, capacity: usize) {
-    ONCE.call_once(|| {
-        let mut buffer = Vec::with_capacity(size);
-        (0..size).for_each(|_| {
-            buffer.push(ByteBuffer::new(capacity));
-        });
-
-        unsafe {
-            BUFFER = Some(buffer);
-            DEFAULT_CAPACITY = capacity;
-            BUF_SIZE.fetch_add(size, Ordering::SeqCst);
-        }
-    });
-}
-
-pub(crate) fn reserve() -> ByteBuffer {
-    let buf = match try_reserve() {
-        Some(buf) => buf,
-        None => unsafe {
-            let cap = DEFAULT_CAPACITY;
-            let (buf, inc) =
-                if let Some(ref mut buffer) = BUFFER {
-                    // the BUFFER store is still valid
-                    if BUF_SIZE.load(Ordering::SeqCst) > BUF_ROOF {
-                        // already blow the memory guard, be gentle
-                        (ByteBuffer::new(cap), 1)
-                    } else {
-                        // grow the buffer with pre-determined size
-                        if lock().is_ok() {
-                            (0..DEFAULT_GROWTH).for_each(|_| {
-                                buffer.push(ByteBuffer::new(cap));
-                            });
-
-                            unlock();
-                        }
-
-                        // don't bother pop again, lend a new slice
-                        (ByteBuffer::new(cap), DEFAULT_GROWTH + 1)
-                    }
-                } else {
-                    // can't get a hold of the BUFFER store, just make the slice
-                    (ByteBuffer::new(cap), 1)
-                };
-
-            // update the buffer size -- including the lent out ones
-            BUF_SIZE.fetch_add(inc, Ordering::SeqCst);
-
-            buf
-        }
-    };
-
-    buf
-}
-
-pub(crate) fn try_reserve() -> Option<ByteBuffer> {
-    unsafe {
-        // wait for the lock
-        if lock().is_err() {
-            return None;
-        }
-
-        let res =
-            if let Some(ref mut buffer) = BUFFER {
-                match buffer.pop() {
-                    Some(vec) => Some(vec),
-                    None => None,
-                }
-            } else {
-                None
-            };
-
-        unlock();
-        res
-    }
-}
-
-pub(crate) fn release(buf: ByteBuffer) {
-    push_back(buf);
-}
-
-fn push_back(buf: ByteBuffer) {
-    let mut buf_slice = buf;
-
-    // the ownership of the buffer slice is returned, update the status as so regardless if it
-    // needs to be dropped right away
-    buf_slice.update_status(false);
-
-    unsafe {
-        if BUF_SIZE.load(Ordering::SeqCst) > BUF_ROOF {
-            // if we've issued too many buffer slices, just let this one expire on itself
-            BUF_SIZE.fetch_sub(1, Ordering::SeqCst);
-
-            return;
-        }
-
-        if buf_slice.buf.capacity() > DEFAULT_CAPACITY {
-            buf_slice.buf.truncate(DEFAULT_CAPACITY);
-        }
-
-        if let Some(ref mut buffer) = BUFFER {
-            buf_slice.reset();
-
-            if lock().is_ok() {
-                buffer.push(buf_slice);
-                unlock();
-            }
+        if self.id == 0 && self.fallback.is_some() {
+            BufferPool::manage(BufOp::ReleaseAndExtend(self.fallback.take().unwrap()));
+        } else {
+            BufferPool::reset_slice(self.id);
+            BufferPool::manage(BufOp::Release(self.id));
         }
     }
 }
 
 fn lock() -> Result<(), ErrorKind> {
     let start = SystemTime::now();
+
     loop {
-        let locked = unsafe {
+        unsafe {
             match LOCK.compare_exchange(
                 false, true, Ordering::SeqCst, Ordering::SeqCst
             ) {
-                Ok(res) => res == false,
-                Err(_) => false,
+                Ok(res) => if res == false {
+                    // if not locked previously, we've grabbed the lock and break the wait
+                    break;
+                },
+                Err(_) => {
+                    // locked by someone else,
+                },
             }
         };
-
-        if locked {
-            break;
-        }
 
         match start.elapsed() {
             Ok(period) => {
@@ -244,8 +327,7 @@ fn lock() -> Result<(), ErrorKind> {
     Ok(())
 }
 
+#[inline]
 fn unlock() {
-    unsafe {
-        *LOCK.get_mut() = false;
-    }
+    unsafe { *LOCK.get_mut() = false; }
 }

@@ -13,7 +13,7 @@ use crate::core::http::{
 };
 use crate::support::{
     common::flush_buffer, common::write_to_buff, common::MapUpdates, debug, debug::InfoLevel,
-    shared_pool, TaskType, buffer::{self, BufferOp}
+    shared_pool, TaskType, buffer::Buffer,
 };
 
 static HEADER_END: [u8; 2] = [13, 10];
@@ -154,8 +154,9 @@ fn parse_request(
     mut stream: &TcpStream,
     request: &mut Box<Request>,
 ) -> Result<Callback, ConnError> {
-    let mut buffer = buffer::reserve();
-    if let Err(e) = stream.read(buffer.as_writable_slice()) {
+    let mut buffer = Buffer::slice();
+
+    if let Err(e) = stream.read(buffer.as_writable().unwrap()) {
         debug::print(
             &format!("Reading stream disconnected -- {}", e),
             InfoLevel::Warning
@@ -164,7 +165,7 @@ fn parse_request(
         return Err(ConnError::ReadStreamFailure);
     };
 
-    let res = match str::from_utf8(buffer.read()) {
+    let res = match str::from_utf8(buffer.read().unwrap()) {
         Ok(raw) => {
             if raw.trim_matches(|c| c == '\r' || c == '\n').is_empty() {
                 return Err(ConnError::EmptyRequest);
@@ -198,7 +199,6 @@ fn parse_request(
         }
     };
 
-    buffer::release(buffer);
     res
 }
 

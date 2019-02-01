@@ -66,7 +66,7 @@ use self::core::states::*;
 use self::support::debug::{self, InfoLevel};
 use self::support::session::*;
 use self::support::{shared_pool, ThreadPool};
-use self::support::buffer;
+use self::support::buffer::Buffer;
 
 //TODO: Impl middlewear
 
@@ -190,7 +190,7 @@ impl HttpServer {
         workers_pool.toggle_auto_expansion(true);
 
         // create the byte buffer now: 4 times the pool size, plus 1024 bytes for each
-        buffer::init(4 * pool_size, 1024);
+        Buffer::init(4 * pool_size, 1024);
 
         for stream in listener.incoming() {
             if let Some(message) = self.state.courier_fetch() {
