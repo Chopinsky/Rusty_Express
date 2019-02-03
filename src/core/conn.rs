@@ -13,7 +13,7 @@ use crate::core::http::{
 };
 use crate::support::{
     common::flush_buffer, common::write_to_buff, common::MapUpdates, debug, debug::InfoLevel,
-    shared_pool, TaskType, buffer::Buffer,
+    shared_pool, TaskType, buffer::ByteBuffer,
 };
 
 static HEADER_END: [u8; 2] = [13, 10];
@@ -154,8 +154,7 @@ fn parse_request(
     mut stream: &TcpStream,
     request: &mut Box<Request>,
 ) -> Result<Callback, ConnError> {
-    let mut buffer = Buffer::slice();
-
+    let mut buffer = ByteBuffer::slice();
     if let Err(e) = stream.read(buffer.as_writable().unwrap()) {
         debug::print(
             &format!("Reading stream disconnected -- {}", e),
@@ -165,41 +164,43 @@ fn parse_request(
         return Err(ConnError::ReadStreamFailure);
     };
 
-    let res = match str::from_utf8(buffer.read().unwrap()) {
-        Ok(raw) => {
-            if raw.trim_matches(|c| c == '\r' || c == '\n').is_empty() {
-                return Err(ConnError::EmptyRequest);
-            }
-
-            let callback = deserialize(raw, request);
-
-            if let Ok(client) = stream.peer_addr() {
-                request.set_client(client);
-            }
-
-            if let Some(auth) = Route::get_auth_func() {
-                if !auth(&request, &request.uri) {
-                    return Err(ConnError::AccessDenied);
+    let callback =
+        match str::from_utf8(buffer.read().unwrap()) {
+            Ok(raw) => {
+                if raw.trim_matches(|c| c == '\r' || c == '\n').is_empty() {
+                    return Err(ConnError::EmptyRequest);
                 }
-            }
 
-            if let Some(callback) = callback {
-                Ok(callback)
-            } else {
-                Err(ConnError::ServiceUnavailable)
-            }
-        },
-        Err(e) => {
-            debug::print(
-                &format!("Failed to parse the request stream -- {}", e),
-                InfoLevel::Warning
-            );
+                if let Some(result) = deserialize(raw, request) {
+                    result
+                } else {
+                    return Err(ConnError::ServiceUnavailable);
+                }
+            },
+            Err(e) => {
+                debug::print(
+                    &format!("Failed to parse the request stream -- {}", e),
+                    InfoLevel::Warning
+                );
 
-            Err(ConnError::ReadStreamFailure)
+                return Err(ConnError::ReadStreamFailure)
+            }
+        };
+
+    // free the buffer since we're done
+    drop(buffer);
+
+    if let Ok(client) = stream.peer_addr() {
+        request.set_client(client);
+    }
+
+    if let Some(auth) = Route::get_auth_func() {
+        if !auth(&request, &request.uri) {
+            return Err(ConnError::AccessDenied);
         }
-    };
+    }
 
-    res
+    Ok(callback)
 }
 
 fn deserialize(request: &str, store: &mut Box<Request>) -> Option<Callback> {

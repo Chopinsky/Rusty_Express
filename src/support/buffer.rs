@@ -3,7 +3,9 @@
 use std::io::ErrorKind;
 use std::sync::{atomic::AtomicBool, atomic::AtomicUsize, atomic::Ordering, Once, ONCE_INIT};
 use std::time::{Duration, SystemTime};
+use std::thread;
 use std::vec;
+use crate::channel::{self as channel, Sender, Receiver};
 
 const ONCE: Once = ONCE_INIT;
 const LOCK_TIMEOUT: Duration = Duration::from_millis(64);
@@ -21,16 +23,22 @@ enum BufOp {
     Extend(usize),
 }
 
+enum WorkerOp {
+    Cleanup(usize),
+    Shutdown,
+}
+
 struct BufferPool {
     store: Vec<Vec<u8>>,
     pool: Vec<usize>,
     slice_capacity: usize,
+    worker_chan: Sender<WorkerOp>,
     closing: AtomicBool,
 }
 
-pub(crate) struct Buffer {}
+pub(crate) struct ByteBuffer {}
 
-impl Buffer {
+impl ByteBuffer {
     pub(crate) fn init(size: usize, capacity: usize) {
         ONCE.call_once(|| {
             let mut store = Vec::with_capacity(size);
@@ -41,16 +49,22 @@ impl Buffer {
                 pool.push(id);
             });
 
+            let (sender, receiver) = channel::bounded(8);
+            thread::spawn(move || {
+               BufferPool::handle_work(receiver);
+            });
+
             BufferPool::make(BufferPool {
                 store,
                 pool,
                 slice_capacity: capacity,
+                worker_chan: sender,
                 closing: AtomicBool::new(false),
             });
         });
     }
 
-    pub(crate) fn slice() -> ByteBuffer {
+    pub(crate) fn slice() -> BufferSlice {
         match BufferPool::manage(BufOp::Reserve(true)) {
             Some(val) => val,
             None => unsafe {
@@ -61,34 +75,34 @@ impl Buffer {
                     DEFAULT_CAPACITY
                 };
 
-                ByteBuffer { id: 0, fallback: Some(vec::from_elem(0, capacity)) }
+                BufferSlice { id: 0, fallback: Some(vec::from_elem(0, capacity)) }
             },
         }
     }
 
     #[inline]
-    pub(crate) fn try_slice() -> Option<ByteBuffer> {
+    pub(crate) fn try_slice() -> Option<BufferSlice> {
         BufferPool::manage(BufOp::Reserve(false))
     }
 }
 
 trait BufferOperations {
-    fn reserve(&mut self, force: bool) -> Option<ByteBuffer>;
+    fn reserve(&mut self, force: bool) -> Option<BufferSlice>;
     fn release(&mut self, id: usize);
     fn reset(&mut self, id: usize);
     fn extend(&mut self, count: usize) -> usize;
 }
 
 impl BufferOperations for BufferPool {
-    fn reserve(&mut self, force: bool) -> Option<ByteBuffer> {
+    fn reserve(&mut self, force: bool) -> Option<BufferSlice> {
         match self.pool.pop() {
-            Some(id) => Some(ByteBuffer {
+            Some(id) => Some(BufferSlice {
                 id,
                 fallback: None,
             }),
             None => {
                 if force {
-                    Some(ByteBuffer {
+                    Some(BufferSlice {
                         id: self.extend(DEFAULT_GROWTH as usize),
                         fallback: None,
                     })
@@ -143,8 +157,9 @@ impl BufferOperations for BufferPool {
 
 trait BufferManagement {
     fn make(buf: BufferPool);
-    fn reset_slice(id: usize);
-    fn manage(command: BufOp) -> Option<ByteBuffer>;
+    fn reset_and_release(id: usize);
+    fn handle_work(rx: Receiver<WorkerOp>);
+    fn manage(command: BufOp) -> Option<BufferSlice>;
 }
 
 impl BufferManagement for BufferPool {
@@ -152,15 +167,28 @@ impl BufferManagement for BufferPool {
         unsafe { BUFFER = Some(buf); }
     }
 
-    fn reset_slice(id: usize) {
+    fn reset_and_release(id: usize) {
         unsafe {
-            if let Some(buf) = BUFFER.as_mut() {
-                buf.reset(id);
+            if let Some(buf) = BUFFER.as_ref() {
+                buf.worker_chan
+                    .send(WorkerOp::Cleanup(id))
+                    .unwrap_or_else(|err| {
+                        eprintln!("Failed to release buffer slice: {}, err: {}", id, err);
+                    });
             }
         }
     }
 
-    fn manage(command: BufOp) -> Option<ByteBuffer> {
+    fn handle_work(rx: Receiver<WorkerOp>) {
+        for message in rx.recv() {
+            match message {
+                WorkerOp::Cleanup(id) => BufferPool::manage(BufOp::Release(id)),
+                WorkerOp::Shutdown => return,
+            };
+        }
+    }
+
+    fn manage(command: BufOp) -> Option<BufferSlice> {
         if lock().is_err() {
             return None;
         }
@@ -170,6 +198,7 @@ impl BufferManagement for BufferPool {
                 match command {
                     BufOp::Reserve(forced) => buf.reserve(forced),
                     BufOp::Release(id) => {
+                        buf.reset(id);
                         buf.release(id);
                         None
                     },
@@ -205,12 +234,12 @@ impl Drop for BufferPool {
     }
 }
 
-pub(crate) struct ByteBuffer {
+pub(crate) struct BufferSlice {
     id: usize,
     fallback: Option<Vec<u8>>,
 }
 
-impl ByteBuffer {
+impl BufferSlice {
     pub(crate) fn as_writable(&mut self) -> Result<&mut [u8], ErrorKind> {
         match self.fallback {
             Some(ref mut vec) => return Ok(vec.as_mut_slice()),
@@ -285,13 +314,12 @@ impl ByteBuffer {
     }
 }
 
-impl Drop for ByteBuffer {
+impl Drop for BufferSlice {
     fn drop(&mut self) {
         if self.id == 0 && self.fallback.is_some() {
             BufferPool::manage(BufOp::ReleaseAndExtend(self.fallback.take().unwrap()));
         } else {
-            BufferPool::reset_slice(self.id);
-            BufferPool::manage(BufOp::Release(self.id));
+            BufferPool::reset_and_release(self.id);
         }
     }
 }
