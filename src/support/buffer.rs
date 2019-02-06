@@ -1,6 +1,7 @@
 #![allow(dead_code)]
 
 use std::io::ErrorKind;
+use std::str;
 use std::sync::{atomic::AtomicBool, atomic::AtomicUsize, atomic::Ordering, Once, ONCE_INIT};
 use std::time::{Duration, SystemTime};
 use std::thread;
@@ -311,6 +312,32 @@ impl BufferSlice {
 
     pub(crate) fn copy_to_vec(&self) -> Result<Vec<u8>, ErrorKind> {
         Ok(self.read()?.to_vec())
+    }
+
+    pub(crate) fn reset(&mut self) {
+        unsafe {
+            if let Some(buf) = BUFFER.as_mut() {
+                buf.reset(self.id);
+            }
+        }
+    }
+
+    pub(crate) fn try_into_string(&self) -> Result<&str, ErrorKind> {
+        let buf = self.read()?;
+        match str::from_utf8(buf) {
+            Ok(raw) => Ok(raw),
+            Err(e) => Err(ErrorKind::InvalidData),
+        }
+    }
+
+    pub(crate) fn len(&self) -> usize {
+        unsafe {
+            if let Some(buf) = BUFFER.as_mut() {
+                buf.store[self.id].len()
+            } else {
+                0
+            }
+        }
     }
 }
 

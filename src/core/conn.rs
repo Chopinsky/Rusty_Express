@@ -150,45 +150,22 @@ fn stream_shutdown(stream: &TcpStream) -> u8 {
     0
 }
 
-fn parse_request(
-    mut stream: &TcpStream,
-    request: &mut Box<Request>,
-) -> Result<Callback, ConnError> {
-    let mut buffer = ByteBuffer::slice();
-    if let Err(e) = stream.read(buffer.as_writable().unwrap()) {
-        debug::print(
-            &format!("Reading stream disconnected -- {}", e),
-            InfoLevel::Warning
-        );
-
-        return Err(ConnError::ReadStreamFailure);
+fn parse_request(stream: &TcpStream, request: &mut Box<Request>) -> Result<Callback, ConnError> {
+    let mut raw = String::new();
+    if let Some(e) = from_stream(stream, &mut raw) {
+        return Err(e);
     };
 
+    if raw.trim_matches(|c| c == '\r' || c == '\n').is_empty() {
+        return Err(ConnError::EmptyRequest);
+    }
+
     let callback =
-        match str::from_utf8(buffer.read().unwrap()) {
-            Ok(raw) => {
-                if raw.trim_matches(|c| c == '\r' || c == '\n').is_empty() {
-                    return Err(ConnError::EmptyRequest);
-                }
-
-                if let Some(result) = deserialize(raw, request) {
-                    result
-                } else {
-                    return Err(ConnError::ServiceUnavailable);
-                }
-            },
-            Err(e) => {
-                debug::print(
-                    &format!("Failed to parse the request stream -- {}", e),
-                    InfoLevel::Warning
-                );
-
-                return Err(ConnError::ReadStreamFailure)
-            }
+        if let Some(result) = deserialize(raw, request) {
+            result
+        } else {
+            return Err(ConnError::ServiceUnavailable);
         };
-
-    // free the buffer since we're done
-    drop(buffer);
 
     if let Ok(client) = stream.peer_addr() {
         request.set_client(client);
@@ -203,7 +180,46 @@ fn parse_request(
     Ok(callback)
 }
 
-fn deserialize(request: &str, store: &mut Box<Request>) -> Option<Callback> {
+fn from_stream(mut stream: &TcpStream, raw_req: &mut String) -> Option<ConnError> {
+    let mut buffer = ByteBuffer::slice();
+
+    loop {
+        match stream.read(buffer.as_writable().unwrap()) {
+            Ok(len) => {
+                if let Ok(req_slice) = buffer.try_into_string() {
+                    raw_req.push_str(req_slice);
+                } else {
+                    debug::print(
+                        "Failed to parse the request stream",
+                        InfoLevel::Warning
+                    );
+
+                    return Some(ConnError::ReadStreamFailure);
+                }
+
+                println!("{}", len);
+
+                if len == buffer.len() {
+                    buffer.reset();
+                } else {
+                    break;
+                }
+            },
+            Err(e) => {
+                debug::print(
+                    &format!("Reading stream disconnected -- {}", e),
+                    InfoLevel::Warning
+                );
+
+                return Some(ConnError::ReadStreamFailure);
+            }
+        };
+    }
+
+    None
+}
+
+fn deserialize(request: String, store: &mut Box<Request>) -> Option<Callback> {
     if request.is_empty() {
         return None;
     }
