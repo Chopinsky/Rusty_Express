@@ -126,7 +126,7 @@ impl Clone for ServerConfig {
 /// type of html-template. The 1st parameter represents the raw template content in string format,
 /// while the 2nd parameter represents the rendering context -- the information required to render
 /// the template into customisable webpage.
-pub type ViewEngine = fn(&mut Box<String>, Box<EngineContext + Send + Sync>) -> u16;
+pub type ViewEngine = fn(&mut String, Box<EngineContext + Send + Sync>) -> u16;
 
 /// In order to streamline the way to supply rendering context information to the underlying template
 /// engines, the `EngineContext` trait is required to be implemented by the `ViewEngine` framework's
@@ -180,7 +180,7 @@ impl ViewEngineDefinition for ServerConfig {
 pub trait ViewEngineParser {
     fn template_parser<T: EngineContext + Send + Sync + 'static>(
         extension: &str,
-        content: &mut Box<String>,
+        content: &mut String,
         context: Box<T>,
     ) -> u16;
 }
@@ -188,7 +188,7 @@ pub trait ViewEngineParser {
 impl ViewEngineParser for ServerConfig {
     fn template_parser<T: EngineContext + Send + Sync + 'static>(
         extension: &str,
-        content: &mut Box<String>,
+        content: &mut String,
         context: Box<T>,
     ) -> u16 {
         if extension.is_empty() {

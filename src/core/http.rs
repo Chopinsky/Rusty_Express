@@ -5,14 +5,14 @@ use std::io::prelude::*;
 use std::io::{BufReader, BufWriter};
 use std::net::{SocketAddr, TcpStream};
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
 use crate::core::config::{ConnMetadata, EngineContext, ServerConfig, ViewEngineParser};
 use crate::core::cookie::*;
 use crate::core::router::REST;
-use crate::support::{common::*, debug, debug::InfoLevel, shared_pool, TaskType};
+use crate::support::{common::*, debug, debug::InfoLevel, shared_pool, TaskType, buffer::ByteBuffer};
 use crate::channel;
 use hashbrown::{hash_map::Iter, HashMap};
 use chrono::prelude::*;
@@ -263,12 +263,12 @@ pub struct Response {
     cookie: Arc<HashMap<String, Cookie>>,
     header: HashMap<String, String>,
     header_only: bool,
-    body: Box<String>,
-    body_tx: Option<channel::Sender<Box<String>>>,
-    body_rx: Option<channel::Receiver<Box<String>>>,
+    body: String,
+    body_tx: Option<channel::Sender<String>>,
+    body_rx: Option<channel::Receiver<String>>,
     redirect: String,
-    notifier: Option<(Arc<channel::Sender<Box<String>>>, channel::Receiver<Box<String>>)>,
-    subscriber: Option<(channel::Sender<Box<String>>, Arc<channel::Receiver<Box<String>>>)>,
+    notifier: Option<(channel::Sender<String>, channel::Receiver<String>)>,
+    subscriber: Option<(channel::Sender<String>, channel::Receiver<String>)>,
 }
 
 impl Response {
@@ -282,7 +282,7 @@ impl Response {
             cookie: Arc::new(HashMap::new()),
             header: HashMap::new(),
             header_only: false,
-            body: Box::new(String::new()),
+            body: String::new(),
             body_tx: None,
             body_rx: None,
             redirect: String::new(),
@@ -316,7 +316,8 @@ impl Response {
             }
         };
 
-        let mut header = Box::new(write_header_status(self.status, self.has_contents()));
+        let mut header =
+            Box::new(write_header_status(self.status, self.has_contents()));
 
         // other header field-value pairs
         write_headers(
@@ -326,28 +327,42 @@ impl Response {
         );
 
         if !self.content_type.is_empty() {
-            header.push_str(&format!("Content-Type: {}\r\n", self.content_type));
+            header.reserve_exact(16 + self.content_type.len());
+            header.push_str("Content-Type: ");
+            header.push_str(&self.content_type);
+            header.append_line_break();
         }
 
-        if let &Some(ref length) = &self.content_length {
+        if let Some(length) = self.content_length.as_ref() {
             // explicit content length is set, use it here
-            header.push_str(&format!("Content-Length: {}\r\n", length));
+            header.reserve_exact(18 + length.len());
+            header.push_str("Content-Length: ");
+            header.push_str(&length);
+            header.append_line_break();
         } else {
             // Only generate content length header attribute if not using async and no content-length set explicitly
             if self.is_header_only() || self.body.is_empty() {
+                header.reserve_exact(19);
                 header.push_str("Content-Length: 0\r\n");
             } else {
-                header.push_str(&format!("Content-Length: {}\r\n", self.body.len()));
+                let size = self.body.len().to_string();
+                header.reserve_exact(18 + size.len());
+                header.push_str("Content-Length: ");
+                header.push_str(&size);
+                header.append_line_break();
             }
         }
 
         if !self.header.contains_key("connection") {
-            let connection = match self.keep_alive {
-                true if self.can_keep_alive => "keep-alive",
-                _ => "close",
+            let (connection, count) = match self.keep_alive {
+                true if self.can_keep_alive => ("keep-alive", 10),
+                _ => ("close", 5),
             };
 
-            header.push_str(&format!("Connection: {}\r\n", connection));
+            header.reserve_exact(14 + count);
+            header.push_str("Connection: ");
+            header.push_str(connection);
+            header.append_line_break();
         }
 
         if let Some(rx) = receiver {
@@ -385,13 +400,7 @@ pub trait ResponseStates {
     fn is_header_only(&self) -> bool;
     fn get_channels(
         &mut self,
-    ) -> Result<
-        (
-            Arc<channel::Sender<Box<String>>>,
-            Arc<channel::Receiver<Box<String>>>,
-        ),
-        &'static str,
-    >;
+    ) -> Result<(channel::Sender<String>, channel::Receiver<String>), &'static str, >;
 }
 
 impl ResponseStates for Response {
@@ -442,30 +451,19 @@ impl ResponseStates for Response {
     /// send any ensuing responses.
     fn get_channels(
         &mut self,
-    ) -> Result<
-        (
-            Arc<channel::Sender<Box<String>>>,
-            Arc<channel::Receiver<Box<String>>>,
-        ),
-        &'static str,
-    > {
+    ) -> Result<(channel::Sender<String>, channel::Receiver<String>), &'static str, >
+    {
         if self.notifier.is_none() {
-            let (tx, rx): (channel::Sender<Box<String>>, channel::Receiver<Box<String>>) =
-                channel::unbounded();
-
-            self.notifier = Some((Arc::new(tx), rx));
+            self.notifier = Some(channel::unbounded());
         }
 
         if self.subscriber.is_none() {
-            let (tx, rx): (channel::Sender<Box<String>>, channel::Receiver<Box<String>>) =
-                channel::unbounded();
-
-            self.subscriber = Some((tx, Arc::new(rx)));
+            self.subscriber = Some(channel::unbounded());
         }
 
-        if let Some(ref notifier) = self.notifier {
-            if let Some(ref sub) = self.subscriber {
-                return Ok((Arc::clone(&notifier.0), Arc::clone(&sub.1)));
+        if let Some(notifier) = self.notifier.as_ref() {
+            if let Some(sub) = self.subscriber.as_ref() {
+                return Ok((notifier.0.clone(), sub.1.clone()));
             }
         }
 
@@ -603,7 +601,7 @@ impl ResponseWriter for Response {
 
             if status != 200 && status != 0 {
                 // if not opening the file correctly, reset the body for error page
-                self.body = Box::new(String::new());
+                self.body = String::new();
             } else if status == 200 && self.content_type.is_empty() {
                 // if read the file good and not set the mime yet, set the mime
                 self.set_ext_mime_header(&file_path);
@@ -631,14 +629,8 @@ impl ResponseWriter for Response {
         if let Some(path) = get_file_path(&file_loc) {
             self.set_ext_mime_header(&path);
 
-            if let &Some(ref tx) = &self.body_tx {
-                let tx_clone = channel::Sender::clone(tx);
-                shared_pool::run(
-                    move || {
-                        open_file_async(path, tx_clone);
-                    },
-                    TaskType::Response,
-                );
+            if let Some(tx) = self.body_tx.as_ref() {
+                open_file_async(path, tx.clone());
             }
         }
     }
@@ -671,7 +663,7 @@ impl ResponseWriter for Response {
                 return 404;
             }
 
-            let mut content = Box::new(String::new());
+            let mut content = String::new();
             open_file(&path, &mut content);
 
             // Now render the conent with the engine
@@ -788,23 +780,23 @@ impl ResponseManager for Response {
         match self.status {
             0 | 404 => {
                 if let Some(page_generator) = ConnMetadata::get_status_pages(404) {
-                    self.body = Box::new(page_generator());
+                    self.body = page_generator();
                 } else {
-                    self.body = Box::new(FOUR_OH_FOUR.to_owned());
+                    self.body = FOUR_OH_FOUR.to_owned();
                 }
             }
             401 => {
                 if let Some(page_generator) = ConnMetadata::get_status_pages(401) {
-                    self.body = Box::new(page_generator());
+                    self.body = page_generator();
                 } else {
-                    self.body = Box::new(FOUR_OH_ONE.to_owned());
+                    self.body = FOUR_OH_ONE.to_owned();
                 }
             }
             _ => {
                 if let Some(page_generator) = ConnMetadata::get_status_pages(500) {
-                    self.body = Box::new(page_generator());
+                    self.body = page_generator();
                 } else {
-                    self.body = Box::new(FIVE_HUNDRED.to_owned());
+                    self.body = FIVE_HUNDRED.to_owned();
                 }
             }
         }
@@ -842,9 +834,9 @@ impl ResponseManager for Response {
             return;
         }
 
-        if let Some(sub) = self.subscriber.take() {
+        if let Some(sub) = self.subscriber.as_ref() {
             // spawn a new thread to listen to the read stream for any new communications
-            broadcast_new_communications(Arc::new(Mutex::new(sub.0)), stream_clone);
+            broadcast_new_communications(sub.0.clone(), stream_clone);
         }
 
         if let Some(ref notifier) = self.notifier {
@@ -861,11 +853,11 @@ impl ResponseManager for Response {
 }
 
 fn broadcast_new_communications(
-    sender: Arc<Mutex<channel::Sender<Box<String>>>>,
+    sender: channel::Sender<String>,
     mut stream_clone: TcpStream,
 ) {
     thread::spawn(move || {
-        let mut buffer = [0; 1024];
+        let mut buffer = ByteBuffer::slice();
 
         loop {
             if let Err(e) = stream_clone.take_error() {
@@ -876,7 +868,7 @@ fn broadcast_new_communications(
                 break;
             }
 
-            if let Err(e) = stream_clone.read(&mut buffer) {
+            if let Err(e) = stream_clone.read(buffer.as_writable().unwrap()) {
                 debug::print(
                     &format!("Unable to continue reading from a keep-alive stream: {}", e),
                     InfoLevel::Warning,
@@ -884,31 +876,32 @@ fn broadcast_new_communications(
                 break;
             }
 
-            if let Ok(s) = sender.lock() {
-                if let Ok(result) = String::from_utf8(buffer.to_vec()) {
-                    if result.is_empty() {
-                        continue;
-                    }
+            if let Ok(result) = buffer.try_into_string() {
+                if result.is_empty() {
+                    continue;
+                }
 
-                    if let Err(err) = s.send(Box::new(result)) {
-                        // this could be caused by shutting down the stream from the main thread, so more of
-                        // the informative level of the message.
-                        debug::print(
-                            &format!("Unable to broadcast the communications: {}", err),
-                            InfoLevel::Error,
-                        );
-                        break;
-                    }
+                if let Err(err) = sender.send(result.to_owned()) {
+                    // this could be caused by shutting down the stream from the main thread, so more of
+                    // the informative level of the message.
+                    debug::print(
+                        &format!("Unable to broadcast the communications: {}", err),
+                        InfoLevel::Error,
+                    );
+                    break;
                 }
             }
         }
     });
 }
 
-fn stream_trunk(content: &Box<String>, buffer: &mut BufWriter<&TcpStream>) {
+fn stream_trunk(content: &String, buffer: &mut BufWriter<&TcpStream>) {
     // the content length should have been set in the header, see function resp_header
-    write_to_buff(buffer, format!("{}\r\n", content.len()).as_bytes());
-    write_to_buff(buffer, format!("{}\r\n", content).as_bytes());
+    write_to_buff(buffer, content.len().to_string().as_bytes());
+    write_line_break(buffer);
+    write_to_buff(buffer, content.as_bytes());
+    write_line_break(buffer);
+
     flush_buffer(buffer);
 }
 
@@ -949,7 +942,7 @@ fn get_file_path(path: &str) -> Option<PathBuf> {
     Some(file_path.to_path_buf())
 }
 
-fn open_file(file_path: &PathBuf, buf: &mut Box<String>) -> u16 {
+fn open_file(file_path: &PathBuf, buf: &mut String) -> u16 {
     // try open the file
     if let Ok(file) = File::open(file_path) {
         let mut buf_reader = BufReader::new(file);
@@ -969,21 +962,23 @@ fn open_file(file_path: &PathBuf, buf: &mut Box<String>) -> u16 {
     }
 }
 
-fn open_file_async(file_path: PathBuf, tx: channel::Sender<Box<String>>) {
-    let mut buf: Box<String> = Box::new(String::new());
-    match open_file(&file_path, &mut buf) {
-        404 | 500 if buf.len() > 0 => {
-            buf.clear();
+fn open_file_async(file_path: PathBuf, tx: channel::Sender<String>) {
+    shared_pool::run(move || {
+        let mut buf = String::new();
+        match open_file(&file_path, &mut buf) {
+            404 | 500 if buf.len() > 0 => {
+                buf.clear();
+            }
+            _ => { /* Nothing to do here */ }
         }
-        _ => { /* Nothing to do here */ }
-    }
 
-    if let Err(e) = tx.send(buf) {
-        debug::print(
-            &format!("Unable to write the file to the stream: {}", e),
-            InfoLevel::Warning
-        );
-    }
+        if let Err(e) = tx.send(buf) {
+            debug::print(
+                &format!("Unable to write the file to the stream: {}", e),
+                InfoLevel::Warning
+            );
+        }
+    },TaskType::Response);
 }
 
 fn get_status(status: u16) -> String {
@@ -1107,39 +1102,54 @@ fn write_header_status(status: u16, has_contents: bool) -> String {
 }
 
 fn write_headers(
-    header: &HashMap<String, String>,
-    final_header: &mut Box<String>,
+    source: &HashMap<String, String>,
+    header: &mut String,
     keep_alive: bool,
 ) {
-    final_header.push_str(&format!("Server: Rusty-Express/{}\r\n", VERSION));
+    header.reserve_exact(24);
+    header.push_str("Server: Rusty-Express/");
+    header.push_str(VERSION);
+    header.append_line_break();
 
-    if !header.contains_key("date") {
-        let dt = Utc::now();
-        final_header.push_str(&format!(
-            "Date: {}\r\n",
-            dt.format("%a, %e %b %Y %T GMT").to_string()
-        ));
+    if !source.contains_key("date") {
+        let dt = Utc::now().format("%a, %e %b %Y %T GMT").to_string();
+
+        header.reserve_exact(8);
+        header.push_str("Date: ");
+        header.push_str(&dt);
+        header.append_line_break();
     }
 
     let transfer = String::from("transfer-encoding");
-    for (field, value) in header.iter() {
+    for (field, value) in source.iter() {
+        header.reserve_exact(field.len() + value.len() + 4);
+        header.push_str(field);
+        header.push_str(": ");
+        header.push_str(value);
+
         if keep_alive && field.eq(&transfer) && !value.contains("chunked") {
-            final_header.push_str(&format!("{}: {}, chunked\r\n", field, value));
+            header.reserve_exact(9);
+            header.push_str(", chunked\r\n");
         } else {
-            final_header.push_str(&format!("{}: {}\r\n", field, value));
+            header.push_str("\r\n");
         }
     }
 }
 
 fn write_header_cookie(cookie: Arc<HashMap<String, Cookie>>, tx: channel::Sender<String>) {
-    let mut cookie_output = String::new();
+    let mut output = String::new();
     for (_, cookie) in cookie.iter() {
         if cookie.is_valid() {
-            cookie_output.push_str(&format!("Set-Cookie: {}\r\n", &cookie.to_string()));
+            let c = cookie.to_string();
+
+            output.reserve_exact(14 + c.len());
+            output.push_str("Set-Cookie: ");
+            output.push_str(&c);
+            output.append_line_break();
         }
     }
 
-    tx.send(cookie_output).unwrap_or_else(|e| {
+    tx.send(output).unwrap_or_else(|e| {
         debug::print(
             &format!("Unable to write response cookies: {}", e),
             InfoLevel::Warning

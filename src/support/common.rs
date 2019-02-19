@@ -30,7 +30,6 @@ pub trait VecExtension {
     fn flat(&self) -> String;
 }
 
-
 impl VecExtension for Vec<String> {
     fn flat(&self) -> String {
         let mut result = String::new();
@@ -40,6 +39,21 @@ impl VecExtension for Vec<String> {
         }
 
         result
+    }
+}
+
+pub trait LineBreakUtil {
+    fn append_line_break(&mut self);
+}
+
+impl LineBreakUtil for String {
+    fn append_line_break(&mut self) {
+        if self.capacity() - self.len() < 2 {
+            self.reserve_exact(2);
+        }
+
+        self.push('\r');
+        self.push('\n');
     }
 }
 
@@ -53,6 +67,10 @@ pub fn write_to_buff(buffer: &mut BufWriter<&TcpStream>, content: &[u8]) {
             InfoLevel::Warning,
         );
     }
+}
+
+pub fn write_line_break(buffer: &mut BufWriter<&TcpStream>) {
+    let _ = buffer.write(&[13, 10]);
 }
 
 pub fn flush_buffer(buffer: &mut BufWriter<&TcpStream>) -> u8 {
@@ -87,7 +105,7 @@ pub fn json_stringify(contents: &HashMap<String, String>) -> String {
                 is_first = false;
             }
 
-            res.push_str(&format!("{}:{}", field, json_format_content(&vec!(content.to_owned()))));
+            res.push_str(&[field, ":", content].join(""));
         }
     }
 
@@ -112,7 +130,7 @@ pub fn json_flat_stringify(contents: &HashMap<String, Vec<String>>) -> String {
             }
 
 
-            res.push_str(&format!("{}:{}", field, json_format_content(content)));
+            res.push_str(&[field, ":", &json_format_content(content)].join(""));
         }
     }
 

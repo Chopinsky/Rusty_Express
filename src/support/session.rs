@@ -71,8 +71,8 @@ use crate::hashbrown::HashMap;
 use crate::rand::{thread_rng, Rng};
 use crate::support::ThreadPool;
 
-static DELEM_LV_1: char = '\u{0005}';
-static DELEM_LV_2: char = '\u{0006}';
+const DELEM_LV_1: char = '\u{0005}';
+const DELEM_LV_2: char = '\u{0006}';
 
 lazy_static! {
     static ref STORE: RwLock<HashMap<String, Session>> = RwLock::new(HashMap::new());
@@ -105,22 +105,32 @@ pub struct Session {
     id: String,
     auto_renewal: bool,
     expires_at: chrono::DateTime<Utc>,
-    store: Box<String>,
+    store: String,
     is_dirty: bool,
 }
 
 impl SessionData for Session {
     fn serialize(&self) -> String {
-        let mut result = String::new();
         if self.id.is_empty() {
-            return result;
+            return String::new();
         }
 
         let expires_at = self.expires_at.to_rfc3339();
-        result.push_str(&format!("{}{}", self.id.to_owned(), DELEM_LV_2));
-        result.push_str(&format!("{}{}", expires_at, DELEM_LV_2));
-        result.push_str(&format!("{}{}", self.auto_renewal.to_string(), DELEM_LV_2));
-        result.push_str(&format!("{}{}", self.store.to_owned(), DELEM_LV_2));
+        let mut result = String::with_capacity(
+            4 + self.id.len() + expires_at.len() + self.store.len() + if self.auto_renewal { 4 } else { 5 }
+        );
+
+        result.push_str(&self.id);
+        result.push(DELEM_LV_2);
+
+        result.push_str(&expires_at);
+        result.push(DELEM_LV_2);
+
+        result.push_str(if self.auto_renewal { "true" } else { "false" });
+        result.push(DELEM_LV_2);
+
+        result.push_str(&self.store);
+        result.push(DELEM_LV_2);
 
         result
     }
@@ -304,7 +314,7 @@ impl<T: SessionData> SessionHandler<T> for Session {
     /// Set new session key-value pair, returns the old value if the key
     /// already exists
     fn set_data(&mut self, val: T) {
-        self.store = Box::new(val.serialize());
+        self.store = val.serialize();
         self.is_dirty = true;
     }
 
@@ -422,11 +432,14 @@ impl PersistHandler for Session {
             if let Ok(store) = STORE.read() {
                 let mut count: u8 = 0;
                 for (_, val) in store.iter() {
-                    let s = format!("{}{}", val.serialize(), DELEM_LV_1);
+                    let mut s = val.serialize();
 
                     if s.is_empty() {
                         continue;
+                    } else {
+                        s.push(DELEM_LV_1);
                     }
+
                     if let Err(_) = file.write(s.as_bytes()) {
                         continue;
                     }
@@ -471,7 +484,7 @@ fn new_session(id: &str) -> Option<Session> {
         id: next_id,
         expires_at: get_next_expiration(&Utc::now()),
         auto_renewal: true,
-        store: Box::new(String::new()),
+        store: String::new(),
         is_dirty: false,
     };
 
@@ -542,7 +555,7 @@ fn rebuild_session(
     let mut id = String::new();
     let mut expires_at = default_expires.clone();
     let mut auto_renewal = false;
-    let mut store = Box::new(String::new());
+    let mut store = String::new();
 
     for (index, field) in raw.trim().split(DELEM_LV_2).enumerate() {
         match index {
@@ -564,7 +577,7 @@ fn rebuild_session(
             2 => if field.eq("true") {
                 auto_renewal = true;
             },
-            3 => store = Box::new(String::from(field)),
+            3 => store = String::from(field),
             _ => {
                 break;
             }

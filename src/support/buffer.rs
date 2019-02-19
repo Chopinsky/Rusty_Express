@@ -247,17 +247,15 @@ impl BufferSlice {
             None => {},
         }
 
-        unsafe {
-            if let Some(buf) = BUFFER.as_mut() {
-                if buf.closing.load(Ordering::SeqCst) {
-                    return Err(ErrorKind::NotConnected);
-                }
+        if let Some(buf) = unsafe { BUFFER.as_mut() } {
+            if buf.closing.load(Ordering::SeqCst) {
+                return Err(ErrorKind::NotConnected);
+            }
 
-                if self.id < buf.store.len() {
-                    return Ok(buf.store[self.id].as_mut_slice());
-                } else {
-                    return Err(ErrorKind::InvalidData);
-                }
+            if self.id < buf.store.len() {
+                return Ok(buf.store[self.id].as_mut_slice());
+            } else {
+                return Err(ErrorKind::InvalidData);
             }
         }
 
@@ -270,17 +268,15 @@ impl BufferSlice {
             None => {},
         }
 
-        unsafe {
-            if let Some(buf) = BUFFER.as_mut() {
-                if buf.closing.load(Ordering::SeqCst) {
-                    return Err(ErrorKind::NotConnected);
-                }
+        if let Some(buf) = unsafe { BUFFER.as_mut() } {
+            if buf.closing.load(Ordering::SeqCst) {
+                return Err(ErrorKind::NotConnected);
+            }
 
-                if self.id < buf.store.len() {
-                    return Ok(&mut buf.store[self.id]);
-                } else {
-                    return Err(ErrorKind::InvalidData);
-                }
+            if self.id < buf.store.len() {
+                return Ok(&mut buf.store[self.id]);
+            } else {
+                return Err(ErrorKind::InvalidData);
             }
         }
 

@@ -413,7 +413,7 @@ fn write_to_file(file: &mut File, content: &str) {
 }
 
 fn format_content(level: InfoLevel, message: &str, timestamp: DateTime<Utc>) -> String {
-    format!("\n[{}] @ {}: {}", level.to_string(), timestamp.to_rfc3339(), message)
+    ["\r\n[", &level.to_string(), "] @ ", &timestamp.to_rfc3339(), ": ", message].join("")
 }
 
 fn create_dump_file(id: String, loc: &PathBuf) -> Result<File, String> {
@@ -423,11 +423,11 @@ fn create_dump_file(id: String, loc: &PathBuf) -> Result<File, String> {
         }
     }
 
-    let base: String =
+    let base =
         if id.is_empty() {
-            format!("{}.txt", Utc::now().to_string())
+            [&Utc::now().to_string(), ".txt"].join("")
         } else {
-            format!("{}-{}.txt", id, Utc::now().to_string())
+            [&id, "-", &Utc::now().to_string(), ".txt"].join("")
         };
 
     let mut path = loc.to_owned();

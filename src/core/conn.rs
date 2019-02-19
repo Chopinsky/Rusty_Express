@@ -223,11 +223,6 @@ fn deserialize(request: String, store: &mut Box<Request>) -> Option<Callback> {
         return None;
     }
 
-    debug::print(
-        &format!(">>> Printing Request <<< \r\n{}", request),
-        InfoLevel::Info
-    );
-
     let mut res = None;
     let mut baseline_chan = None;
     let mut remainder_chan = None;

@@ -137,9 +137,14 @@ impl ToString for Cookie {
 
         match self.expires {
             Some(time) => {
-                let dt = systemtime_to_utctime(time);
+                let dt =
+                    system_to_utc(time)
+                        .format("%a, %e %b %Y %T GMT")
+                        .to_string();
+
+                cookie.reserve_exact(10 + dt.len());
                 cookie.push_str(" Expires=");
-                cookie.push_str(&dt.format("%a, %e %b %Y %T GMT").to_string());
+                cookie.push_str(&dt);
                 cookie.push(';');
             }
             _ => { /* Nothing */ }
@@ -147,20 +152,27 @@ impl ToString for Cookie {
 
         match self.max_age {
             Some(age) if age > 0 => {
+                let a = age.to_string();
+
+                cookie.reserve_exact(10 + a.len());
                 cookie.push_str(" Max-Age=");
-                cookie.push_str(&age.to_string());
+                cookie.push_str(&a);
                 cookie.push(';');
             }
             _ => { /* Nothing */ }
         }
 
         if !self.domain.is_empty() {
+            cookie.reserve_exact(9 + self.domain.len());
+
             cookie.push_str(" Domain=");
             cookie.push_str(&self.domain);
             cookie.push(';');
         }
 
         if !self.path.is_empty() {
+            cookie.reserve_exact(7 + self.path.len());
+
             cookie.push_str(" Path=");
             cookie.push_str(&self.path);
             cookie.push(';');
@@ -194,7 +206,7 @@ impl Clone for Cookie {
     }
 }
 
-fn systemtime_to_utctime(t: SystemTime) -> DateTime<Utc> {
+fn system_to_utc(t: SystemTime) -> DateTime<Utc> {
     let (sec, n_sec) = match t.duration_since(UNIX_EPOCH) {
         Ok(dur) => (dur.as_secs() as i64, dur.subsec_nanos()),
         Err(e) => {
