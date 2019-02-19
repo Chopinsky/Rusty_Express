@@ -152,7 +152,7 @@ fn stream_shutdown(stream: &TcpStream) -> u8 {
 
 fn parse_request(stream: &TcpStream, request: &mut Box<Request>) -> Result<Callback, ConnError> {
     let mut raw = String::new();
-    if let Some(e) = from_stream(stream, &mut raw) {
+    if let Some(e) = read_stream(stream, &mut raw) {
         return Err(e);
     };
 
@@ -180,7 +180,7 @@ fn parse_request(stream: &TcpStream, request: &mut Box<Request>) -> Result<Callb
     Ok(callback)
 }
 
-fn from_stream(mut stream: &TcpStream, raw_req: &mut String) -> Option<ConnError> {
+fn read_stream(mut stream: &TcpStream, raw_req: &mut String) -> Option<ConnError> {
     let mut buffer = ByteBuffer::slice();
 
     loop {
@@ -197,9 +197,8 @@ fn from_stream(mut stream: &TcpStream, raw_req: &mut String) -> Option<ConnError
                     return Some(ConnError::ReadStreamFailure);
                 }
 
-                println!("{}", len);
-
                 if len == buffer.len() {
+                    // possibly to have more to read, clear the buffer and load it again
                     buffer.reset();
                 } else {
                     break;
@@ -397,7 +396,7 @@ fn split_path(
 ) {
     let uri = source.trim();
     if uri.is_empty() {
-        path.push_str("/");
+        path.push('/');
         return;
     }
 
@@ -419,9 +418,12 @@ fn split_path(
         uri_parts[0] = remains;
 
         if uri_parts[1].is_empty() {
-            path.push_str(&format!("/{}", uri_parts[0])[..]);
+            path.push('/');
+            path.push_str(uri_parts[0]);
         } else {
-            path.push_str(&format!("{}/{}", uri_parts[1], uri_parts[0])[..]);
+            path.push_str(uri_parts[1]);
+            path.push('/');
+            path.push_str(uri_parts[0]);
         };
 
         scheme.push_str(raw_scheme.trim());

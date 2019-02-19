@@ -987,7 +987,7 @@ fn open_file_async(file_path: PathBuf, tx: channel::Sender<Box<String>>) {
 }
 
 fn get_status(status: u16) -> String {
-    let status_base = match status {
+    let status = match status {
         100 => "100 Continue",
         101 => "101 Switching Protocols",
         200 => "200 OK",
@@ -1036,7 +1036,7 @@ fn get_status(status: u16) -> String {
         _ => "403 Forbidden",
     };
 
-    return format!("HTTP/1.1 {}\r\n", status_base);
+    return ["HTTP/1.1 ", status, "\r\n"].join("");
 }
 
 fn default_mime_type_with_ext(ext: &str) -> String {
@@ -1076,16 +1076,14 @@ fn default_mime_type_with_ext(ext: &str) -> String {
         "xul" => String::from("application/vnd.mozilla.xul+xml"),
         "7z" => String::from("application/x-7z-compressed"),
         "svg" => String::from("image/svg+xml"),
-        "csh" | "sh" | "tar" | "wav" => format!("application/x-{}", ext),
-        "csv" | "html" | "htm" => format!("text/{}", ext),
-        "jpeg" | "jpg" | "gif" | "png" | "bmp" | "webp" | "tiff" | "tif" => {
-            format!("image/{}", ext)
-        }
-        "otf" | "ttf" | "woff" | "woff2" => format!("font/{}", ext),
-        "midi" | "mp3" | "aac" | "mid" | "oga" => format!("audio/{}", ext),
-        "webm" | "mp4" | "ogg" | "mpeg" | "ogv" => format!("video/{}", ext),
-        "xml" | "pdf" | "json" | "ogx" | "rtf" | "zip" => format!("application/{}", ext),
-        _ if !ext.is_empty() => format!("application/{}", ext),
+        "csh" | "sh" | "tar" | "wav" => ["application/x-", ext].join(""),
+        "csv" | "html" | "htm" => ["text/", ext].join(""),
+        "jpeg" | "jpg" | "gif" | "png" | "bmp" | "webp" | "tiff" | "tif" => ["image/", ext].join(""),
+        "otf" | "ttf" | "woff" | "woff2" => ["font/", ext].join(""),
+        "midi" | "mp3" | "aac" | "mid" | "oga" => ["audio/", ext].join(""),
+        "webm" | "mp4" | "ogg" | "mpeg" | "ogv" => ["video/", ext].join(""),
+        "xml" | "pdf" | "json" | "ogx" | "rtf" | "zip" => ["application/", ext].join(""),
+        _ if !ext.is_empty() => ["application/", ext].join(""),
         _ => String::from("text/plain"),
     }
 }

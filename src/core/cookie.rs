@@ -125,43 +125,45 @@ impl Cookie {
 
 impl ToString for Cookie {
     fn to_string(&self) -> String {
-        let mut cookie = String::new();
         if self.key.is_empty() || self.value.is_empty() {
-            return cookie;
+            return String::new();
         }
 
-        let key = match self.key_prefix {
-            Some(KeyPrefix::Secure) => format!("__Secure-{}", self.key),
-            Some(KeyPrefix::Host) => format!("__Host-{}", self.key),
-            _ => self.key.to_owned(),
+        let mut cookie = match self.key_prefix {
+            Some(KeyPrefix::Secure) => ["__Secure-", &self.key[..], "=", &self.value[..], ";"].join(""),
+            Some(KeyPrefix::Host) => ["__Host-", &self.key[..], "=", &self.value[..], ";"].join(""),
+            _ => [&self.key[..], "=", &self.value[..], ";"].join(""),
         };
-
-        cookie.push_str(&format!(" {}={};", key, self.value));
 
         match self.expires {
             Some(time) => {
                 let dt = systemtime_to_utctime(time);
-                cookie.push_str(&format!(
-                    " Expires={};",
-                    dt.format("%a, %e %b %Y %T GMT").to_string()
-                ));
+                cookie.push_str(" Expires=");
+                cookie.push_str(&dt.format("%a, %e %b %Y %T GMT").to_string());
+                cookie.push(';');
             }
             _ => { /* Nothing */ }
         }
 
         match self.max_age {
             Some(age) if age > 0 => {
-                cookie.push_str(&format!(" Max-Age={};", age));
+                cookie.push_str(" Max-Age=");
+                cookie.push_str(&age.to_string());
+                cookie.push(';');
             }
             _ => { /* Nothing */ }
         }
 
         if !self.domain.is_empty() {
-            cookie.push_str(&format!(" Domain={};", self.domain));
+            cookie.push_str(" Domain=");
+            cookie.push_str(&self.domain);
+            cookie.push(';');
         }
 
         if !self.path.is_empty() {
-            cookie.push_str(&format!(" Path={};", self.path));
+            cookie.push_str(" Path=");
+            cookie.push_str(&self.path);
+            cookie.push(';');
         }
 
         if self.secure {
