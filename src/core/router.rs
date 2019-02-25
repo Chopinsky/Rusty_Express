@@ -1,4 +1,5 @@
 #![allow(dead_code)]
+#![allow(clippy::borrowed_box)]
 
 use std::fmt;
 use std::path::{Path, PathBuf};
@@ -15,7 +16,7 @@ use crate::support::RouteTrie;
 use regex::Regex;
 
 lazy_static! {
-    static ref ROUTE_FOR_ALL_CONST: REST = REST::OTHER(String::from("*"));
+    static ref ROUTE_FOR_ALL: REST = REST::OTHER(String::from("*"));
     static ref ROUTER: RwLock<Route> = RwLock::new(Route::new());
 }
 
@@ -39,7 +40,7 @@ impl fmt::Display for REST {
             REST::PUT => write!(fmt, "PUT"),
             REST::DELETE => write!(fmt, "DELETE"),
             REST::OPTIONS => write!(fmt, "OPTIONS"),
-            REST::OTHER(ref s) => write!(fmt, "{}", s),
+            REST::OTHER(s) => write!(fmt, "{}", s),
         }
     }
 }
@@ -287,22 +288,20 @@ impl Clone for RouteMap {
     }
 }
 
+#[derive(Default)]
 pub struct Route {
-    store: Box<HashMap<REST, RouteMap>>,
+    store: HashMap<REST, RouteMap>,
     auth_func: Option<AuthFunc>,
 }
 
 impl Route {
     pub fn new() -> Self {
-        Route {
-            store: Box::from(HashMap::new()),
-            auth_func: None,
-        }
+        Default::default()
     }
 
     pub fn get_auth_func() -> Option<AuthFunc> {
         if let Ok(route) = ROUTER.read() {
-            return route.auth_func.clone();
+            return route.auth_func;
         }
 
         None
@@ -323,77 +322,80 @@ impl Route {
         Err(String::from("Unable to define the router, please try again..."))
     }
 
+    pub(crate) fn add_route(method: REST, uri: RequestPath, callback: Callback) {
+        if let Ok(mut route) = ROUTER.write() {
+            route.add(method, uri, callback);
+        }
+    }
+
+    fn add(&mut self, method: REST, uri: RequestPath, callback: Callback) {
+        if let Some(r) = self.store.get_mut(&method) {
+            //find, insert, done.
+            r.insert(uri, callback);
+            return;
+        }
+
+        let mut map = RouteMap::new();
+        map.insert(uri, callback);
+        self.store.insert(method, map);
+    }
+
     fn replace_with(&mut self, mut another: Route) {
         self.store = another.store;
         self.auth_func = another.auth_func.take();
     }
-
-    fn add_route(method: REST, uri: RequestPath, callback: Callback) {
-        if let Ok(mut route) = ROUTER.write() {
-            if let Some(r) = route.store.get_mut(&method) {
-                //find, insert, done.
-                r.insert(uri, callback);
-                return;
-            }
-
-            let mut map = RouteMap::new();
-            map.insert(uri, callback);
-
-            route.store.insert(method, map);
-        }
-    }
 }
 
 pub trait Router {
-    fn get(&mut self, uri: RequestPath, callback: Callback) -> &mut Route;
-    fn patch(&mut self, uri: RequestPath, callback: Callback) -> &mut Route;
-    fn post(&mut self, uri: RequestPath, callback: Callback) -> &mut Route;
-    fn put(&mut self, uri: RequestPath, callback: Callback) -> &mut Route;
-    fn delete(&mut self, uri: RequestPath, callback: Callback) -> &mut Route;
-    fn options(&mut self, uri: RequestPath, callback: Callback) -> &mut Route;
-    fn other(&mut self, method: &str, uri: RequestPath, callback: Callback) -> &mut Route;
-    fn all(&mut self, uri: RequestPath, callback: Callback) -> &mut Route;
-    fn use_static(&mut self, path: &Path) -> &mut Route;
+    fn get(&mut self, uri: RequestPath, callback: Callback) -> &mut Self;
+    fn patch(&mut self, uri: RequestPath, callback: Callback) -> &mut Self;
+    fn post(&mut self, uri: RequestPath, callback: Callback) -> &mut Self;
+    fn put(&mut self, uri: RequestPath, callback: Callback) -> &mut Self;
+    fn delete(&mut self, uri: RequestPath, callback: Callback) -> &mut Self;
+    fn options(&mut self, uri: RequestPath, callback: Callback) -> &mut Self;
+    fn other(&mut self, method: &str, uri: RequestPath, callback: Callback) -> &mut Self;
+    fn all(&mut self, uri: RequestPath, callback: Callback) -> &mut Self;
+    fn use_static(&mut self, path: &Path) -> &mut Self;
 }
 
 impl Router for Route {
-    fn get(&mut self, uri: RequestPath, callback: Callback) -> &mut Route {
-        Route::add_route(REST::GET, uri, callback);
+    fn get(&mut self, uri: RequestPath, callback: Callback) -> &mut Self {
+        self.add(REST::GET, uri, callback);
         self
     }
 
-    fn patch(&mut self, uri: RequestPath, callback: Callback) -> &mut Route {
-        Route::add_route(REST::PATCH, uri, callback);
+    fn patch(&mut self, uri: RequestPath, callback: Callback) -> &mut Self {
+        self.add(REST::PATCH, uri, callback);
         self
     }
 
-    fn post(&mut self, uri: RequestPath, callback: Callback) -> &mut Route {
-        Route::add_route(REST::POST, uri, callback);
+    fn post(&mut self, uri: RequestPath, callback: Callback) -> &mut Self {
+        self.add(REST::POST, uri, callback);
         self
     }
 
-    fn put(&mut self, uri: RequestPath, callback: Callback) -> &mut Route {
-        Route::add_route(REST::PUT, uri, callback);
+    fn put(&mut self, uri: RequestPath, callback: Callback) -> &mut Self {
+        self.add(REST::PUT, uri, callback);
         self
     }
 
-    fn delete(&mut self, uri: RequestPath, callback: Callback) -> &mut Route {
-        Route::add_route(REST::DELETE, uri, callback);
+    fn delete(&mut self, uri: RequestPath, callback: Callback) -> &mut Self {
+        self.add(REST::DELETE, uri, callback);
         self
     }
 
-    fn options(&mut self, uri: RequestPath, callback: Callback) -> &mut Route {
-        Route::add_route(REST::OPTIONS, uri, callback);
+    fn options(&mut self, uri: RequestPath, callback: Callback) -> &mut Self {
+        self.add(REST::OPTIONS, uri, callback);
         self
     }
 
-    fn other(&mut self, method: &str, uri: RequestPath, callback: Callback) -> &mut Route {
+    fn other(&mut self, method: &str, uri: RequestPath, callback: Callback) -> &mut Self {
         if method.is_empty() {
             panic!("Must provide a valid method!");
         }
 
         let request_method = REST::OTHER(method.to_uppercase());
-        Route::add_route(request_method, uri, callback);
+        self.add(request_method, uri, callback);
 
         self
     }
@@ -402,11 +404,11 @@ impl Router for Route {
     /// is used in this framework as a safe fallback, which means that if a different callback
     /// has been defined for the same uri but under a explicitly defined request method (e.g. get,
     /// post, etc.), it will be matched and invoked instead of the "match all" callback functions.
-    fn all(&mut self, uri: RequestPath, callback: Callback) -> &mut Route {
-        self.other("*", uri.clone(), callback)
+    fn all(&mut self, uri: RequestPath, callback: Callback) -> &mut Self {
+        self.other("*", uri, callback)
     }
 
-    fn use_static(&mut self, path: &Path) -> &mut Route {
+    fn use_static(&mut self, path: &Path) -> &mut Self {
         assert!(path.is_dir(), "The static folder location must point to a folder");
 
         //TODO: impl
@@ -417,12 +419,8 @@ impl Router for Route {
 
 pub(crate) trait RouteHandler {
     fn parse_request(callback: Callback, req: &Box<Request>, resp: &mut Box<Response>);
-    fn seek_handler(
-        method: &REST,
-        uri: &str,
-        header_only: bool,
-        tx: channel::Sender<(Option<Callback>, HashMap<String, String>)>,
-    );
+    fn seek_handler(method: &REST, uri: &str, header_only: bool,
+        tx: channel::Sender<(Option<Callback>, HashMap<String, String>)>);
 }
 
 impl RouteHandler for Route {
@@ -462,7 +460,7 @@ impl RouteHandler for Route {
             }
 
             if result.is_none() {
-                if let Some(all_routes) = route_store.store.get(&ROUTE_FOR_ALL_CONST) {
+                if let Some(all_routes) = route_store.store.get(&ROUTE_FOR_ALL) {
                     result = all_routes.seek_path(uri, &mut params);
                 }
             }
@@ -489,8 +487,8 @@ fn search_wildcard_router(routes: &HashMap<String, RegexRoute>, uri: &str) -> Op
 fn search_params_router(
     route_head: &RouteTrie,
     uri: &str,
-) -> (Option<Callback>, Vec<(String, String)>) {
-
+) -> (Option<Callback>, Vec<(String, String)>)
+{
     let raw_segments: Vec<String> =
         uri.trim_matches('/')
             .split('/')

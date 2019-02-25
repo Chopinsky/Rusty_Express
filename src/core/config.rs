@@ -24,14 +24,9 @@ pub struct ServerConfig {
 }
 
 impl ServerConfig {
+    #[inline]
     pub fn new() -> Self {
-        ServerConfig {
-            pool_size: cmp::max(num_cpus::get(), 4),
-            read_timeout: 0,
-            write_timeout: 0,
-            use_session_autoclean: false,
-            session_auto_clean_period: Some(Duration::from_secs(3600)),
-        }
+        Default::default()
     }
 
     #[inline]
@@ -80,7 +75,7 @@ impl ServerConfig {
     }
 
     pub fn get_session_auto_clean_period(&self) -> Option<Duration> {
-        self.session_auto_clean_period.clone()
+        self.session_auto_clean_period
     }
 
     #[inline]
@@ -103,8 +98,20 @@ impl ServerConfig {
     pub fn set_status_page_generator(status: u16, generator: PageGenerator) {
         if status > 0 {
             if let Ok(mut store) = METADATA_STORE.write() {
-                store.status_page_generators.insert(status, generator.clone());
+                store.status_page_generators.insert(status, generator);
             }
+        }
+    }
+}
+
+impl Default for ServerConfig {
+    fn default() -> Self {
+        ServerConfig {
+            pool_size: cmp::max(num_cpus::get(), 4),
+            read_timeout: 0,
+            write_timeout: 0,
+            use_session_autoclean: false,
+            session_auto_clean_period: Some(Duration::from_secs(3600)),
         }
     }
 }
@@ -116,7 +123,7 @@ impl Clone for ServerConfig {
             read_timeout: self.read_timeout,
             write_timeout: self.write_timeout,
             use_session_autoclean: self.use_session_autoclean,
-            session_auto_clean_period: self.session_auto_clean_period.clone(),
+            session_auto_clean_period: self.session_auto_clean_period,
         }
     }
 }
@@ -240,10 +247,7 @@ impl ConnMetadata {
                 return None;
             }
 
-            return match store.status_page_generators.get(&status) {
-                Some(generator) => Some(generator.clone()),
-                _ => None,
-            };
+            return store.status_page_generators.get(&status).cloned();
         }
 
         None

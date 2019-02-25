@@ -130,7 +130,7 @@ pub fn json_flat_stringify(contents: &HashMap<String, Vec<String>>) -> String {
             }
 
 
-            res.push_str(&[field, ":", &json_format_content(content)].join(""));
+            res.push_str(&[field, ":", &json_format_content(content.as_slice())].join(""));
         }
     }
 
@@ -138,7 +138,7 @@ pub fn json_flat_stringify(contents: &HashMap<String, Vec<String>>) -> String {
     res
 }
 
-fn json_format_content(content: &Vec<String>) -> String {
+fn json_format_content(content: &[String]) -> String {
     let len = content.len();
     match len {
         0 => String::new(),
@@ -146,13 +146,13 @@ fn json_format_content(content: &Vec<String>) -> String {
         _ => {
             let mut base = String::from("[");
 
-            for i in 0..len {
-                base.push_str(&content[i]);
+            (0..len).for_each(|idx| {
+                base.push_str(&content[idx]);
 
-                if i != len - 1 {
+                if idx != len - 1 {
                     base.push(',');
                 }
-            }
+            });
 
             base.push(']');
             base

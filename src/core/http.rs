@@ -27,6 +27,7 @@ static LONG_CONN_TIMEOUT: Duration = Duration::from_secs(8);
 
 //TODO: internal registered cache?
 
+
 pub struct Request {
     pub method: REST,
     pub uri: String,
@@ -41,19 +42,9 @@ pub struct Request {
 }
 
 impl Request {
+    #[inline]
     pub fn new() -> Self {
-        Request {
-            method: REST::GET,
-            uri: String::new(),
-            header: HashMap::new(),
-            cookie: HashMap::new(),
-            body: Vec::new(),
-            scheme: HashMap::new(),
-            fragment: String::new(),
-            params: HashMap::new(),
-            host: String::new(),
-            client_info: None,
-        }
+        Default::default()
     }
 
     pub fn header(&self, field: &str) -> Option<String> {
@@ -124,7 +115,7 @@ impl Request {
 
     #[inline]
     pub fn client_info(&self) -> Option<SocketAddr> {
-        self.client_info.clone()
+        self.client_info
     }
 
     #[inline]
@@ -166,7 +157,7 @@ impl Request {
             source.insert(String::from("host"), self.host.to_owned());
         }
 
-        if let Some(addr) = self.client_info.clone() {
+        if let Some(addr) = self.client_info {
             source.insert(String::from("socket_address"), addr.to_string());
         }
 
@@ -187,6 +178,23 @@ impl Request {
 
     pub(crate) fn set_bodies(&mut self, body: Vec<String>) {
         self.body = body;
+    }
+}
+
+impl Default for Request {
+    fn default() -> Self {
+        Request {
+            method: REST::GET,
+            uri: String::new(),
+            header: HashMap::new(),
+            cookie: HashMap::new(),
+            body: Vec::new(),
+            scheme: HashMap::new(),
+            fragment: String::new(),
+            params: HashMap::new(),
+            host: String::new(),
+            client_info: None,
+        }
     }
 }
 
@@ -254,6 +262,7 @@ impl RequestWriter for Request {
     }
 }
 
+#[derive(Default)]
 pub struct Response {
     status: u16,
     can_keep_alive: bool,
@@ -273,22 +282,7 @@ pub struct Response {
 
 impl Response {
     pub fn new() -> Self {
-        Response {
-            status: 0,
-            can_keep_alive: true,
-            keep_alive: false,
-            content_type: String::new(),
-            content_length: None,
-            cookie: Arc::new(HashMap::new()),
-            header: HashMap::new(),
-            header_only: false,
-            body: String::new(),
-            body_tx: None,
-            body_rx: None,
-            redirect: String::new(),
-            notifier: None,
-            subscriber: None,
-        }
+        Default::default()
     }
 
     pub fn new_with_default_header(default_header: HashMap<String, String>) -> Self {
@@ -299,22 +293,19 @@ impl Response {
 
     fn resp_header(&self) -> Box<String> {
         // Get cookie parser to its own thread
-        let receiver: Option<channel::Receiver<String>> = match self.cookie.is_empty() {
-            true => None,
-            false => {
+        let receiver: Option<channel::Receiver<String>> =
+            if self.cookie.is_empty() {
+                None
+            } else  {
                 let (tx, rx) = channel::unbounded();
                 let cookie = Arc::clone(&self.cookie);
 
-                shared_pool::run(
-                    move || {
-                        write_header_cookie(cookie, tx);
-                    },
-                    TaskType::Response,
-                );
+                shared_pool::run(move || {
+                    write_header_cookie(cookie, tx);
+                }, TaskType::Response);
 
                 Some(rx)
-            }
-        };
+            };
 
         let mut header =
             Box::new(write_header_status(self.status, self.has_contents()));
@@ -354,10 +345,12 @@ impl Response {
         }
 
         if !self.header.contains_key("connection") {
-            let (connection, count) = match self.keep_alive {
-                true if self.can_keep_alive => ("keep-alive", 10),
-                _ => ("close", 5),
-            };
+            let (connection, count) =
+                if self.keep_alive && self.can_keep_alive {
+                    ("keep-alive", 10)
+                } else {
+                    ("close", 5)
+                };
 
             header.reserve_exact(14 + count);
             header.push_str("Connection: ");
@@ -841,11 +834,16 @@ impl ResponseManager for Response {
 
         if let Some(ref notifier) = self.notifier {
             // listen to any replies from the server routes
-            for reply in notifier.1.recv_timeout(LONG_CONN_TIMEOUT) {
-                stream_trunk(&reply, buffer);
-                if reply.is_empty() {
-                    // if a 0-length reply, then we're done after the reply and shall break out
-                    break;
+            loop {
+                match notifier.1.recv_timeout(LONG_CONN_TIMEOUT) {
+                    Ok(message) => {
+                        stream_trunk(&message, buffer);
+                        if message.is_empty() {
+                            // if a 0-length reply, then we're done after the reply and shall break out
+                            return;
+                        }
+                    },
+                    Err(_) => return,
                 }
             }
         }
@@ -895,7 +893,7 @@ fn broadcast_new_communications(
     });
 }
 
-fn stream_trunk(content: &String, buffer: &mut BufWriter<&TcpStream>) {
+fn stream_trunk(content: &str, buffer: &mut BufWriter<&TcpStream>) {
     // the content length should have been set in the header, see function resp_header
     write_to_buff(buffer, content.len().to_string().as_bytes());
     write_line_break(buffer);
@@ -966,7 +964,7 @@ fn open_file_async(file_path: PathBuf, tx: channel::Sender<String>) {
     shared_pool::run(move || {
         let mut buf = String::new();
         match open_file(&file_path, &mut buf) {
-            404 | 500 if buf.len() > 0 => {
+            404 | 500 if !buf.is_empty() => {
                 buf.clear();
             }
             _ => { /* Nothing to do here */ }
@@ -1031,7 +1029,7 @@ fn get_status(status: u16) -> String {
         _ => "403 Forbidden",
     };
 
-    return ["HTTP/1.1 ", status, "\r\n"].join("");
+    ["HTTP/1.1 ", status, "\r\n"].join("")
 }
 
 fn default_mime_type_with_ext(ext: &str) -> String {

@@ -33,11 +33,10 @@ impl Clone for Field {
 
 impl PartialEq for Field {
     fn eq(&self, other: &Field) -> bool {
-        if self.name != other.name {
-            false
-        } else if self.is_param != other.is_param {
-            false
-        } else if self.validation.is_some() != other.validation.is_some() {
+        if self.name != other.name
+            || self.is_param != other.is_param
+            || self.validation.is_some() != other.validation.is_some()
+        {
             false
         } else {
             if let Some(ref reg_one) = self.validation {
@@ -81,7 +80,7 @@ impl Node {
             if let Some(child) = self.named_children.get_mut(&head.name) {
                 match segments.len() {
                     0 => {
-                        if let Some(_) = child.callback {
+                        if child.callback.is_some() {
                             panic!("Key collision!");
                         }
 
@@ -122,7 +121,7 @@ impl Clone for Node {
     fn clone(&self) -> Self {
         Node {
             field: self.field.clone(),
-            callback: self.callback.clone(),
+            callback: self.callback,
             named_children: self.named_children.clone(),
             params_children: self.params_children.clone(),
         }
@@ -196,13 +195,11 @@ impl RouteTrie {
             params.push((param_node.field.name.clone(), head.clone()));
 
             if is_segments_tail {
-                if let Some(callback) = param_node.callback {
-                    return Some(callback);
-                }
-            } else {
-                if let Some(callback) = RouteTrie::recursive_find(param_node, &segments[1..], params) {
-                    return Some(callback);
-                }
+                return param_node.callback;
+            }
+
+            if let Some(cb) = RouteTrie::recursive_find(param_node, &segments[1..], params) {
+                return Some(cb);
             }
 
             params.pop();

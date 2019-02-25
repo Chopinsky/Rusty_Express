@@ -1,6 +1,5 @@
 #![allow(dead_code)]
 
-use std::mem;
 use std::sync::{atomic::AtomicBool, atomic::Ordering, Once, ONCE_INIT};
 use std::thread;
 use std::time::Duration;
@@ -195,7 +194,7 @@ pub(crate) fn initialize_with(sizes: Vec<usize>) {
         let pool_sizes: Vec<usize> = sizes
             .iter()
             .map(|val| match val {
-                &0 => 1,
+                0 => 1,
                 _ => *val,
             })
             .collect();
@@ -206,15 +205,12 @@ pub(crate) fn initialize_with(sizes: Vec<usize>) {
             _ => panic!("Requiring vec sizes of 2 for each, or 1 for all"),
         };
 
-        // Make the pool
-        let pool = Some(Pool {
-            req_workers: Box::new(ThreadPool::new(req_size)),
-            resp_workers: Box::new(ThreadPool::new(2 * resp_size)),
-        });
-
         // Put it in the heap so it can outlive this call
         unsafe {
-            POOL = mem::transmute(pool);
+            POOL = Some(Pool {
+                req_workers: Box::new(ThreadPool::new(req_size)),
+                resp_workers: Box::new(ThreadPool::new(2 * resp_size)),
+            });
         }
     });
 }

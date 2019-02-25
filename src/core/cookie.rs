@@ -69,7 +69,7 @@ impl Cookie {
             Some(KeyPrefix::Host) => String::new(),
             _ if path.is_empty() => String::new(),
             _ => {
-                if path.starts_with("/") {
+                if path.starts_with('/') {
                     path.to_owned()
                 } else {
                     panic!("Cookie path must start with '/'");
@@ -135,19 +135,13 @@ impl ToString for Cookie {
             _ => [&self.key[..], "=", &self.value[..], ";"].join(""),
         };
 
-        match self.expires {
-            Some(time) => {
-                let dt =
-                    system_to_utc(time)
-                        .format("%a, %e %b %Y %T GMT")
-                        .to_string();
+        if let Some(time) = self.expires {
+            let dt = system_to_utc(time).format("%a, %e %b %Y %T GMT") .to_string();
 
-                cookie.reserve_exact(10 + dt.len());
-                cookie.push_str(" Expires=");
-                cookie.push_str(&dt);
-                cookie.push(';');
-            }
-            _ => { /* Nothing */ }
+            cookie.reserve_exact(10 + dt.len());
+            cookie.push_str(" Expires=");
+            cookie.push_str(&dt);
+            cookie.push(';');
         }
 
         match self.max_age {
@@ -196,8 +190,8 @@ impl Clone for Cookie {
             key: self.key.clone(),
             value: self.value.clone(),
             key_prefix: self.key_prefix.clone(),
-            expires: self.expires.clone(),
-            max_age: self.max_age.clone(),
+            expires: self.expires,
+            max_age: self.max_age,
             domain: self.domain.clone(),
             path: self.path.clone(),
             secure: self.secure,

@@ -1,3 +1,5 @@
+#![allow(clippy::borrowed_box)]
+
 use std::io::prelude::*;
 use std::io::BufWriter;
 use std::net::{Shutdown, TcpStream};
@@ -18,7 +20,9 @@ use crate::support::{
 
 static HEADER_END: [u8; 2] = [13, 10];
 static FLUSH_RETRY: u8 = 4;
+
 type ExecCode = u8;
+type BaseLine = Option<channel::Receiver<(Option<Callback>, HashMap<String, String>)>>;
 
 #[derive(PartialEq, Eq, Clone, Copy)]
 enum ConnError {
@@ -60,8 +64,9 @@ pub(crate) fn handle_connection(stream: TcpStream) -> ExecCode {
     handle_response(stream,handler, &request, &mut initialize_response())
 }
 
+#[inline]
 pub(crate) fn send_err_resp(stream: TcpStream, err_code: u16) -> ExecCode {
-    return write_to_stream(&stream, &mut build_err_response(err_code));
+    write_to_stream(&stream, &mut build_err_response(err_code))
 }
 
 fn handle_response(
@@ -197,7 +202,7 @@ fn read_stream(mut stream: &TcpStream, raw_req: &mut String) -> Option<ConnError
                     return Some(ConnError::ReadStreamFailure);
                 }
 
-                if len == buffer.len() {
+                if len == buffer.capacity() {
                     // possibly to have more to read, clear the buffer and load it again
                     buffer.reset();
                 } else {
@@ -252,7 +257,7 @@ fn deserialize(request: String, store: &mut Box<Request>) -> Option<Callback> {
                             deserialize_headers(line, is_body, &mut header, &mut cookie, &mut body);
                         }
 
-                        if let Err(_) = tx_remainder.send((header, cookie, body)) {
+                        if tx_remainder.send((header, cookie, body)).is_err() {
                             debug::print("Unable to construct the remainder of the request.", InfoLevel::Error);
                         }
                     }, TaskType::Request);
@@ -288,7 +293,7 @@ fn deserialize(request: String, store: &mut Box<Request>) -> Option<Callback> {
 pub(crate) fn deserialize_baseline(
     source: &str,
     req: &mut Box<Request>
-) -> Option<channel::Receiver<(Option<Callback>, HashMap<String, String>)>>
+) -> BaseLine
 {
     let mut header_only = false;
     let mut raw_scheme = String::new();
@@ -395,10 +400,10 @@ fn split_path(
         return;
     }
 
-    let mut uri_parts: Vec<&str> = uri.rsplitn(2, "/").collect();
+    let mut uri_parts: Vec<&str> = uri.rsplitn(2, '/').collect();
 
     // parse fragment out
-    if let Some(pos) = uri_parts[0].find("#") {
+    if let Some(pos) = uri_parts[0].find('#') {
         let (remains, raw_frag) = uri_parts[0].split_at(pos);
         uri_parts[0] = remains;
 
@@ -408,7 +413,7 @@ fn split_path(
     }
 
     // parse scheme out
-    if let Some(pos) = uri_parts[0].find("?") {
+    if let Some(pos) = uri_parts[0].find('?') {
         let (remains, raw_scheme) = uri_parts[0].split_at(pos);
         uri_parts[0] = remains;
 
@@ -424,7 +429,7 @@ fn split_path(
         scheme.push_str(raw_scheme.trim());
     } else {
         let uri_len = uri.len();
-        if uri_len > 1 && uri.ends_with("/") {
+        if uri_len > 1 && uri.ends_with('/') {
             path.push_str(&uri[..uri_len - 1]);
         } else {
             path.push_str(uri)
@@ -441,22 +446,22 @@ fn cookie_parser(raw: &str, cookie: &mut HashMap<String, String>) {
         return;
     }
 
-    for set in raw.trim().split(";").into_iter() {
-        let pair: Vec<&str> = set.trim().splitn(2, "=").collect();
+    for set in raw.trim().split(';') {
+        let pair: Vec<&str> = set.trim().splitn(2, '=').collect();
         if pair.len() == 2 {
             cookie.add(pair[0].trim(), pair[1].trim().to_owned(), false);
-        } else if pair.len() > 0 {
-            cookie.add(pair[0].trim(), String::from(""), false);
+        } else if !pair.is_empty() {
+            cookie.add(pair[0].trim(), String::new(), false);
         }
     }
 }
 
 fn scheme_parser(scheme: String) -> HashMap<String, Vec<String>> {
     let mut scheme_result: HashMap<String, Vec<String>> = HashMap::new();
-    for (_, kv_pair) in scheme.trim().split("&").enumerate() {
-        let store: Vec<&str> = kv_pair.trim().splitn(2, "=").collect();
+    for (_, kv_pair) in scheme.trim().split('&').enumerate() {
+        let store: Vec<&str> = kv_pair.trim().splitn(2, '=').collect();
 
-        if store.len() > 0 {
+        if !store.is_empty() {
             let key = store[0].trim();
             let val = if store.len() == 2 {
                 store[1].trim().to_owned()

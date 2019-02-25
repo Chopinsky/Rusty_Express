@@ -1,4 +1,5 @@
 #![allow(dead_code)]
+#![allow(clippy::borrowed_box)]
 
 use super::http::{Request, Response};
 use std::sync::RwLock;
@@ -31,7 +32,8 @@ pub fn update_context(req: &Box<Request>, resp: &mut Box<Response>) -> Result<()
 pub fn process_with_context(
     req: &Box<Request>,
     resp: &mut Box<Response>,
-) -> Result<(), &'static str> {
+) -> Result<(), &'static str>
+{
     if let Ok(c) = CONTEXT.read() {
         return c.process(req, resp);
     }

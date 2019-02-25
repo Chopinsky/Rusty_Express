@@ -76,7 +76,7 @@ const DELEM_LV_2: char = '\u{0006}';
 
 lazy_static! {
     static ref STORE: RwLock<HashMap<String, Session>> = RwLock::new(HashMap::new());
-    static ref DEFAULT_LIFETIME: RwLock<Duration> = RwLock::new(Duration::from_secs(172800));
+    static ref DEFAULT_LIFETIME: RwLock<Duration> = RwLock::new(Duration::from_secs(172_800));
     static ref AUTO_CLEARN: AtomicBool = AtomicBool::new(false);
 }
 
@@ -146,7 +146,7 @@ impl Clone for Session {
     fn clone(&self) -> Self {
         Session {
             id: self.id.to_owned(),
-            expires_at: self.expires_at.clone(),
+            expires_at: self.expires_at,
             auto_renewal: self.auto_renewal,
             store: self.store.clone(),
             is_dirty: self.is_dirty,
@@ -284,7 +284,7 @@ impl SessionExchangeConfig for ExchangeConfig {
     }
 
     fn auto_clean_is_running() -> bool {
-        return AUTO_CLEARN.load(atomic::Ordering::Release);
+        AUTO_CLEARN.load(atomic::Ordering::Release)
     }
 }
 
@@ -440,7 +440,7 @@ impl PersistHandler for Session {
                         s.push(DELEM_LV_1);
                     }
 
-                    if let Err(_) = file.write(s.as_bytes()) {
+                    if file.write(s.as_bytes()).is_err() {
                         continue;
                     }
 
@@ -553,7 +553,7 @@ fn rebuild_session(
     }
 
     let mut id = String::new();
-    let mut expires_at = default_expires.clone();
+    let mut expires_at = default_expires;
     let mut auto_renewal = false;
     let mut store = String::new();
 
@@ -584,13 +584,13 @@ fn rebuild_session(
         }
     }
 
-    return Some(Session {
+    Some(Session {
         id,
         expires_at,
         auto_renewal,
         store,
         is_dirty: false,
-    });
+    })
 }
 
 fn get_next_expiration(now: &DateTime<Utc>) -> chrono::DateTime<Utc> {
@@ -600,7 +600,7 @@ fn get_next_expiration(now: &DateTime<Utc>) -> chrono::DateTime<Utc> {
         }
     }
 
-    now.add(chrono::Duration::seconds(172800))
+    now.add(chrono::Duration::seconds(172_800))
 }
 
 fn release(id: String) -> bool {

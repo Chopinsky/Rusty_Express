@@ -71,23 +71,17 @@ use self::support::buffer::ByteBuffer;
 //TODO: Impl middlewear
 
 pub struct HttpServer {
-    router: Route,
     config: ServerConfig,
     state: ServerStates,
 }
 
 impl HttpServer {
     pub fn new() -> Self {
-        HttpServer {
-            router: Route::new(),
-            config: ServerConfig::new(),
-            state: ServerStates::new(),
-        }
+        Default::default()
     }
 
     pub fn new_with_config(config: ServerConfig) -> Self {
         HttpServer {
-            router: Route::new(),
             config,
             state: ServerStates::new(),
         }
@@ -174,7 +168,7 @@ impl HttpServer {
 
         let sender = self.state.get_courier_sender();
 
-        if let Err(_) = sender.send(ControlMessage::HotLoadConfig(self.config.clone())) {
+        if sender.send(ControlMessage::HotLoadConfig(self.config.clone())).is_err() {
             debug::print("Failed to hot reload the configuration", InfoLevel::Error);
         }
     }
@@ -186,7 +180,7 @@ impl HttpServer {
 
         let pool_size = self.config.get_pool_size();
 
-        let mut workers_pool = setup_worker_pools(&pool_size);
+        let mut workers_pool = setup_worker_pools(pool_size);
         workers_pool.toggle_auto_expansion(true);
 
         // create the byte buffer now: 4 times the pool size, plus 1024 bytes for each
@@ -249,8 +243,8 @@ impl HttpServer {
         workers_pool: &mut ThreadPool,
     ) {
         // clone Arc-pointers
-        let read_timeout = self.config.get_read_timeout() as u64;
-        let write_timeout = self.config.get_write_timeout() as u64;
+        let read_timeout = u64::from(self.config.get_read_timeout());
+        let write_timeout = u64::from(self.config.get_write_timeout());
 
         workers_pool.execute(move || {
             stream.set_timeout(read_timeout, write_timeout);
@@ -267,9 +261,19 @@ impl HttpServer {
     }
 }
 
-fn setup_worker_pools(size: &usize) -> ThreadPool {
-    shared_pool::initialize_with(vec![*size]);
-    ThreadPool::new(*size)
+impl Default for HttpServer {
+    fn default() -> Self {
+        HttpServer {
+            //router: Route::new(),
+            config: ServerConfig::new(),
+            state: ServerStates::new(),
+        }
+    }
+}
+
+fn setup_worker_pools(size: usize) -> ThreadPool {
+    shared_pool::initialize_with(vec![size]);
+    ThreadPool::new(size)
 }
 
 trait StreamTimeoutConfig {
@@ -310,8 +314,6 @@ pub trait ServerDef {
 }
 
 impl ServerDef for HttpServer {
-    //todo: impl 'static_folder' or 'static_loc'
-
     fn def_router(&mut self, router: Route) {
         if let Err(err) = Route::use_router(router) {
             eprintln!("An error has taken place when trying to update the router: {}", err);
@@ -369,49 +371,49 @@ impl ServerDef for HttpServer {
 }
 
 impl Router for HttpServer {
-    fn get(&mut self, uri: RequestPath, callback: Callback) -> &mut Route {
-        self.router.get(uri, callback);
-        &mut self.router
+    fn get(&mut self, uri: RequestPath, callback: Callback) -> &mut Self {
+        Route::add_route(REST::GET, uri, callback);
+        self
     }
 
-    fn patch(&mut self, uri: RequestPath, callback: Callback) -> &mut Route {
-        self.router.patch(uri, callback);
-        &mut self.router
+    fn patch(&mut self, uri: RequestPath, callback: Callback) -> &mut Self {
+        Route::add_route(REST::PATCH, uri, callback);
+        self
     }
 
-    fn post(&mut self, uri: RequestPath, callback: Callback) -> &mut Route {
-        self.router.post(uri, callback);
-        &mut self.router
+    fn post(&mut self, uri: RequestPath, callback: Callback) -> &mut Self {
+        Route::add_route(REST::POST, uri, callback);
+        self
     }
 
-    fn put(&mut self, uri: RequestPath, callback: Callback) -> &mut Route {
-        self.router.put(uri, callback);
-        &mut self.router
+    fn put(&mut self, uri: RequestPath, callback: Callback) -> &mut Self {
+        Route::add_route(REST::PUT, uri, callback);
+        self
     }
 
-    fn delete(&mut self, uri: RequestPath, callback: Callback) -> &mut Route {
-        self.router.delete(uri, callback);
-        &mut self.router
+    fn delete(&mut self, uri: RequestPath, callback: Callback) -> &mut Self {
+        Route::add_route(REST::DELETE, uri, callback);
+        self
     }
 
-    fn options(&mut self, uri: RequestPath, callback: Callback) -> &mut Route {
-        self.router.options(uri, callback);
-        &mut self.router
+    fn options(&mut self, uri: RequestPath, callback: Callback) -> &mut Self {
+        Route::add_route(REST::OPTIONS, uri, callback);
+        self
     }
 
-    fn other(&mut self, method: &str, uri: RequestPath, callback: Callback) -> &mut Route {
-        self.router.other(method, uri, callback);
-        &mut self.router
+    fn other(&mut self, method: &str, uri: RequestPath, callback: Callback) -> &mut Self {
+        Route::add_route(REST::OTHER(method.to_uppercase()), uri, callback);
+        self
     }
 
-    fn all(&mut self, uri: RequestPath, callback: Callback) -> &mut Route {
-        self.router.all(uri, callback);
-        &mut self.router
+    fn all(&mut self, uri: RequestPath, callback: Callback) -> &mut Self {
+        self.other("*", uri, callback);
+        self
     }
 
-    fn use_static(&mut self, path: &Path) -> &mut Route {
-        self.router.use_static(path);
-        &mut self.router
+    fn use_static(&mut self, path: &Path) -> &mut Self {
+        //Route::use_static(path);
+        unimplemented!();
     }
 }
 

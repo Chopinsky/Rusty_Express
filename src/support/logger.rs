@@ -20,9 +20,9 @@ lazy_static! {
     static ref CONFIG: RwLock<LoggerConfig> = RwLock::new(LoggerConfig::initialize(""));
 }
 
-const DEFAULT_LOCATION: &'static str = "./logs";
-const ONCE: Once = ONCE_INIT;
+const DEFAULT_LOCATION: &str = "./logs";
 
+static ONCE: Once = ONCE_INIT;
 static mut SENDER: Option<channel::Sender<LogInfo>> = None;
 static mut REFRESH_HANDLER: Option<thread::JoinHandle<()>> = None;
 static mut DUMPING_RUNNING: AtomicBool = AtomicBool::new(false);
@@ -111,11 +111,11 @@ impl LogWriter for DefaultLogWriter {
                 }
 
                 let mut content: String = String::new();
-                let mut count = 0;
 
-                for info in log_store {
-                    count += 1;
-                    content.push_str(&format_content(info.level, &info.message, info.time));
+                for (count, info) in log_store.iter().enumerate() {
+                    content.push_str(
+                        &format_content(&info.level, &info.message, info.time)
+                    );
 
                     if count % 10 == 0 {
                         write_to_file(&mut file, &content);
@@ -294,7 +294,7 @@ fn initialize() {
                     path.to_str().unwrap(), refresh
                 );
 
-                start_refresh(config.refresh_period.clone());
+                start_refresh(config.refresh_period);
             }
 
             config.rx_handler = Some(thread::spawn(move || {
@@ -368,7 +368,7 @@ fn dump_log() {
                 }
 
                 write_to_file(&mut file, &format_content(
-                    InfoLevel::Info,
+                    &InfoLevel::Info,
                     "A dumping process is already in progress, skipping this scheduled dump.",
                     Utc::now()
                 ));
@@ -412,7 +412,7 @@ fn write_to_file(file: &mut File, content: &str) {
     });
 }
 
-fn format_content(level: InfoLevel, message: &str, timestamp: DateTime<Utc>) -> String {
+fn format_content(level: &InfoLevel, message: &str, timestamp: DateTime<Utc>) -> String {
     ["\r\n[", &level.to_string(), "] @ ", &timestamp.to_rfc3339(), ": ", message].join("")
 }
 

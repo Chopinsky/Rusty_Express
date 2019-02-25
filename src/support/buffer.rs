@@ -8,11 +8,11 @@ use std::thread;
 use std::vec;
 use crate::channel::{self as channel, Sender, Receiver};
 
-const ONCE: Once = ONCE_INIT;
 const LOCK_TIMEOUT: Duration = Duration::from_millis(64);
 const DEFAULT_GROWTH: u8 = 4;
 const DEFAULT_CAPACITY: usize = 512;
 
+static ONCE: Once = ONCE_INIT;
 static mut LOCK: AtomicBool = AtomicBool::new(false);
 static mut BUFFER: Option<BufferPool> = None;
 static mut SIZE_CAP: AtomicUsize = AtomicUsize::new(65535);
@@ -165,7 +165,7 @@ trait BufferManagement {
 
 impl BufferManagement for BufferPool {
     fn make(buf: BufferPool) {
-        unsafe { BUFFER = Some(buf); }
+        unsafe { BUFFER.replace(buf); }
     }
 
     fn reset_and_release(id: usize) {
@@ -181,11 +181,16 @@ impl BufferManagement for BufferPool {
     }
 
     fn handle_work(rx: Receiver<WorkerOp>) {
-        for message in rx.recv() {
-            match message {
-                WorkerOp::Cleanup(id) => BufferPool::manage(BufOp::Release(id)),
-                WorkerOp::Shutdown => return,
-            };
+        loop {
+            match rx.recv() {
+                Ok(message) => {
+                    match message {
+                        WorkerOp::Cleanup(id) => BufferPool::manage(BufOp::Release(id)),
+                        WorkerOp::Shutdown => return,
+                    };
+                },
+                Err(_) => return,
+            }
         }
     }
 
@@ -242,9 +247,8 @@ pub(crate) struct BufferSlice {
 
 impl BufferSlice {
     pub(crate) fn as_writable(&mut self) -> Result<&mut [u8], ErrorKind> {
-        match self.fallback {
-            Some(ref mut vec) => return Ok(vec.as_mut_slice()),
-            None => {},
+        if let Some(fb) = self.fallback.as_mut() {
+            return Ok(fb.as_mut_slice());
         }
 
         if let Some(buf) = unsafe { BUFFER.as_mut() } {
@@ -263,9 +267,8 @@ impl BufferSlice {
     }
 
     pub(crate) fn as_writable_vec(&mut self) -> Result<&mut Vec<u8>, ErrorKind> {
-        match self.fallback {
-            Some(ref mut vec) => return Ok(vec),
-            None => {},
+        if let Some(fb) = self.fallback.as_mut() {
+            return Ok(fb);
         }
 
         if let Some(buf) = unsafe { BUFFER.as_mut() } {
@@ -284,9 +287,8 @@ impl BufferSlice {
     }
 
     pub(crate) fn read(&self) -> Result<&[u8], ErrorKind> {
-        match self.fallback {
-            Some(ref vec) => return Ok(vec.as_slice()),
-            None => {},
+        if let Some(fb) = self.fallback.as_ref() {
+            return Ok(fb.as_slice());
         }
 
         unsafe {
@@ -311,29 +313,36 @@ impl BufferSlice {
     }
 
     pub(crate) fn reset(&mut self) {
-        unsafe {
-            if let Some(buf) = BUFFER.as_mut() {
-                buf.reset(self.id);
-            }
+        if let Some(fb) = self.fallback.as_mut() {
+            fb.iter_mut().for_each(|val| {
+                *val = 0;
+            });
+        }
+
+        if let Some(buf) = unsafe { BUFFER.as_mut() } {
+            buf.reset(self.id);
         }
     }
 
     pub(crate) fn try_into_string(&self) -> Result<&str, ErrorKind> {
-        let buf = self.read()?;
-        match str::from_utf8(buf) {
+        match str::from_utf8(self.read()?) {
             Ok(raw) => Ok(raw),
             Err(e) => Err(ErrorKind::InvalidData),
         }
     }
 
-    pub(crate) fn len(&self) -> usize {
-        unsafe {
-            if let Some(buf) = BUFFER.as_mut() {
-                buf.store[self.id].len()
-            } else {
-                0
-            }
+    pub(crate) fn capacity(&self) -> usize {
+        match self.fallback.as_ref() {
+            Some(fb) => fb.capacity(),
+            None => {
+                if let Some(buf) = unsafe { BUFFER.as_mut() } {
+                    buf.store[self.id].capacity()
+                } else {
+                    0
+                }
+            },
         }
+
     }
 }
 
@@ -352,18 +361,12 @@ fn lock() -> Result<(), ErrorKind> {
 
     loop {
         unsafe {
-            match LOCK.compare_exchange(
+            if let Ok(false) = LOCK.compare_exchange(
                 false, true, Ordering::SeqCst, Ordering::SeqCst
             ) {
-                Ok(res) => if res == false {
-                    // if not locked previously, we've grabbed the lock and break the wait
-                    break;
-                },
-                Err(_) => {
-                    // locked by someone else,
-                },
+                break;
             }
-        };
+        }
 
         match start.elapsed() {
             Ok(period) => {
