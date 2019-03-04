@@ -1,4 +1,8 @@
 # 2019-01
+## 0.4.2
+- Small fixes
+
+# 2019-01
 ## 0.4.1
 - Default read/write timeout to 0, unless specified otherwise
 - More rewrite to boost performance

@@ -5,6 +5,7 @@ use std::io::prelude::*;
 use std::io::{BufReader, BufWriter};
 use std::net::{SocketAddr, TcpStream};
 use std::path::{Path, PathBuf};
+use std::str;
 use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
@@ -12,7 +13,7 @@ use std::time::Duration;
 use crate::core::config::{ConnMetadata, EngineContext, ServerConfig, ViewEngineParser};
 use crate::core::cookie::*;
 use crate::core::router::REST;
-use crate::support::{common::*, debug, debug::InfoLevel, shared_pool, TaskType, buffer::ByteBuffer};
+use crate::support::{common::*, debug, debug::InfoLevel, shared_pool, TaskType};
 use crate::channel;
 use hashbrown::{hash_map::Iter, HashMap};
 use chrono::prelude::*;
@@ -855,7 +856,7 @@ fn broadcast_new_communications(
     mut stream_clone: TcpStream,
 ) {
     thread::spawn(move || {
-        let mut buffer = ByteBuffer::slice();
+        let mut buffer = [0u8; 512];
 
         loop {
             if let Err(e) = stream_clone.take_error() {
@@ -866,7 +867,7 @@ fn broadcast_new_communications(
                 break;
             }
 
-            if let Err(e) = stream_clone.read(buffer.as_writable().unwrap()) {
+            if let Err(e) = stream_clone.read(&mut buffer) {
                 debug::print(
                     &format!("Unable to continue reading from a keep-alive stream: {}", e),
                     InfoLevel::Warning,
@@ -874,7 +875,7 @@ fn broadcast_new_communications(
                 break;
             }
 
-            if let Ok(result) = buffer.try_into_string() {
+            if let Ok(result) = str::from_utf8(&buffer) {
                 if result.is_empty() {
                     continue;
                 }

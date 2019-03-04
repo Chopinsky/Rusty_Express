@@ -15,7 +15,7 @@ use crate::core::http::{
 };
 use crate::support::{
     common::flush_buffer, common::write_to_buff, common::MapUpdates, debug, debug::InfoLevel,
-    shared_pool, TaskType, buffer::ByteBuffer,
+    shared_pool, TaskType,
 };
 
 static HEADER_END: [u8; 2] = [13, 10];
@@ -186,12 +186,12 @@ fn parse_request(stream: &TcpStream, request: &mut Box<Request>) -> Result<Callb
 }
 
 fn read_stream(mut stream: &TcpStream, raw_req: &mut String) -> Option<ConnError> {
-    let mut buffer = ByteBuffer::slice();
+    let mut buffer = [0u8; 512];
 
     loop {
-        match stream.read(buffer.as_writable().unwrap()) {
+        match stream.read(&mut buffer) {
             Ok(len) => {
-                if let Ok(req_slice) = buffer.try_into_string() {
+                if let Ok(req_slice) = str::from_utf8(&buffer) {
                     raw_req.push_str(req_slice);
                 } else {
                     debug::print(
@@ -202,9 +202,11 @@ fn read_stream(mut stream: &TcpStream, raw_req: &mut String) -> Option<ConnError
                     return Some(ConnError::ReadStreamFailure);
                 }
 
-                if len == buffer.capacity() {
+                if len == 512 {
                     // possibly to have more to read, clear the buffer and load it again
-                    buffer.reset();
+                    buffer.iter_mut().for_each(|val| {
+                        *val = 0;
+                    });
                 } else {
                     break;
                 }

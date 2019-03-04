@@ -4,7 +4,6 @@ mod trie;
 #[cfg(feature = "logger")] pub mod logger;
 #[cfg(feature = "session")] pub mod session;
 
-pub(crate) mod buffer;
 pub(crate) mod common;
 pub(crate) mod debug;
 pub(crate) mod shared_pool {

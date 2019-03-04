@@ -25,13 +25,10 @@ expect to make less, if none, break changes, but please do let us know if you've
 that we should fix, or have met performance bottle necks that we shall try to improve.
 
 
-## What's new in 0.3.6
-- Router has been updated for better performance.
-- Native logger service. More documentation coming in 0.4.0.
-- Next version will be in 0.4.x after updating to the Rust 2018 version and fixing lexical differences. 
+## What's new in 0.4.2
+- Small fixes
 
-
-## Migrating from 0.2.x to 0.3.0 
+## Migrating from 0.2.x to 0.3.0 and beyond
 0.2.x versions are good experiments with this project. But we're growing fast with better
 features and more performance enhancement! That's why we need to start the 0.3.x versions
 with slight changes to the interface APIs. 

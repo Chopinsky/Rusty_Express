@@ -53,8 +53,8 @@ impl PartialEq for Field {
 struct Node {
     field: Field,
     callback: Option<Callback>,
-    named_children: HashMap<String, Box<Node>>,
-    params_children: Vec<Box<Node>>,
+    named_children: HashMap<String, Node>,
+    params_children: Vec<Node>,
 }
 
 impl Node {
@@ -103,15 +103,15 @@ impl Node {
         self.params_children.push(Node::build_new_child(head, segments, callback));
     }
 
-    fn build_new_child(field: Field, segments: Vec<Field>, callback: Callback) -> Box<Node> {
+    fn build_new_child(field: Field, segments: Vec<Field>, callback: Callback) -> Node {
         match segments.len() {
             0 => {
-                Box::new(Node::new(field, Some(callback)))
+                Node::new(field, Some(callback))
             },
             _ => {
                 let mut node = Node::new(field, None);
                 node.insert(segments, callback);
-                Box::new(node)
+                node
             }
         }
     }
