@@ -1,10 +1,12 @@
 #![allow(dead_code)]
 
-use std::sync::{atomic::AtomicBool, atomic::Ordering, Once, ONCE_INIT};
+use std::sync::{atomic::AtomicBool, atomic::Ordering};
 use std::thread;
 use std::time::Duration;
+
+use crate::channel::{self, Receiver, SendTimeoutError, Sender};
 use crate::support::debug::{self, InfoLevel};
-use crate::channel::{self, Receiver, Sender, SendTimeoutError};
+use parking_lot::{Once, ONCE_INIT};
 
 const CHAN_SIZE: usize = 512;
 const POOL_CAP: usize = 65535;
@@ -66,8 +68,8 @@ impl ThreadPool {
     }
 
     pub(crate) fn execute<F>(&mut self, f: F)
-        where
-            F: FnOnce() + Send + 'static,
+    where
+        F: FnOnce() + Send + 'static,
     {
         self.dispatch(Message::NewJob(Box::new(f)), 0);
     }
@@ -84,7 +86,7 @@ impl ThreadPool {
                     t.join().unwrap_or_else(|err| {
                         debug::print(
                             &format!("Failed to retire worker: {}, error: {:?}", worker.id, err),
-                            InfoLevel::Error
+                            InfoLevel::Error,
                         )
                     });
                 }
@@ -93,7 +95,10 @@ impl ThreadPool {
     }
 
     fn dispatch(&mut self, message: Message, retry: u8) {
-        match self.sender.send_timeout(message, Duration::from_millis(2048)) {
+        match self
+            .sender
+            .send_timeout(message, Duration::from_millis(2048))
+        {
             Err(SendTimeoutError::Timeout(msg)) => {
                 debug::print("Unable to distribute the job: execution timed out, all workers are busy for too long", InfoLevel::Error);
 
@@ -101,25 +106,35 @@ impl ThreadPool {
                     if self.auto_expansion && self.workers.len() + POOL_INC_STEP < POOL_CAP {
                         let start = self.workers.len();
                         (0..POOL_INC_STEP).for_each(|id| {
-                            self.workers.push(Worker::new(start + id, self.receiver.clone()));
+                            self.workers
+                                .push(Worker::new(start + id, self.receiver.clone()));
                         });
                     }
 
-                    debug::print(&format!("Try again for the {} times...", retry + 1), InfoLevel::Error);
+                    debug::print(
+                        &format!("Try again for the {} times...", retry + 1),
+                        InfoLevel::Error,
+                    );
                     self.dispatch(msg, retry + 1);
                 }
-            },
+            }
             Err(SendTimeoutError::Disconnected(_)) => {
-                debug::print("Unable to distribute the job: workers have been dropped: {}", InfoLevel::Error);
-            },
-            _ => {},
+                debug::print(
+                    "Unable to distribute the job: workers have been dropped: {}",
+                    InfoLevel::Error,
+                );
+            }
+            _ => {}
         };
     }
 }
 
 impl Drop for ThreadPool {
     fn drop(&mut self) {
-        debug::print("Job done, sending terminate message to all workers.", InfoLevel::Info);
+        debug::print(
+            "Job done, sending terminate message to all workers.",
+            InfoLevel::Info,
+        );
         self.close();
     }
 }
@@ -145,7 +160,7 @@ impl Worker {
                         Message::Terminate => {
                             IS_CLOSING.store(true, Ordering::SeqCst);
                             return;
-                        },
+                        }
                     }
                 }
 
@@ -169,7 +184,7 @@ impl Drop for Worker {
             thread.join().unwrap_or_else(|err| {
                 debug::print(
                     &format!("Unable to drop worker: {}, error: {:?}", self.id, err),
-                    InfoLevel::Error
+                    InfoLevel::Error,
                 );
             });
         }

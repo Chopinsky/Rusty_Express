@@ -2,10 +2,10 @@
 
 use super::config::ServerConfig;
 use super::router::Route;
-use std::thread::*;
 use crate::channel::{self, TryRecvError};
-use crate::support::session::*;
 use crate::support::debug::{self, InfoLevel};
+use crate::support::session::*;
+use std::thread::*;
 
 pub enum ControlMessage {
     Terminate,
@@ -51,13 +51,14 @@ impl ServerStates {
     pub(crate) fn courier_fetch(&self) -> Option<ControlMessage> {
         match self.courier_channel.1.try_recv() {
             Ok(msg) => Some(msg),
-            Err(TryRecvError::Empty) => {
-                None
-            },
+            Err(TryRecvError::Empty) => None,
             Err(e) => {
-                debug::print(&format!("Hot load channel disconnected: {:?}", e), InfoLevel::Warning);
+                debug::print(
+                    &format!("Hot load channel disconnected: {:?}", e),
+                    InfoLevel::Warning,
+                );
                 None
-            },
+            }
         }
     }
 

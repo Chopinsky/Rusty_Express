@@ -1,12 +1,11 @@
 #![allow(dead_code)]
 
-use std::cmp;
-use std::sync::RwLock;
-use std::time::Duration;
-
-use crate::num_cpus;
 use crate::hashbrown::HashMap;
+use crate::num_cpus;
 use crate::support::common::*;
+use parking_lot::RwLock;
+use std::cmp;
+use std::time::Duration;
 
 //TODO: load config from file, e.g. config.toml
 
@@ -84,22 +83,19 @@ impl ServerConfig {
     }
 
     pub fn use_default_header(header: HashMap<String, String>) {
-        if let Ok(mut store) = METADATA_STORE.write() {
-            store.header = Box::new(header);
-        }
+        let mut store = METADATA_STORE.write();
+        (*store).header = Box::new(header);
     }
 
     pub fn set_default_header(field: String, value: String, replace: bool) {
-        if let Ok(mut store) = METADATA_STORE.write() {
-            store.header.add(&field[..], value, replace);
-        }
+        let mut store = METADATA_STORE.write();
+        (*store).header.add(&field[..], value, replace);
     }
 
     pub fn set_status_page_generator(status: u16, generator: PageGenerator) {
         if status > 0 {
-            if let Ok(mut store) = METADATA_STORE.write() {
-                store.status_page_generators.insert(status, generator);
-            }
+            let mut store = METADATA_STORE.write();
+            (*store).status_page_generators.insert(status, generator);
         }
     }
 }
@@ -178,9 +174,8 @@ impl ViewEngineDefinition for ServerConfig {
             return;
         }
 
-        if let Ok(mut engines) = VIEW_ENGINES.write() {
-            engines.insert(extension.to_owned(), Box::new(engine));
-        }
+        let mut engines = VIEW_ENGINES.write();
+        (*engines).insert(extension.to_owned(), Box::new(engine));
     }
 }
 
@@ -202,15 +197,12 @@ impl ViewEngineParser for ServerConfig {
             return 0;
         }
 
-        if let Ok(template_engines) = VIEW_ENGINES.read() {
-            if let Some(engine) = template_engines.get(extension) {
-                return engine(content, context);
-            } else {
-                return 404;
-            }
+        let template_engines = VIEW_ENGINES.read();
+        if let Some(engine) = template_engines.get(extension) {
+            return engine(content, context);
+        } else {
+            return 404;
         }
-
-        500
     }
 }
 
@@ -231,10 +223,9 @@ impl ConnMetadata {
 
     #[inline]
     pub fn get_default_header() -> Option<HashMap<String, String>> {
-        if let Ok(store) = METADATA_STORE.read() {
-            if !store.header.is_empty() {
-                return Some((*store.header).clone());
-            }
+        let store = METADATA_STORE.read();
+        if !store.header.is_empty() {
+            return Some((*store.header).clone());
         }
 
         None
@@ -242,15 +233,12 @@ impl ConnMetadata {
 
     #[inline]
     pub(crate) fn get_status_pages(status: u16) -> Option<PageGenerator> {
-        if let Ok(store) = METADATA_STORE.read() {
-            if store.status_page_generators.is_empty() {
-                return None;
-            }
-
-            return store.status_page_generators.get(&status).cloned();
+        let store = METADATA_STORE.read();
+        if store.status_page_generators.is_empty() {
+            return None;
         }
 
-        None
+        store.status_page_generators.get(&status).cloned()
     }
 }
 

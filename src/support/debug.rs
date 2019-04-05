@@ -1,5 +1,5 @@
 use std::env;
-use std::sync::{Once, ONCE_INIT};
+use parking_lot::{Once, ONCE_INIT};
 use chrono::prelude::{DateTime, Utc};
 
 static ONCE: Once = ONCE_INIT;

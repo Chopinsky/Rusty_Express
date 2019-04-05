@@ -2,7 +2,7 @@
 #![allow(clippy::borrowed_box)]
 
 use super::http::{Request, Response};
-use std::sync::RwLock;
+use parking_lot::RwLock;
 
 lazy_static! {
     static ref CONTEXT: RwLock<Box<ServerContextProvider>> = RwLock::new(Box::new(EmptyContext {}));
@@ -16,29 +16,21 @@ pub trait ContextProvider {
 }
 
 pub fn set_context(context: Box<ServerContextProvider>) {
-    if let Ok(mut c) = CONTEXT.write() {
-        *c = context;
-    }
+    let mut c = CONTEXT.write();
+    *c = context;
 }
 
 pub fn update_context(req: &Box<Request>, resp: &mut Box<Response>) -> Result<(), &'static str> {
-    if let Ok(mut c) = CONTEXT.write() {
-        return c.update(req, resp);
-    }
-
-    Err("Unable to lock and update the context")
+    let mut c = CONTEXT.write();
+    c.update(req, resp)
 }
 
 pub fn process_with_context(
     req: &Box<Request>,
     resp: &mut Box<Response>,
-) -> Result<(), &'static str>
-{
-    if let Ok(c) = CONTEXT.read() {
-        return c.process(req, resp);
-    }
-
-    Err("Unable to lock and process the response with the context")
+) -> Result<(), &'static str> {
+    let c = CONTEXT.read();
+    c.process(req, resp)
 }
 
 struct EmptyContext;

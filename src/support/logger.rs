@@ -7,13 +7,14 @@ use std::fmt;
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::io::Write;
-use std::sync::{atomic::{AtomicBool, Ordering}, Mutex, Once, RwLock, ONCE_INIT};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
 use std::time::Duration;
 
 use crate::channel::{self, SendError};
+use crate::chrono::{DateTime, Utc};
 use crate::debug;
-use chrono::{DateTime, Utc};
+use crate::parking_lot::{Once, ONCE_INIT, Mutex, RwLock};
 
 lazy_static! {
     static ref TEMP_STORE: Mutex<Vec<LogInfo>> = Mutex::new(Vec::new());
@@ -103,33 +104,33 @@ impl DefaultLogWriter {
 
 impl LogWriter for DefaultLogWriter {
     fn dump(&self, log_store: Vec<LogInfo>) -> Result<(), Vec<LogInfo>> {
-        if let Ok(config) = CONFIG.read() {
-            if let Ok(mut file) = DefaultLogWriter::get_log_file(&config) {
-                // Now start a new dump
-                if let Some(meta_func) = config.meta_info_provider {
-                    write_to_file(&mut file, &meta_func(true));
-                }
+        let config = CONFIG.read();
 
-                let mut content: String = String::new();
-
-                for (count, info) in log_store.iter().enumerate() {
-                    content.push_str(
-                        &format_content(&info.level, &info.message, info.time)
-                    );
-
-                    if count % 10 == 0 {
-                        write_to_file(&mut file, &content);
-                        content.clear();
-                    }
-                }
-
-                // write the remainder of the content
-                if !content.is_empty() {
-                    write_to_file(&mut file, &content);
-                }
-
-                return Ok(());
+        if let Ok(mut file) = DefaultLogWriter::get_log_file(&config) {
+            // Now start a new dump
+            if let Some(meta_func) = config.meta_info_provider {
+                write_to_file(&mut file, &meta_func(true));
             }
+
+            let mut content: String = String::new();
+
+            for (count, info) in log_store.iter().enumerate() {
+                content.push_str(
+                    &format_content(&info.level, &info.message, info.time)
+                );
+
+                if count % 10 == 0 {
+                    write_to_file(&mut file, &content);
+                    content.clear();
+                }
+            }
+
+            // write the remainder of the content
+            if !content.is_empty() {
+                write_to_file(&mut file, &content);
+            }
+
+            return Ok(());
         }
 
         Err(log_store)
@@ -227,34 +228,34 @@ pub(crate) fn start(
     log_folder_path: Option<&str>,
     meta_info_provider: Option<fn(bool) -> String>)
 {
-    if let Ok(mut config) = CONFIG.write() {
+    {
+        let mut config = CONFIG.write();
+
         if let Some(time) = period {
             if time != 1800 {
-                config.refresh_period = Duration::from_secs(time);
+                (*config).refresh_period = Duration::from_secs(time);
             }
         }
 
         if let Some(path) = log_folder_path {
-            config.set_log_folder_path(path);
+            (*config).set_log_folder_path(path);
         }
-        
-        config.meta_info_provider = meta_info_provider;
+
+        (*config).meta_info_provider = meta_info_provider;
     }
 
     initialize();
-
     set_log_writer(DefaultLogWriter {});
 }
 
 pub(crate) fn shutdown() {
     stop_refresh();
 
-    if let Ok(mut config) = CONFIG.write() {
-        if let Some(rx) = config.rx_handler.take() {
-            rx.join().unwrap_or_else(|err| {
-                eprintln!("Encountered error while closing the logger: {:?}", err);
-            });
-        }
+    let mut config = CONFIG.write();
+    if let Some(rx) = (*config).rx_handler.take() {
+        rx.join().unwrap_or_else(|err| {
+            eprintln!("Encountered error while closing the logger: {:?}", err);
+        });
     }
 
     let final_msg = LogInfo {
@@ -281,30 +282,29 @@ pub(crate) fn shutdown() {
 
 fn initialize() {
     ONCE.call_once(|| {
-        let (tx, rx): (channel::Sender<LogInfo>, channel::Receiver<LogInfo>) = channel::unbounded();
+        let (tx, rx): (channel::Sender<LogInfo>, channel::Receiver<LogInfo>) = channel::bounded(16);
 
         unsafe { SENDER = Some(tx); }
 
-        if let Ok(mut config) = CONFIG.write() {
-            if let Some(ref path) = config.log_folder_path {
-                let refresh = config.refresh_period.as_secs();
+        let mut config = CONFIG.write();
 
-                println!(
-                    "The logger has started, it will refresh log to folder {:?} every {} seconds",
-                    path.to_str().unwrap(), refresh
-                );
+        if let Some(ref path) = (*config).log_folder_path {
+            let refresh = (*config).refresh_period.as_secs();
 
-                start_refresh(config.refresh_period);
-            }
+            println!(
+                "The logger has started, it will refresh log to folder {:?} every {} seconds",
+                path.to_str().unwrap(), refresh
+            );
 
-            config.rx_handler = Some(thread::spawn(move || {
-                for info in rx {
-                    if let Ok(mut store) = TEMP_STORE.lock() {
-                        store.push(info);
-                    }
-                }
-            }));
+            start_refresh((*config).refresh_period);
         }
+
+        (*config).rx_handler = Some(thread::spawn(move || {
+            for info in rx {
+                let mut store = TEMP_STORE.lock();
+                (*store).push(info);
+            }
+        }));
     });
 }
 
@@ -342,18 +342,14 @@ fn reset_refresh(period: Option<Duration>) {
     thread::spawn(move || {
         stop_refresh();
 
-        let new_period =
-            if let Ok(mut config) = CONFIG.write() {
-                if let Some(p) = period {
-                    config.set_refresh_period(p);
-                }
+        let new_period = {
+            let mut config = CONFIG.write();
+            if let Some(p) = period {
+                (*config).set_refresh_period(p);
+            }
 
-                config.get_refresh_period()
-
-            } else {
-
-                Duration::from_secs(1800)
-            };
+            (*config).get_refresh_period()
+        };
 
         start_refresh(new_period);
     });
@@ -361,29 +357,27 @@ fn reset_refresh(period: Option<Duration>) {
 
 fn dump_log() {
     if unsafe { DUMPING_RUNNING.load(Ordering::SeqCst) } {
-        if let Ok(config) = CONFIG.read() {
-            if let Ok(mut file) = DefaultLogWriter::get_log_file(&config) {
-                if let Some(meta_func) = config.meta_info_provider {
-                    write_to_file(&mut file, &meta_func(false));
-                }
+        let config = CONFIG.read();
 
-                write_to_file(&mut file, &format_content(
-                    &InfoLevel::Info,
-                    "A dumping process is already in progress, skipping this scheduled dump.",
-                    Utc::now()
-                ));
+        if let Ok(mut file) = DefaultLogWriter::get_log_file(&config) {
+            if let Some(meta_func) = config.meta_info_provider {
+                write_to_file(&mut file, &meta_func(false));
             }
+
+            write_to_file(&mut file, &format_content(
+                &InfoLevel::Info,
+                "A dumping process is already in progress, skipping this scheduled dump.",
+                Utc::now()
+            ));
         }
 
         return;
     }
 
-    let store =
-        if let Ok(mut res) = TEMP_STORE.lock() {
-            res.drain(..).collect()
-        } else {
-            Vec::new()
-        };
+    let store: Vec<LogInfo> = {
+        let mut res = TEMP_STORE.lock();
+        (*res).drain(..).collect()
+    };
 
     if !store.is_empty() {
         unsafe {
@@ -393,10 +387,10 @@ fn dump_log() {
                 match writer.dump(store) {
                     Ok(_) => {},
                     Err(vec) => {
-                        if let Ok(mut res) = TEMP_STORE.lock() {
-                            // can't write the result, put them back.
-                            res.extend(vec)
-                        }
+                        let mut res = TEMP_STORE.lock();
+
+                        // can't write the result, put them back.
+                        (*res).extend(vec);
                     },
                 }
 

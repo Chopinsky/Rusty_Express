@@ -129,7 +129,6 @@ pub fn json_flat_stringify(contents: &HashMap<String, Vec<String>>) -> String {
                 is_first = false;
             }
 
-
             res.push_str(&[field, ":", &json_format_content(content.as_slice())].join(""));
         }
     }
@@ -156,6 +155,6 @@ fn json_format_content(content: &[String]) -> String {
 
             base.push(']');
             base
-        },
+        }
     }
 }

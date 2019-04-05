@@ -8,11 +8,11 @@ use std::time::Duration;
 
 use crate::channel;
 use crate::core::config::ConnMetadata;
+use crate::core::http::{
+    Request, RequestWriter, Response, ResponseManager, ResponseStates, ResponseWriter,
+};
 use crate::core::router::{Callback, Route, RouteHandler, REST};
 use crate::hashbrown::HashMap;
-use crate::core::http::{
-    Request, RequestWriter, Response, ResponseManager, ResponseStates, ResponseWriter
-};
 use crate::support::{
     common::flush_buffer, common::write_to_buff, common::MapUpdates, debug, debug::InfoLevel,
     shared_pool, TaskType,
@@ -48,12 +48,12 @@ pub(crate) fn handle_connection(stream: TcpStream) -> ExecCode {
                     }
 
                     return 0;
-                },
+                }
             };
 
             debug::print(
                 &format!("Error on parsing request: {}", status),
-                InfoLevel::Error
+                InfoLevel::Error,
             );
 
             return write_to_stream(&stream, &mut build_err_response(status));
@@ -61,7 +61,7 @@ pub(crate) fn handle_connection(stream: TcpStream) -> ExecCode {
         Ok(cb) => cb,
     };
 
-    handle_response(stream,handler, &request, &mut initialize_response())
+    handle_response(stream, handler, &request, &mut initialize_response())
 }
 
 #[inline]
@@ -73,7 +73,7 @@ fn handle_response(
     stream: TcpStream,
     callback: Callback,
     request: &Box<Request>,
-    response: &mut Box<Response>
+    response: &mut Box<Response>,
 ) -> ExecCode {
     match request.header("connection") {
         Some(ref val) if val.eq(&String::from("close")) => response.can_keep_alive(false),
@@ -156,12 +156,12 @@ fn stream_shutdown(stream: &TcpStream) -> u8 {
 }
 
 fn parse_request(stream: &TcpStream, request: &mut Box<Request>) -> Result<Callback, ConnError> {
-    let mut raw = String::new();
+    let mut raw = String::with_capacity(512); // 512 -- default buffer size
     if let Some(e) = read_stream(stream, &mut raw) {
         return Err(e);
     };
 
-    if raw.trim_matches(|c| c == '\r' || c == '\n').is_empty() {
+    if raw.trim_matches(|c| c == '\r' || c == '\n' || c == '\u{0}').is_empty() {
         return Err(ConnError::EmptyRequest);
     }
 
@@ -191,13 +191,10 @@ fn read_stream(mut stream: &TcpStream, raw_req: &mut String) -> Option<ConnError
     loop {
         match stream.read(&mut buffer) {
             Ok(len) => {
-                if let Ok(req_slice) = str::from_utf8(&buffer) {
+                if let Ok(req_slice) = str::from_utf8(&buffer[..len]) {
                     raw_req.push_str(req_slice);
                 } else {
-                    debug::print(
-                        "Failed to parse the request stream",
-                        InfoLevel::Warning
-                    );
+                    debug::print("Failed to parse the request stream", InfoLevel::Warning);
 
                     return Some(ConnError::ReadStreamFailure);
                 }
@@ -210,11 +207,11 @@ fn read_stream(mut stream: &TcpStream, raw_req: &mut String) -> Option<ConnError
                 } else {
                     break;
                 }
-            },
+            }
             Err(e) => {
                 debug::print(
                     &format!("Reading stream disconnected -- {}", e),
-                    InfoLevel::Warning
+                    InfoLevel::Warning,
                 );
 
                 return Some(ConnError::ReadStreamFailure);
@@ -246,27 +243,39 @@ fn deserialize(request: String, store: &mut Box<Request>) -> Option<Callback> {
                     let mut cookie: HashMap<String, String> = HashMap::new();
                     let mut body: Vec<String> = Vec::new();
 
-                    shared_pool::run(move || {
-                        let mut is_body = false;
+                    shared_pool::run(
+                        move || {
+                            let mut is_body = false;
 
-                        for line in remainder.lines() {
-                            if line.is_empty() && !is_body {
-                                // meeting the empty line dividing header and body
-                                is_body = true;
-                                continue;
+                            for line in remainder.lines() {
+                                if line.is_empty() && !is_body {
+                                    // meeting the empty line dividing header and body
+                                    is_body = true;
+                                    continue;
+                                }
+
+                                deserialize_headers(
+                                    line,
+                                    is_body,
+                                    &mut header,
+                                    &mut cookie,
+                                    &mut body,
+                                );
                             }
 
-                            deserialize_headers(line, is_body, &mut header, &mut cookie, &mut body);
-                        }
-
-                        if tx_remainder.send((header, cookie, body)).is_err() {
-                            debug::print("Unable to construct the remainder of the request.", InfoLevel::Error);
-                        }
-                    }, TaskType::Request);
+                            if tx_remainder.send((header, cookie, body)).is_err() {
+                                debug::print(
+                                    "Unable to construct the remainder of the request.",
+                                    InfoLevel::Error,
+                                );
+                            }
+                        },
+                        TaskType::Request,
+                    );
 
                     remainder_chan = Some(rx_remainder)
                 }
-            },
+            }
             _ => break,
         }
     }
@@ -292,11 +301,7 @@ fn deserialize(request: String, store: &mut Box<Request>) -> Option<Callback> {
     res
 }
 
-pub(crate) fn deserialize_baseline(
-    source: &str,
-    req: &mut Box<Request>
-) -> BaseLine
-{
+pub(crate) fn deserialize_baseline(source: &str, req: &mut Box<Request>) -> BaseLine {
     let mut header_only = false;
     let mut raw_scheme = String::new();
     let mut raw_fragment = String::new();
@@ -339,9 +344,12 @@ pub(crate) fn deserialize_baseline(
         let req_method = req.method.clone();
 
         let (tx, rx) = channel::unbounded();
-        shared_pool::run(move || {
-            Route::seek_handler(&req_method, &uri, header_only, tx);
-        },TaskType::Request);
+        shared_pool::run(
+            move || {
+                Route::seek_handler(&req_method, &uri, header_only, tx);
+            },
+            TaskType::Request,
+        );
 
         // now do more work on non-essential parsing
         if !raw_fragment.is_empty() {
@@ -363,7 +371,7 @@ fn deserialize_headers(
     is_body: bool,
     header: &mut HashMap<String, String>,
     cookie: &mut HashMap<String, String>,
-    body: &mut Vec<String>
+    body: &mut Vec<String>,
 ) {
     if !is_body {
         let mut header_key: &str = "";
@@ -374,14 +382,14 @@ fn deserialize_headers(
                 0 => {
                     header_key = &info.trim()[..];
                     is_cookie = header_key.eq("cookie");
-                },
+                }
                 1 => {
                     if is_cookie {
                         cookie_parser(info.trim(), cookie);
                     } else if !header_key.is_empty() {
                         header.add(header_key, info.trim().to_owned(), true);
                     }
-                },
+                }
                 _ => break,
             }
         }
@@ -390,12 +398,7 @@ fn deserialize_headers(
     }
 }
 
-fn split_path(
-    source: &str,
-    path: &mut String,
-    scheme: &mut String,
-    frag: &mut String,
-) {
+fn split_path(source: &str, path: &mut String, scheme: &mut String, frag: &mut String) {
     let uri = source.trim();
     if uri.is_empty() {
         path.push('/');

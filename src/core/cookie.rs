@@ -130,13 +130,17 @@ impl ToString for Cookie {
         }
 
         let mut cookie = match self.key_prefix {
-            Some(KeyPrefix::Secure) => ["__Secure-", &self.key[..], "=", &self.value[..], ";"].join(""),
+            Some(KeyPrefix::Secure) => {
+                ["__Secure-", &self.key[..], "=", &self.value[..], ";"].join("")
+            }
             Some(KeyPrefix::Host) => ["__Host-", &self.key[..], "=", &self.value[..], ";"].join(""),
             _ => [&self.key[..], "=", &self.value[..], ";"].join(""),
         };
 
         if let Some(time) = self.expires {
-            let dt = system_to_utc(time).format("%a, %e %b %Y %T GMT") .to_string();
+            let dt = system_to_utc(time)
+                .format("%a, %e %b %Y %T GMT")
+                .to_string();
 
             cookie.reserve_exact(10 + dt.len());
             cookie.push_str(" Expires=");

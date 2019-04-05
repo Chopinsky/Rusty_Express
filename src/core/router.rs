@@ -126,7 +126,7 @@ impl RouteMap {
                 }
 
                 self.explicit.add(req_uri, callback, false);
-            },
+            }
             RequestPath::WildCard(req_uri) => {
                 if req_uri.is_empty() {
                     panic!("Request path must have valid contents.");
@@ -140,15 +140,16 @@ impl RouteMap {
                     self.wildcard
                         .add(req_uri, RegexRoute::new(re, callback), false);
                 }
-            },
+            }
             RequestPath::ExplicitWithParams(req_uri) => {
                 if !req_uri.contains("/:") && !req_uri.contains(":\\") {
                     self.explicit.add(req_uri, callback, false);
                     return;
                 }
 
-                self.explicit_with_params.add(RouteMap::params_parser(req_uri), callback);
-            },
+                self.explicit_with_params
+                    .add(RouteMap::params_parser(req_uri), callback);
+            }
         }
     }
 
@@ -159,11 +160,14 @@ impl RouteMap {
         let mut name = "";
         let mut is_param = false;
 
-        // Status: 0 -- Normal; 1 -- Just split; 2 -- In params; 4 -- In params regex;
-        //         8 -- Params regex just end, must split next or panic.
+        // Status: 0 -- Normal;
+        //         1 -- Just split;
+        //         2 -- In params;
+        //         4 -- In params regex;
+        //         8 -- Params regex just end, must split next or panic;
         let mut split_status: u8 = 0;
 
-        source_uri
+        let mut result: Vec<Field> = source_uri
             .split(|c|
                 // split status Automator
                 match c {
@@ -248,7 +252,10 @@ impl RouteMap {
 
                 Some(Field::new(name.to_owned(), is_param, validation.take()))
             })
-            .collect()
+            .collect();
+
+        result.reverse();
+        result
     }
 
     fn seek_path(&self, uri: &str, params: &mut HashMap<String, String>) -> Option<Callback> {
@@ -257,8 +264,7 @@ impl RouteMap {
         }
 
         if !self.explicit_with_params.is_empty() {
-            let (callback, temp_params) =
-                search_params_router(&self.explicit_with_params, uri);
+            let (callback, temp_params) = search_params_router(&self.explicit_with_params, uri);
 
             if callback.is_some() {
                 for param in temp_params {
@@ -319,7 +325,9 @@ impl Route {
             return Ok(());
         }
 
-        Err(String::from("Unable to define the router, please try again..."))
+        Err(String::from(
+            "Unable to define the router, please try again...",
+        ))
     }
 
     pub(crate) fn add_route(method: REST, uri: RequestPath, callback: Callback) {
@@ -409,7 +417,10 @@ impl Router for Route {
     }
 
     fn use_static(&mut self, path: &Path) -> &mut Self {
-        assert!(path.is_dir(), "The static folder location must point to a folder");
+        assert!(
+            path.is_dir(),
+            "The static folder location must point to a folder"
+        );
 
         //TODO: impl
 
@@ -419,8 +430,12 @@ impl Router for Route {
 
 pub(crate) trait RouteHandler {
     fn parse_request(callback: Callback, req: &Box<Request>, resp: &mut Box<Response>);
-    fn seek_handler(method: &REST, uri: &str, header_only: bool,
-        tx: channel::Sender<(Option<Callback>, HashMap<String, String>)>);
+    fn seek_handler(
+        method: &REST,
+        uri: &str,
+        header_only: bool,
+        tx: channel::Sender<(Option<Callback>, HashMap<String, String>)>,
+    );
 }
 
 impl RouteHandler for Route {
@@ -487,17 +502,15 @@ fn search_wildcard_router(routes: &HashMap<String, RegexRoute>, uri: &str) -> Op
 fn search_params_router(
     route_head: &RouteTrie,
     uri: &str,
-) -> (Option<Callback>, Vec<(String, String)>)
-{
-    let raw_segments: Vec<String> =
-        uri.trim_matches('/')
-            .split('/')
-            .map(|s| s.to_owned())
-            .collect();
+) -> (Option<Callback>, Vec<(String, String)>) {
+    let raw_segments: Vec<String> = uri
+        .trim_matches('/')
+        .split('/')
+        .map(|s| s.to_owned())
+        .collect();
 
     let mut params: Vec<(String, String)> = Vec::new();
-    let result =
-        RouteTrie::find(route_head, raw_segments.as_slice(), &mut params);
+    let result = RouteTrie::find(route_head, raw_segments.as_slice(), &mut params);
 
     (result, params)
 }

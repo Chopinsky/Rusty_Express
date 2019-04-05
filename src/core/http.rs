@@ -10,13 +10,13 @@ use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
+use crate::channel;
 use crate::core::config::{ConnMetadata, EngineContext, ServerConfig, ViewEngineParser};
 use crate::core::cookie::*;
 use crate::core::router::REST;
 use crate::support::{common::*, debug, debug::InfoLevel, shared_pool, TaskType};
-use crate::channel;
-use hashbrown::{hash_map::Iter, HashMap};
 use chrono::prelude::*;
+use hashbrown::{hash_map::Iter, HashMap};
 
 static FOUR_OH_FOUR: &'static str = include_str!("../default/404.html");
 static FOUR_OH_ONE: &'static str = include_str!("../default/401.html");
@@ -27,7 +27,6 @@ static RESP_TIMEOUT: Duration = Duration::from_millis(64);
 static LONG_CONN_TIMEOUT: Duration = Duration::from_secs(8);
 
 //TODO: internal registered cache?
-
 
 pub struct Request {
     pub method: REST,
@@ -135,7 +134,10 @@ impl Request {
         }
 
         if !self.scheme.is_empty() {
-            source.insert(String::from("uri_schemes"), json_flat_stringify(&self.scheme));
+            source.insert(
+                String::from("uri_schemes"),
+                json_flat_stringify(&self.scheme),
+            );
         }
 
         if !self.fragment.is_empty() {
@@ -292,24 +294,25 @@ impl Response {
         response
     }
 
-    fn resp_header(&self) -> Box<String> {
+    fn resp_header(&self) -> String {
         // Get cookie parser to its own thread
-        let receiver: Option<channel::Receiver<String>> =
-            if self.cookie.is_empty() {
-                None
-            } else  {
-                let (tx, rx) = channel::unbounded();
-                let cookie = Arc::clone(&self.cookie);
+        let receiver: Option<channel::Receiver<String>> = if self.cookie.is_empty() {
+            None
+        } else {
+            let (tx, rx) = channel::unbounded();
+            let cookie = Arc::clone(&self.cookie);
 
-                shared_pool::run(move || {
+            shared_pool::run(
+                move || {
                     write_header_cookie(cookie, tx);
-                }, TaskType::Response);
+                },
+                TaskType::Response,
+            );
 
-                Some(rx)
-            };
+            Some(rx)
+        };
 
-        let mut header =
-            Box::new(write_header_status(self.status, self.has_contents()));
+        let mut header = write_header_status(self.status, self.has_contents());
 
         // other header field-value pairs
         write_headers(
@@ -346,12 +349,11 @@ impl Response {
         }
 
         if !self.header.contains_key("connection") {
-            let (connection, count) =
-                if self.keep_alive && self.can_keep_alive {
-                    ("keep-alive", 10)
-                } else {
-                    ("close", 5)
-                };
+            let (connection, count) = if self.keep_alive && self.can_keep_alive {
+                ("keep-alive", 10)
+            } else {
+                ("close", 5)
+            };
 
             header.reserve_exact(14 + count);
             header.push_str("Connection: ");
@@ -394,7 +396,7 @@ pub trait ResponseStates {
     fn is_header_only(&self) -> bool;
     fn get_channels(
         &mut self,
-    ) -> Result<(channel::Sender<String>, channel::Receiver<String>), &'static str, >;
+    ) -> Result<(channel::Sender<String>, channel::Receiver<String>), &'static str>;
 }
 
 impl ResponseStates for Response {
@@ -445,8 +447,7 @@ impl ResponseStates for Response {
     /// send any ensuing responses.
     fn get_channels(
         &mut self,
-    ) -> Result<(channel::Sender<String>, channel::Receiver<String>), &'static str, >
-    {
+    ) -> Result<(channel::Sender<String>, channel::Receiver<String>), &'static str> {
         if self.notifier.is_none() {
             self.notifier = Some(channel::unbounded());
         }
@@ -843,7 +844,7 @@ impl ResponseManager for Response {
                             // if a 0-length reply, then we're done after the reply and shall break out
                             return;
                         }
-                    },
+                    }
                     Err(_) => return,
                 }
             }
@@ -851,10 +852,7 @@ impl ResponseManager for Response {
     }
 }
 
-fn broadcast_new_communications(
-    sender: channel::Sender<String>,
-    mut stream_clone: TcpStream,
-) {
+fn broadcast_new_communications(sender: channel::Sender<String>, mut stream_clone: TcpStream) {
     thread::spawn(move || {
         let mut buffer = [0u8; 512];
 
@@ -862,7 +860,7 @@ fn broadcast_new_communications(
             if let Err(e) = stream_clone.take_error() {
                 debug::print(
                     &format!("Keep-alive stream can't continue: {}", e),
-                    InfoLevel::Warning
+                    InfoLevel::Warning,
                 );
                 break;
             }
@@ -928,7 +926,10 @@ fn write_default_page(status: u16, buffer: &mut BufWriter<&TcpStream>) {
 
 fn get_file_path(path: &str) -> Option<PathBuf> {
     if path.is_empty() {
-        debug::print("Undefined file path to retrieve data from...", InfoLevel::Warning);
+        debug::print(
+            "Undefined file path to retrieve data from...",
+            InfoLevel::Warning,
+        );
         return None;
     }
 
@@ -962,22 +963,25 @@ fn open_file(file_path: &PathBuf, buf: &mut String) -> u16 {
 }
 
 fn open_file_async(file_path: PathBuf, tx: channel::Sender<String>) {
-    shared_pool::run(move || {
-        let mut buf = String::new();
-        match open_file(&file_path, &mut buf) {
-            404 | 500 if !buf.is_empty() => {
-                buf.clear();
+    shared_pool::run(
+        move || {
+            let mut buf = String::new();
+            match open_file(&file_path, &mut buf) {
+                404 | 500 if !buf.is_empty() => {
+                    buf.clear();
+                }
+                _ => { /* Nothing to do here */ }
             }
-            _ => { /* Nothing to do here */ }
-        }
 
-        if let Err(e) = tx.send(buf) {
-            debug::print(
-                &format!("Unable to write the file to the stream: {}", e),
-                InfoLevel::Warning
-            );
-        }
-    },TaskType::Response);
+            if let Err(e) = tx.send(buf) {
+                debug::print(
+                    &format!("Unable to write the file to the stream: {}", e),
+                    InfoLevel::Warning,
+                );
+            }
+        },
+        TaskType::Response,
+    );
 }
 
 fn get_status(status: u16) -> String {
@@ -1072,7 +1076,9 @@ fn default_mime_type_with_ext(ext: &str) -> String {
         "svg" => String::from("image/svg+xml"),
         "csh" | "sh" | "tar" | "wav" => ["application/x-", ext].join(""),
         "csv" | "html" | "htm" => ["text/", ext].join(""),
-        "jpeg" | "jpg" | "gif" | "png" | "bmp" | "webp" | "tiff" | "tif" => ["image/", ext].join(""),
+        "jpeg" | "jpg" | "gif" | "png" | "bmp" | "webp" | "tiff" | "tif" => {
+            ["image/", ext].join("")
+        }
         "otf" | "ttf" | "woff" | "woff2" => ["font/", ext].join(""),
         "midi" | "mp3" | "aac" | "mid" | "oga" => ["audio/", ext].join(""),
         "webm" | "mp4" | "ogg" | "mpeg" | "ogv" => ["video/", ext].join(""),
@@ -1100,11 +1106,7 @@ fn write_header_status(status: u16, has_contents: bool) -> String {
     }
 }
 
-fn write_headers(
-    source: &HashMap<String, String>,
-    header: &mut String,
-    keep_alive: bool,
-) {
+fn write_headers(source: &HashMap<String, String>, header: &mut String, keep_alive: bool) {
     header.reserve_exact(24);
     header.push_str("Server: Rusty-Express/");
     header.push_str(VERSION);
@@ -1151,7 +1153,7 @@ fn write_header_cookie(cookie: Arc<HashMap<String, Cookie>>, tx: channel::Sender
     tx.send(output).unwrap_or_else(|e| {
         debug::print(
             &format!("Unable to write response cookies: {}", e),
-            InfoLevel::Warning
+            InfoLevel::Warning,
         );
     });
 }

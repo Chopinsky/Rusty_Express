@@ -61,13 +61,14 @@ use std::ops::*;
 use std::path::Path;
 use std::sync::atomic;
 use std::sync::atomic::AtomicBool;
-use std::sync::{mpsc, RwLock};
 use std::thread;
 use std::thread::*;
 use std::time::{Duration, SystemTime};
 
+use crate::channel::{self, Receiver, Sender};
 use crate::chrono::{self, prelude::*};
 use crate::hashbrown::HashMap;
+use crate::parking_lot::RwLock;
 use crate::rand::{thread_rng, Rng};
 use crate::support::ThreadPool;
 
@@ -117,7 +118,10 @@ impl SessionData for Session {
 
         let expires_at = self.expires_at.to_rfc3339();
         let mut result = String::with_capacity(
-            4 + self.id.len() + expires_at.len() + self.store.len() + if self.auto_renewal { 4 } else { 5 }
+            4 + self.id.len()
+                + expires_at.len()
+                + self.store.len()
+                + if self.auto_renewal { 4 } else { 5 },
         );
 
         result.push_str(&self.id);
@@ -174,19 +178,19 @@ impl SessionExchange for Session {
     }
 
     fn from_id(id: String) -> Option<Self> {
-        if let Ok(store) = STORE.read() {
-            if let Some(val) = store.get(&id) {
-                if val.expires_at.cmp(&Utc::now()) != Ordering::Less {
-                    //found the session, return now
-                    return Some(val.to_owned());
-                } else {
-                    //expired, remove it from the store
-                    thread::spawn(move || {
-                        release(id);
-                    });
+        let store = STORE.read();
 
-                    return None;
-                }
+        if let Some(val) = store.get(&id) {
+            if val.expires_at.cmp(&Utc::now()) != Ordering::Less {
+                //found the session, return now
+                return Some(val.to_owned());
+            } else {
+                //expired, remove it from the store
+                thread::spawn(move || {
+                    release(id);
+                });
+
+                return None;
             }
         }
 
@@ -223,9 +227,8 @@ pub trait SessionExchangeConfig {
 impl SessionExchangeConfig for ExchangeConfig {
     fn set_default_session_lifetime(lifetime: Duration) {
         thread::spawn(move || {
-            if let Ok(mut default_lifetime) = DEFAULT_LIFETIME.write() {
-                *default_lifetime = lifetime;
-            }
+            let mut default_lifetime = DEFAULT_LIFETIME.write();
+            *default_lifetime = lifetime;
         });
     }
 
@@ -249,11 +252,8 @@ impl SessionExchangeConfig for ExchangeConfig {
     }
 
     fn store_size() -> Option<usize> {
-        if let Ok(store) = STORE.read() {
-            Some(store.keys().len())
-        } else {
-            None
-        }
+        let store = STORE.read();
+        Some(store.keys().len())
     }
 
     fn auto_clean_start(period: Duration) -> Option<JoinHandle<()>> {
@@ -369,10 +369,7 @@ impl PersistHandler for Session {
         };
 
         let mut pool = ThreadPool::new(8);
-        let (tx, rx): (
-            mpsc::Sender<Option<Session>>,
-            mpsc::Receiver<Option<Session>>,
-        ) = mpsc::channel();
+        let (tx, rx): (Sender<Option<Session>>, Receiver<Option<Session>>) = channel::bounded(16);
 
         let now = Utc::now();
         let default_expires = get_next_expiration(&now);
@@ -391,7 +388,7 @@ impl PersistHandler for Session {
                         continue;
                     }
 
-                    let tx_clone = mpsc::Sender::clone(&tx);
+                    let tx_clone = tx.clone();
                     pool.execute(move || {
                         recreate_session_from_raw(session, &default_expires, &now, tx_clone);
                     });
@@ -406,12 +403,11 @@ impl PersistHandler for Session {
 
         drop(tx);
 
-        if let Ok(mut store) = STORE.write() {
-            for received in rx {
-                if let Some(session) = received {
-                    let id: String = session.id.to_owned();
-                    store.entry(id).or_insert(session); //if a key collision, always keep the early entry.
-                }
+        let mut store = STORE.write();
+        for received in rx {
+            if let Some(session) = received {
+                let id: String = session.id.to_owned();
+                (*store).entry(id).or_insert(session); //if a key collision, always keep the early entry.
             }
         }
 
@@ -429,34 +425,34 @@ impl PersistHandler for Session {
                 return;
             };
 
-            if let Ok(store) = STORE.read() {
-                let mut count: u8 = 0;
-                for (_, val) in store.iter() {
-                    let mut s = val.serialize();
+            let store = STORE.read();
 
-                    if s.is_empty() {
-                        continue;
-                    } else {
-                        s.push(DELEM_LV_1);
-                    }
+            let mut count: u8 = 0;
+            for (_, val) in store.iter() {
+                let mut s = val.serialize();
 
-                    if file.write(s.as_bytes()).is_err() {
-                        continue;
-                    }
-
-                    count += 1;
-                    if count % 32 == 0 {
-                        if let Err(e) = file.flush() {
-                            eprintln!("Failed to flush the session store to the file store: {}", e);
-                        }
-
-                        count = 0;
-                    }
+                if s.is_empty() {
+                    continue;
+                } else {
+                    s.push(DELEM_LV_1);
                 }
 
-                if let Err(e) = file.sync_all() {
-                    eprintln!("Unable to sync all session data to the file store: {}", e);
+                if file.write(s.as_bytes()).is_err() {
+                    continue;
                 }
+
+                count += 1;
+                if count % 32 == 0 {
+                    if let Err(e) = file.flush() {
+                        eprintln!("Failed to flush the session store to the file store: {}", e);
+                    }
+
+                    count = 0;
+                }
+            }
+
+            if let Err(e) = file.sync_all() {
+                eprintln!("Unable to sync all session data to the file store: {}", e);
             }
         });
 
@@ -488,59 +484,48 @@ fn new_session(id: &str) -> Option<Session> {
         is_dirty: false,
     };
 
-    if let Ok(mut store) = STORE.write() {
-        //if key already exists, override to protect session scanning
-        store.insert(session.id.to_owned(), session.to_owned());
-        Some(session)
-    } else {
-        None
-    }
+    let mut store = STORE.write();
+    //if key already exists, override to protect session scanning
+    (*store).insert(session.id.to_owned(), session.to_owned());
+
+    Some(session)
 }
 
 fn gen_session_id(id_size: usize) -> Option<String> {
     let size = if id_size < 16 { 16 } else { id_size };
+    let store = STORE.read();
+    let begin = SystemTime::now();
 
     let mut next_id: String = thread_rng().gen_ascii_chars().take(size).collect();
+    let mut count = 1;
 
-    if let Ok(store) = STORE.read() {
-        let begin = SystemTime::now();
-        let mut count = 1;
-
-        loop {
-            if !store.contains_key(&next_id) {
-                return Some(next_id);
-            }
-
-            if count % 32 == 0 {
-                count = 1;
-                if SystemTime::now().sub(Duration::from_millis(256)) > begin {
-                    // 256 milli-sec for get a good guess is already too expansive...
-                    return None;
-                }
-            }
-
-            // now take the next guess
-            next_id = thread_rng().gen_ascii_chars().take(32).collect();
-            count += 1;
+    loop {
+        if !store.contains_key(&next_id) {
+            return Some(next_id);
         }
-    }
 
-    None
+        if count % 32 == 0 {
+            count = 1;
+            if SystemTime::now().sub(Duration::from_millis(256)) > begin {
+                // 256 milli-sec for get a good guess is already too expansive...
+                return None;
+            }
+        }
+
+        // now take the next guess
+        next_id = thread_rng().gen_ascii_chars().take(32).collect();
+        count += 1;
+    }
 }
 
 fn save(id: String, session: &mut Session) -> bool {
-    if let Ok(mut store) = STORE.write() {
-        if session.auto_renewal {
-            session.expires_at = get_next_expiration(&Utc::now());
-        }
-
-        let old_session = store.insert(id, session.to_owned());
-        drop(old_session);
-
-        true
-    } else {
-        false
+    let mut store = STORE.write();
+    if session.auto_renewal {
+        session.expires_at = get_next_expiration(&Utc::now());
     }
+
+    let _ = (*store).insert(id, session.to_owned());
+    true
 }
 
 fn rebuild_session(
@@ -574,9 +559,11 @@ fn rebuild_session(
                     }
                 }
             }
-            2 => if field.eq("true") {
-                auto_renewal = true;
-            },
+            2 => {
+                if field.eq("true") {
+                    auto_renewal = true;
+                }
+            }
             3 => store = String::from(field),
             _ => {
                 break;
@@ -594,53 +581,47 @@ fn rebuild_session(
 }
 
 fn get_next_expiration(now: &DateTime<Utc>) -> chrono::DateTime<Utc> {
-    if let Ok(default_lifetime) = DEFAULT_LIFETIME.read() {
-        if let Ok(life_time) = chrono::Duration::from_std(*default_lifetime) {
-            return now.add(life_time);
-        }
+    let default_lifetime = DEFAULT_LIFETIME.read();
+    if let Ok(life_time) = chrono::Duration::from_std(*default_lifetime) {
+        return now.add(life_time);
     }
 
     now.add(chrono::Duration::seconds(172_800))
 }
 
 fn release(id: String) -> bool {
-    if let Ok(mut store) = STORE.write() {
-        store.remove(&id);
-    } else {
-        return false;
-    }
+    let mut store = STORE.write();
+    (*store).remove(&id);
 
     true
 }
 
 fn clean_up_to(time: DateTime<Utc>) {
     let mut stale_sessions: Vec<String> = Vec::new();
-    if let Ok(mut store) = STORE.write() {
-        if store.is_empty() {
-            return;
-        }
+    let mut store = STORE.write();
 
-        for session in store.values() {
-            if session.expires_at.cmp(&time) != Ordering::Greater {
-                stale_sessions.push(session.id.to_owned());
-            }
-        }
+    if (*store).is_empty() {
+        return;
+    }
 
-        println!("Cleaned: {}", stale_sessions.len());
-
-        for id in stale_sessions {
-            store.remove(&id);
+    for session in (*store).values() {
+        if session.expires_at.cmp(&time) != Ordering::Greater {
+            stale_sessions.push(session.id.to_owned());
         }
     }
 
-    println!("Session clean done!");
+    println!("Cleaned: {}", stale_sessions.len());
+
+    for id in stale_sessions {
+        (*store).remove(&id);
+    }
 }
 
 fn recreate_session_from_raw(
     raw: String,
     expires_at: &DateTime<Utc>,
     now: &DateTime<Utc>,
-    tx: mpsc::Sender<Option<Session>>,
+    tx: Sender<Option<Session>>,
 ) {
     let result = rebuild_session(&raw[..], expires_at.to_owned(), now.to_owned());
 

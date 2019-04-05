@@ -5,7 +5,7 @@
 //! # Examples
 //! ```
 //! extern crate rusty_express as express;
-//! use express::prelude::*;
+//! use express::prelude::{HttpServer, RequestPath, Request, Response};
 //!
 //! fn main() {
 //!    let mut server = HttpServer::new();
@@ -24,10 +24,11 @@
 
 extern crate lazy_static;
 extern crate chrono;
+extern crate hashbrown;
 extern crate num_cpus;
+extern crate parking_lot;
 extern crate rand;
 extern crate regex;
-extern crate hashbrown;
 
 pub(crate) mod core;
 pub(crate) mod support;
@@ -57,8 +58,6 @@ use std::path::Path;
 use std::thread;
 use std::time::Duration;
 
-use crossbeam_channel as channel;
-use hashbrown::HashMap;
 use self::core::config::{ServerConfig, ViewEngine, ViewEngineDefinition};
 use self::core::conn::*;
 use self::core::router::*;
@@ -66,6 +65,8 @@ use self::core::states::*;
 use self::support::debug::{self, InfoLevel};
 use self::support::session::*;
 use self::support::{shared_pool, ThreadPool};
+use crossbeam_channel as channel;
+use hashbrown::HashMap;
 
 //TODO: Impl middlewear
 
@@ -93,7 +94,7 @@ impl HttpServer {
     ///
     /// ```rust
     /// extern crate rusty_express as express;
-    /// use express::prelude::*;
+    /// use express::prelude::{HttpServer};
     ///
     /// let mut server = HttpServer::new();
     /// server.def_router(router);
@@ -167,7 +168,10 @@ impl HttpServer {
 
         let sender = self.state.get_courier_sender();
 
-        if sender.send(ControlMessage::HotLoadConfig(self.config.clone())).is_err() {
+        if sender
+            .send(ControlMessage::HotLoadConfig(self.config.clone()))
+            .is_err()
+        {
             debug::print("Failed to hot reload the configuration", InfoLevel::Error);
         }
     }
@@ -191,15 +195,18 @@ impl HttpServer {
                         }
 
                         break;
-                    },
+                    }
                     ControlMessage::HotLoadRouter(r) => {
                         if let Err(err) = Route::use_router(r) {
                             debug::print(
-                                &format!("An error has taken place when trying to update the router: {}", err)[..],
-                                InfoLevel::Warning
+                                &format!(
+                                    "An error has taken place when trying to update the router: {}",
+                                    err
+                                )[..],
+                                InfoLevel::Warning,
                             );
                         }
-                    },
+                    }
                     ControlMessage::HotLoadConfig(c) => {
                         if c.get_pool_size() != self.config.get_pool_size() {
                             debug::print(
@@ -210,10 +217,10 @@ impl HttpServer {
 
                         self.config = c;
                         self.session_cleanup_config();
-                    },
+                    }
                     ControlMessage::Custom(content) => {
                         println!("The message: {} is not yet supported.", content)
-                    },
+                    }
                 }
             }
 
@@ -233,12 +240,7 @@ impl HttpServer {
         self.state.toggle_running_state(false);
     }
 
-    fn handle_stream(
-        &self,
-        stream: TcpStream,
-        workers_pool: &mut ThreadPool,
-    ) {
-        // clone Arc-pointers
+    fn handle_stream(&self, stream: TcpStream, workers_pool: &mut ThreadPool) {
         let read_timeout = u64::from(self.config.get_read_timeout());
         let write_timeout = u64::from(self.config.get_write_timeout());
 
@@ -251,7 +253,8 @@ impl HttpServer {
     fn session_cleanup_config(&mut self) {
         if self.config.get_session_auto_clean() && !ExchangeConfig::auto_clean_is_running() {
             if let Some(duration) = self.config.get_session_auto_clean_period() {
-                self.state.set_session_handler(ExchangeConfig::auto_clean_start(duration));
+                self.state
+                    .set_session_handler(ExchangeConfig::auto_clean_start(duration));
             }
         }
     }
@@ -279,21 +282,23 @@ trait StreamTimeoutConfig {
 impl StreamTimeoutConfig for TcpStream {
     fn set_timeout(&self, read_timeout: u64, write_timeout: u64) {
         if read_timeout > 0 {
-            self.set_read_timeout(Some(Duration::from_millis(read_timeout))).unwrap_or_else(|err| {
-                debug::print(
-                    &format!("Unable to set read timeout: {}", err)[..],
-                    InfoLevel::Warning
-                );
-            });
+            self.set_read_timeout(Some(Duration::from_millis(read_timeout)))
+                .unwrap_or_else(|err| {
+                    debug::print(
+                        &format!("Unable to set read timeout: {}", err)[..],
+                        InfoLevel::Warning,
+                    );
+                });
         }
 
         if write_timeout > 0 {
-            self.set_write_timeout(Some(Duration::from_millis(write_timeout))).unwrap_or_else(|err| {
-                debug::print(
-                    &format!("Unable to set write timeout: {}", err)[..],
-                    InfoLevel::Warning
-                );
-            });
+            self.set_write_timeout(Some(Duration::from_millis(write_timeout)))
+                .unwrap_or_else(|err| {
+                    debug::print(
+                        &format!("Unable to set write timeout: {}", err)[..],
+                        InfoLevel::Warning,
+                    );
+                });
         }
     }
 }
@@ -312,13 +317,18 @@ pub trait ServerDef {
 impl ServerDef for HttpServer {
     fn def_router(&mut self, router: Route) {
         if let Err(err) = Route::use_router(router) {
-            eprintln!("An error has taken place when trying to update the router: {}", err);
+            eprintln!(
+                "An error has taken place when trying to update the router: {}",
+                err
+            );
         }
     }
 
     fn set_pool_size(&mut self, size: usize) {
         if self.state.is_running() {
-            eprintln!("Change size of the thread pool is not supported while the server is running");
+            eprintln!(
+                "Change size of the thread pool is not supported while the server is running"
+            );
             return;
         }
 

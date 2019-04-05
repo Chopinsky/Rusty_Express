@@ -1,8 +1,9 @@
 #![allow(dead_code)]
 
+use crate::core::router::Callback;
 use crate::hashbrown::HashMap;
 use crate::regex::Regex;
-use crate::core::router::Callback;
+use std::path::PathBuf;
 
 #[derive(Debug)]
 pub(crate) struct Field {
@@ -16,7 +17,7 @@ impl Field {
         Field {
             name,
             is_param,
-            validation
+            validation,
         }
     }
 }
@@ -41,7 +42,7 @@ impl PartialEq for Field {
         } else {
             if let Some(ref reg_one) = self.validation {
                 if let Some(ref reg_two) = other.validation {
-                    return reg_one.to_string() == reg_two.to_string()
+                    return reg_one.to_string() == reg_two.to_string();
                 }
             }
 
@@ -53,26 +54,29 @@ impl PartialEq for Field {
 struct Node {
     field: Field,
     callback: Option<Callback>,
+    location: Option<PathBuf>,
     named_children: HashMap<String, Node>,
     params_children: Vec<Node>,
 }
 
 impl Node {
-    fn new(field: Field, callback: Option<Callback>) -> Self {
+    fn new(field: Field, callback: Option<Callback>, location: Option<PathBuf>) -> Self {
         Node {
             field,
             callback,
+            location,
             named_children: HashMap::new(),
             params_children: Vec::new(),
         }
     }
 
-    fn insert(&mut self, mut segments: Vec<Field>, callback: Callback) {
-        if segments.is_empty() {
-            return;
-        }
-
-        let head = segments.remove(0);
+    fn insert(
+        &mut self, mut segments: Vec<Field>, callback: Option<Callback>, location: Option<PathBuf>
+    ) {
+        let head = match segments.pop() {
+            Some(seg) => seg,
+            None => return,
+        };
 
         // if already has this child, keep calling insert recursively. Only do this when not
         // a params, otherwise, always create a new branch
@@ -84,33 +88,37 @@ impl Node {
                             panic!("Key collision!");
                         }
 
-                        child.callback = Some(callback);
+                        child.callback = callback;
                     }
                     _ => {
-                        child.insert(segments, callback);
+                        child.insert(segments, callback, location);
                     }
                 }
 
                 return;
             }
 
-            self.named_children
-                .insert(head.name.clone(), Node::build_new_child(head, segments, callback));
+            self.named_children.insert(
+                head.name.clone(),
+                Node::build_new_child(head, segments, callback, location),
+            );
 
             return;
         }
 
-        self.params_children.push(Node::build_new_child(head, segments, callback));
+        self.params_children
+            .push(Node::build_new_child(head, segments, callback, location));
     }
 
-    fn build_new_child(field: Field, segments: Vec<Field>, callback: Callback) -> Node {
+    fn build_new_child(
+        field: Field, segments: Vec<Field>, callback: Option<Callback>, loc: Option<PathBuf>
+    ) -> Node
+    {
         match segments.len() {
-            0 => {
-                Node::new(field, Some(callback))
-            },
+            0 => Node::new(field, callback, None),
             _ => {
-                let mut node = Node::new(field, None);
-                node.insert(segments, callback);
+                let mut node = Node::new(field, None, None);
+                node.insert(segments, callback, loc);
                 node
             }
         }
@@ -122,6 +130,7 @@ impl Clone for Node {
         Node {
             field: self.field.clone(),
             callback: self.callback,
+            location: self.location.clone(),
             named_children: self.named_children.clone(),
             params_children: self.params_children.clone(),
         }
@@ -137,6 +146,7 @@ impl RouteTrie {
         RouteTrie {
             root: Node::new(
                 Field::new(String::from("/"), false, None),
+                None,
                 None
             ),
         }
@@ -148,24 +158,34 @@ impl RouteTrie {
     }
 
     pub(crate) fn add(&mut self, segments: Vec<Field>, callback: Callback) {
-        self.root.insert(segments, callback);
+        self.root.insert(segments, Some(callback), None);
+    }
+
+    // global: location + path/to/file/in/uri
+    pub(crate) fn add_global_static(&mut self, location: PathBuf) {
+        self.root.location.replace(location);
+    }
+
+    /*pub(crate)*/ fn add_local_static(&mut self, segments: Vec<Field>, location: PathBuf) {
+    //TODO: add customizable static locations
+
     }
 
     pub(crate) fn find(
         route_head: &RouteTrie,
         segments: &[String],
         params: &mut Vec<(String, String)>,
-    ) -> Option<Callback>
-    {
+    ) -> Option<Callback> {
         RouteTrie::recursive_find(&route_head.root, segments, params)
     }
 
-    fn recursive_find (
+    fn recursive_find(
         root: &Node,
         segments: &[String],
         params: &mut Vec<(String, String)>,
-    ) -> Option<Callback>
-    {
+    ) -> Option<Callback> {
+        //TODO: return tuple options instead of just callback option
+
         if segments.is_empty() {
             return None;
         }

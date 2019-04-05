@@ -31,7 +31,10 @@ fn main() {
         Some(|sender| {
             // automatically shutting down after 60 seconds
             thread::sleep(Duration::from_secs(60));
-            sender.send(ControlMessage::Terminate);
+
+            if let Err(_) = sender.send(ControlMessage::Terminate) {
+                eprintln!("Failed to send the server shutdown message...");
+            }
         }),
     );
 }
