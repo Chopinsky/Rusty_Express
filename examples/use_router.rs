@@ -78,7 +78,7 @@ impl Model {
         self.count
     }
 
-    fn work_with_context(req: &Box<Request>, resp: &mut Box<Response>) {
+    fn work_with_context(req: &Request, resp: &mut Response) {
         if let Err(e) = ServerContext::update_context(req, resp) {
             // Error handling...
             eprintln!("Error on updating the server context: {}", e);
@@ -98,12 +98,12 @@ impl Clone for Model {
 }
 
 impl ContextProvider for Model {
-    fn update(&mut self, req: &Box<Request>, resp: &mut Box<Response>) -> Result<(), &'static str> {
+    fn update(&mut self, req: &Request, resp: &mut Response) -> Result<(), &'static str> {
         self.add_one();
         Ok(())
     }
 
-    fn process(&self, _req: &Box<Request>, _resp: &mut Box<Response>) -> Result<(), &'static str> {
+    fn process(&self, _req: &Request, _resp: &mut Response) -> Result<(), &'static str> {
         println!("Visit count: {}", self.count);
         Ok(())
     }

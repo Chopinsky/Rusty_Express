@@ -4,56 +4,48 @@
 use super::http::{Request, Response};
 use parking_lot::RwLock;
 
-lazy_static! {
-    static ref CONTEXT: RwLock<Box<ServerContextProvider>> = RwLock::new(Box::new(EmptyContext {}));
-}
+const ERR_STR: &'static str = "The context has not been initialized...";
+static mut C: Option<RwLock<Box<ServerContextProvider>>> = None;
 
 pub type ServerContextProvider = ContextProvider + Sync + Send;
 
 pub trait ContextProvider {
-    fn update(&mut self, req: &Box<Request>, resp: &mut Box<Response>) -> Result<(), &'static str>;
-    fn process(&self, req: &Box<Request>, resp: &mut Box<Response>) -> Result<(), &'static str>;
+    fn update(&mut self, req: &Request, resp: &mut Response) -> Result<(), &'static str>;
+    fn process(&self, req: &Request, resp: &mut Response) -> Result<(), &'static str>;
 }
 
 pub fn set_context(context: Box<ServerContextProvider>) {
-    let mut c = CONTEXT.write();
-    *c = context;
+    if let Some(ctx) = unsafe { C.as_mut() } {
+        let mut ctx = ctx.write();
+        *ctx = context;
+        return;
+    }
+
+    unsafe { C = Some(RwLock::new(context)); }
 }
 
-pub fn update_context(req: &Box<Request>, resp: &mut Box<Response>) -> Result<(), &'static str> {
-    let mut c = CONTEXT.write();
-    c.update(req, resp)
+pub fn update_context(
+    req: &Request,
+    resp: &mut Response
+) -> Result<(), &'static str>
+{
+    if let Some(ctx) = unsafe { C.as_mut() } {
+        let mut ctx = ctx.write();
+        return ctx.update(req, resp);
+    }
+
+    Err(ERR_STR)
 }
 
 pub fn process_with_context(
-    req: &Box<Request>,
-    resp: &mut Box<Response>,
-) -> Result<(), &'static str> {
-    let c = CONTEXT.read();
-    c.process(req, resp)
-}
-
-struct EmptyContext;
-
-impl ContextProvider for EmptyContext {
-    #[inline]
-    fn update(
-        &mut self,
-        _req: &Box<Request>,
-        _resp: &mut Box<Response>,
-    ) -> Result<(), &'static str> {
-        Ok(())
+    req: &Request,
+    resp: &mut Response,
+) -> Result<(), &'static str>
+{
+    if let Some(ctx) = unsafe { C.as_ref() } {
+        let ctx = ctx.read();
+        return ctx.process(req, resp);
     }
 
-    #[inline]
-    fn process(&self, _req: &Box<Request>, _resp: &mut Box<Response>) -> Result<(), &'static str> {
-        Ok(())
-    }
-}
-
-impl Clone for EmptyContext {
-    #[inline]
-    fn clone(&self) -> Self {
-        EmptyContext {}
-    }
+    Err(ERR_STR)
 }

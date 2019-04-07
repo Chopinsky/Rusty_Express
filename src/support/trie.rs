@@ -175,15 +175,23 @@ impl RouteTrie {
         route_head: &RouteTrie,
         segments: &[String],
         params: &mut Vec<(String, String)>,
-    ) -> Option<Callback> {
-        RouteTrie::recursive_find(&route_head.root, segments, params)
+    ) -> (Option<Callback>, Option<PathBuf>)
+    {
+        if let Some(last) = segments.last() {
+            if last.contains('.') {
+
+            }
+        }
+
+        (RouteTrie::recursive_find(&route_head.root, segments, params), None)
     }
 
     fn recursive_find(
         root: &Node,
         segments: &[String],
         params: &mut Vec<(String, String)>,
-    ) -> Option<Callback> {
+    ) -> Option<Callback>
+    {
         //TODO: return tuple options instead of just callback option
 
         if segments.is_empty() {

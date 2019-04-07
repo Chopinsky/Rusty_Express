@@ -1,7 +1,16 @@
-# 2019-01
+# 2019-04
 ## 0.4.2
-- Small fixes
+- Breaking change: now `ContextProvider` trait no longer take boxed request/response objects
+(i.e. `Box<Request>` and `Box<Response>`), instead, these objects are now un-boxed. So please
+update your trait implementations:
 
+ Old            | New
+ ------------- | -------------
+ fn update(&mut self, req: &Box<Request>, resp: &mut Box<Response>) -> ...  | fn update(&mut self, req: &Request, resp: &mut Response) -> ...
+ fn process(&mut self, req: &Box<Request>, resp: &mut Box<Response>) -> ... | fn process(&mut self, req: &Request, resp: &mut Response) -> ... 
+ 
+- New context related APIs: //TODO ...
+ 
 # 2019-01
 ## 0.4.1
 - Default read/write timeout to 0, unless specified otherwise

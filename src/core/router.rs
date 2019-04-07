@@ -264,14 +264,20 @@ impl RouteMap {
         }
 
         if !self.explicit_with_params.is_empty() {
-            let (callback, temp_params) = search_params_router(&self.explicit_with_params, uri);
+            //TODO: save params to the HashMap directly
+            let (cb, path, param_store) =
+                search_params_router(&self.explicit_with_params, uri);
 
-            if callback.is_some() {
-                for param in temp_params {
+            if cb.is_some() {
+                for param in param_store {
                     params.insert(param.0, param.1);
                 }
 
-                return callback;
+                return cb;
+            }
+
+            if path.is_some() {
+                //TODO: return path
             }
         }
 
@@ -502,17 +508,20 @@ fn search_wildcard_router(routes: &HashMap<String, RegexRoute>, uri: &str) -> Op
 fn search_params_router(
     route_head: &RouteTrie,
     uri: &str,
-) -> (Option<Callback>, Vec<(String, String)>) {
+) -> (Option<Callback>, Option<PathBuf>, Vec<(String, String)>)
+{
     let raw_segments: Vec<String> = uri
         .trim_matches('/')
         .split('/')
         .map(|s| s.to_owned())
         .collect();
 
-    let mut params: Vec<(String, String)> = Vec::new();
-    let result = RouteTrie::find(route_head, raw_segments.as_slice(), &mut params);
+    let mut params: Vec<(String, String)> = Vec::with_capacity(raw_segments.len());
+    let (cb, path) =
+        RouteTrie::find(route_head, raw_segments.as_slice(), &mut params);
 
-    (result, params)
+    params.shrink_to_fit();
+    (cb, path, params)
 }
 
 #[cfg(test)]
