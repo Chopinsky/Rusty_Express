@@ -5,7 +5,7 @@ use super::http::{Request, Response};
 use parking_lot::RwLock;
 
 const ERR_STR: &'static str = "The context has not been initialized...";
-static mut C: Option<RwLock<Box<ServerContextProvider>>> = None;
+static mut CONTEXT: Option<RwLock<Box<ServerContextProvider>>> = None;
 
 pub type ServerContextProvider = ContextProvider + Sync + Send;
 
@@ -15,13 +15,13 @@ pub trait ContextProvider {
 }
 
 pub fn set_context(context: Box<ServerContextProvider>) {
-    if let Some(ctx) = unsafe { C.as_mut() } {
+    if let Some(ctx) = unsafe { CONTEXT.as_mut() } {
         let mut ctx = ctx.write();
         *ctx = context;
         return;
     }
 
-    unsafe { C = Some(RwLock::new(context)); }
+    unsafe { CONTEXT = Some(RwLock::new(context)); }
 }
 
 pub fn update_context(
@@ -29,7 +29,7 @@ pub fn update_context(
     resp: &mut Response
 ) -> Result<(), &'static str>
 {
-    if let Some(ctx) = unsafe { C.as_mut() } {
+    if let Some(ctx) = unsafe { CONTEXT.as_mut() } {
         let mut ctx = ctx.write();
         return ctx.update(req, resp);
     }
@@ -42,7 +42,7 @@ pub fn process_with_context(
     resp: &mut Response,
 ) -> Result<(), &'static str>
 {
-    if let Some(ctx) = unsafe { C.as_ref() } {
+    if let Some(ctx) = unsafe { CONTEXT.as_ref() } {
         let ctx = ctx.read();
         return ctx.process(req, resp);
     }

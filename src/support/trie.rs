@@ -38,16 +38,16 @@ impl PartialEq for Field {
             || self.is_param != other.is_param
             || self.validation.is_some() != other.validation.is_some()
         {
-            false
-        } else {
-            if let Some(ref reg_one) = self.validation {
-                if let Some(ref reg_two) = other.validation {
-                    return reg_one.to_string() == reg_two.to_string();
-                }
-            }
-
-            true
+            return false;
         }
+
+        if let Some(ref reg_one) = self.validation {
+            if let Some(ref reg_two) = other.validation {
+                return reg_one.to_string() == reg_two.to_string();
+            }
+        }
+
+        true
     }
 }
 
@@ -73,6 +73,8 @@ impl Node {
     fn insert(
         &mut self, mut segments: Vec<Field>, callback: Option<Callback>, location: Option<PathBuf>
     ) {
+        debug_assert!(callback.is_some() || location.is_some());
+
         let head = match segments.pop() {
             Some(seg) => seg,
             None => return,
@@ -82,17 +84,24 @@ impl Node {
         // a params, otherwise, always create a new branch
         if !head.is_param {
             if let Some(child) = self.named_children.get_mut(&head.name) {
-                match segments.len() {
-                    0 => {
-                        if child.callback.is_some() {
-                            panic!("Key collision!");
-                        }
+                if segments.len() == 0 {
+                    // done, update the node
+                    if (callback.is_some() && child.callback.is_some())
+                        || (location.is_some() && child.location.is_some())
+                    {
+                        panic!("Key collision!");
+                    }
 
+                    if callback.is_some() {
                         child.callback = callback;
                     }
-                    _ => {
-                        child.insert(segments, callback, location);
+
+                    if location.is_some() {
+                        child.location = location;
                     }
+                } else {
+                    // recursive insert to the child
+                    child.insert(segments, callback, location);
                 }
 
                 return;
@@ -115,8 +124,12 @@ impl Node {
     ) -> Node
     {
         match segments.len() {
-            0 => Node::new(field, callback, None),
+            0 => {
+                // leaf node
+                Node::new(field, callback, loc)
+            },
             _ => {
+                // branch node
                 let mut node = Node::new(field, None, None);
                 node.insert(segments, callback, loc);
                 node
@@ -167,8 +180,8 @@ impl RouteTrie {
     }
 
     /*pub(crate)*/ fn add_local_static(&mut self, segments: Vec<Field>, location: PathBuf) {
-    //TODO: add customizable static locations
-
+        //TODO: make the API public
+        self.root.insert(segments, None, Some(location));
     }
 
     pub(crate) fn find(

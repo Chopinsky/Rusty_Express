@@ -98,7 +98,7 @@ fn initialize_response() -> Box<Response> {
     }
 }
 
-fn write_to_stream(stream: &TcpStream, response: &mut Box<Response>) -> ExecCode {
+fn write_to_stream(stream: &TcpStream, response: &mut Response) -> ExecCode {
     let mut writer = BufWriter::new(stream);
 
     // Serialize the header to the stream
@@ -195,7 +195,6 @@ fn read_stream(mut stream: &TcpStream, raw_req: &mut String) -> Option<ConnError
                     raw_req.push_str(req_slice);
                 } else {
                     debug::print("Failed to parse the request stream", InfoLevel::Warning);
-
                     return Some(ConnError::ReadStreamFailure);
                 }
 
@@ -233,7 +232,7 @@ fn deserialize(request: String, store: &mut Box<Request>) -> Option<Callback> {
 
     for (index, info) in request.trim().splitn(2, "\r\n").enumerate() {
         match index {
-            0 => baseline_chan = deserialize_baseline(&info, store),
+            0 => baseline_chan = parse_baseline(&info, store),
             1 => {
                 let remainder: String = info.to_owned();
                 if !remainder.is_empty() {
@@ -254,7 +253,7 @@ fn deserialize(request: String, store: &mut Box<Request>) -> Option<Callback> {
                                     continue;
                                 }
 
-                                deserialize_headers(
+                                parse_headers(
                                     line,
                                     is_body,
                                     &mut header,
@@ -301,7 +300,7 @@ fn deserialize(request: String, store: &mut Box<Request>) -> Option<Callback> {
     res
 }
 
-pub(crate) fn deserialize_baseline(source: &str, req: &mut Box<Request>) -> BaseLine {
+pub(crate) fn parse_baseline(source: &str, req: &mut Box<Request>) -> BaseLine {
     let mut header_only = false;
     let mut raw_scheme = String::new();
     let mut raw_fragment = String::new();
@@ -357,7 +356,7 @@ pub(crate) fn deserialize_baseline(source: &str, req: &mut Box<Request>) -> Base
         }
 
         if !raw_scheme.is_empty() {
-            req.create_scheme(scheme_parser(raw_scheme));
+            req.create_scheme(parse_scheme(raw_scheme));
         }
 
         return Some(rx);
@@ -366,13 +365,14 @@ pub(crate) fn deserialize_baseline(source: &str, req: &mut Box<Request>) -> Base
     None
 }
 
-fn deserialize_headers(
+fn parse_headers(
     line: &str,
     is_body: bool,
     header: &mut HashMap<String, String>,
     cookie: &mut HashMap<String, String>,
     body: &mut Vec<String>,
-) {
+)
+{
     if !is_body {
         let mut header_key: &str = "";
         let mut is_cookie = false;
@@ -385,7 +385,7 @@ fn deserialize_headers(
                 }
                 1 => {
                     if is_cookie {
-                        cookie_parser(info.trim(), cookie);
+                        parse_cookie(info.trim(), cookie);
                     } else if !header_key.is_empty() {
                         header.add(header_key, info.trim().to_owned(), true);
                     }
@@ -446,7 +446,7 @@ fn split_path(source: &str, path: &mut String, scheme: &mut String, frag: &mut S
 /// field is the key of the map, which map to a single value of the key from the Cookie
 /// header field. Assuming no duplicate cookie keys, or the first cookie key-value pair
 /// will be stored.
-fn cookie_parser(raw: &str, cookie: &mut HashMap<String, String>) {
+fn parse_cookie(raw: &str, cookie: &mut HashMap<String, String>) {
     if raw.is_empty() {
         return;
     }
@@ -461,7 +461,7 @@ fn cookie_parser(raw: &str, cookie: &mut HashMap<String, String>) {
     }
 }
 
-fn scheme_parser(scheme: String) -> HashMap<String, Vec<String>> {
+fn parse_scheme(scheme: String) -> HashMap<String, Vec<String>> {
     let mut scheme_result: HashMap<String, Vec<String>> = HashMap::new();
     for (_, kv_pair) in scheme.trim().split('&').enumerate() {
         let store: Vec<&str> = kv_pair.trim().splitn(2, '=').collect();
@@ -487,8 +487,8 @@ fn scheme_parser(scheme: String) -> HashMap<String, Vec<String>> {
     scheme_result
 }
 
-fn build_err_response(err_status: u16) -> Box<Response> {
-    let mut resp = Box::new(Response::new());
+fn build_err_response(err_status: u16) -> Response {
+    let mut resp = Response::new();
 
     resp.status(err_status);
     resp.validate_and_update();
