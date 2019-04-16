@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use std::sync::RwLock;
 
 use crate::channel;
-use crate::core::http::{Request, Response, ResponseStates, ResponseWriter};
+use crate::core::http::{Request, Response};
 use crate::hashbrown::{HashMap, HashSet};
 use crate::support::common::MapUpdates;
 use crate::support::debug::{self, InfoLevel};
@@ -258,26 +258,19 @@ impl RouteMap {
         result
     }
 
-    fn seek_path(&self, uri: &str, params: &mut HashMap<String, String>) -> Option<Callback> {
+    fn seek_path(&self, uri: &str, params: &mut HashMap<String, String>)
+        -> (Option<Callback>, Option<PathBuf>)
+    {
         if let Some(callback) = self.explicit.get(uri) {
-            return Some(*callback);
+            return (Some(*callback), None);
         }
 
         if !self.explicit_with_params.is_empty() {
-            //TODO: save params to the HashMap directly
-            let (cb, path, param_store) =
-                search_params_router(&self.explicit_with_params, uri);
+            let (cb, path) =
+                search_params_router(&self.explicit_with_params, uri, params);
 
-            if cb.is_some() {
-                for param in param_store {
-                    params.insert(param.0, param.1);
-                }
-
-                return cb;
-            }
-
-            if path.is_some() {
-                //TODO: return path
+            if cb.is_some() || path.is_some() {
+                return (cb, path);
             }
         }
 
@@ -285,7 +278,9 @@ impl RouteMap {
             return search_wildcard_router(&self.wildcard, uri);
         }
 
-        None
+        //let r = TrieResult(None, None);
+
+        (None, None)
     }
 }
 
@@ -435,39 +430,22 @@ impl Router for Route {
 }
 
 pub(crate) trait RouteHandler {
-    fn parse_request(callback: Callback, req: &Box<Request>, resp: &mut Box<Response>);
     fn seek_handler(
         method: &REST,
         uri: &str,
         header_only: bool,
-        tx: channel::Sender<(Option<Callback>, HashMap<String, String>)>,
+        tx: channel::Sender<((Option<Callback>, Option<PathBuf>), HashMap<String, String>)>,
     );
 }
 
 impl RouteHandler for Route {
-    fn parse_request(callback: Callback, req: &Box<Request>, resp: &mut Box<Response>) {
-        // callback function will decide what to be written into the response
-        callback(req, resp);
-
-        // if a redirect response, set up as so.
-        let mut redirect = resp.get_redirect_path();
-        if !redirect.is_empty() {
-            if !redirect.starts_with('/') {
-                redirect.insert(0, '/');
-            }
-
-            resp.header("Location", &redirect, true);
-            resp.status(301);
-        }
-    }
-
     fn seek_handler(
         method: &REST,
         uri: &str,
         header_only: bool,
-        tx: channel::Sender<(Option<Callback>, HashMap<String, String>)>,
+        tx: channel::Sender<((Option<Callback>, Option<PathBuf>), HashMap<String, String>)>,
     ) {
-        let mut result = None;
+        let mut result = (None, None);
         let mut params = HashMap::new();
 
         if let Ok(route_store) = ROUTER.read() {
@@ -480,7 +458,7 @@ impl RouteHandler for Route {
                 }
             }
 
-            if result.is_none() {
+            if result.0.is_none() && result.1.is_none() {
                 if let Some(all_routes) = route_store.store.get(&ROUTE_FOR_ALL) {
                     result = all_routes.seek_path(uri, &mut params);
                 }
@@ -493,11 +471,14 @@ impl RouteHandler for Route {
     }
 }
 
-fn search_wildcard_router(routes: &HashMap<String, RegexRoute>, uri: &str) -> Option<Callback> {
-    let mut result = None;
+fn search_wildcard_router(routes: &HashMap<String, RegexRoute>, uri: &str)
+    -> (Option<Callback>, Option<PathBuf>)
+{
+    let mut result = (None, None);
     for (_, route) in routes.iter() {
         if route.regex.is_match(&uri) {
-            result = Some(route.handler);
+            //TODO: actual path
+            result = (Some(route.handler), None);
             break;
         }
     }
@@ -508,7 +489,8 @@ fn search_wildcard_router(routes: &HashMap<String, RegexRoute>, uri: &str) -> Op
 fn search_params_router(
     route_head: &RouteTrie,
     uri: &str,
-) -> (Option<Callback>, Option<PathBuf>, Vec<(String, String)>)
+    params: &mut HashMap<String, String>
+) -> (Option<Callback>, Option<PathBuf>)
 {
     let raw_segments: Vec<String> = uri
         .trim_matches('/')
@@ -516,12 +498,35 @@ fn search_params_router(
         .map(|s| s.to_owned())
         .collect();
 
-    let mut params: Vec<(String, String)> = Vec::with_capacity(raw_segments.len());
+    params.reserve(raw_segments.len());
     let (cb, path) =
-        RouteTrie::find(route_head, raw_segments.as_slice(), &mut params);
+        RouteTrie::find(route_head, raw_segments.as_slice(), params);
 
     params.shrink_to_fit();
-    (cb, path, params)
+    (cb, path)
+}
+
+pub(crate) struct TrieResult(Option<Callback>, Option<PathBuf>);
+
+impl TrieResult {
+    pub(crate) fn is_some(&self) -> bool {
+        self.0.is_some() || self.1.is_some()
+    }
+
+    pub(crate) fn is_none(&self) -> bool {
+        self.0.is_none() && self.1.is_none()
+    }
+
+    pub(crate) fn execute(&self, req: &Box<Request>, resp: &mut Box<Response>) {
+        if let Some(cb) = self.0 {
+            cb(req, resp);
+            return;
+        }
+
+        if let Some(path) = self.1.as_ref() {
+            //TODO: read from the file and write to the resp body
+        }
+    }
 }
 
 #[cfg(test)]

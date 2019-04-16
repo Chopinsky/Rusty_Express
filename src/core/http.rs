@@ -294,6 +294,20 @@ impl Response {
         response
     }
 
+    pub(crate) fn redirect_handling(&mut self) {
+        // if a redirect response, set up as so.
+        let mut redirect = self.get_redirect_path();
+
+        if !redirect.is_empty() {
+            if !redirect.starts_with('/') {
+                redirect.insert(0, '/');
+            }
+
+            self.header("Location", &redirect, true);
+            self.status(301);
+        }
+    }
+
     fn resp_header(&self) -> String {
         // Get cookie parser to its own thread
         let receiver: Option<channel::Receiver<String>> = if self.cookie.is_empty() {

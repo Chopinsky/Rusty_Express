@@ -3,6 +3,7 @@
 use std::io::prelude::*;
 use std::io::BufWriter;
 use std::net::{Shutdown, TcpStream};
+use std::path::PathBuf;
 use std::str;
 use std::time::Duration;
 
@@ -22,7 +23,7 @@ static HEADER_END: [u8; 2] = [13, 10];
 static FLUSH_RETRY: u8 = 4;
 
 type ExecCode = u8;
-type BaseLine = Option<channel::Receiver<(Option<Callback>, HashMap<String, String>)>>;
+type BaseLine = Option<channel::Receiver<((Option<Callback>, Option<PathBuf>), HashMap<String, String>)>>;
 
 #[derive(PartialEq, Eq, Clone, Copy)]
 enum ConnError {
@@ -35,7 +36,7 @@ enum ConnError {
 pub(crate) fn handle_connection(stream: TcpStream) -> ExecCode {
     let mut request = Box::new(Request::new());
 
-    let handler = match parse_request(&stream, &mut request) {
+    let callback = match parse_request(&stream, &mut request) {
         Err(err) => {
             let status: u16 = match err {
                 ConnError::EmptyRequest => 400,
@@ -61,7 +62,7 @@ pub(crate) fn handle_connection(stream: TcpStream) -> ExecCode {
         Ok(cb) => cb,
     };
 
-    handle_response(stream, handler, &request, &mut initialize_response())
+    handle_response(stream, callback, request, initialize_response())
 }
 
 #[inline]
@@ -72,9 +73,10 @@ pub(crate) fn send_err_resp(stream: TcpStream, err_code: u16) -> ExecCode {
 fn handle_response(
     stream: TcpStream,
     callback: Callback,
-    request: &Box<Request>,
-    response: &mut Box<Response>,
-) -> ExecCode {
+    request: Box<Request>,
+    mut response: Box<Response>,
+) -> ExecCode
+{
     match request.header("connection") {
         Some(ref val) if val.eq(&String::from("close")) => response.can_keep_alive(false),
         _ => response.can_keep_alive(true),
@@ -84,10 +86,13 @@ fn handle_response(
         response.header_only(true);
     }
 
-    Route::parse_request(callback, request, response);
+    // callback function will decide what to be written into the response
+    callback(&request, &mut response);
+
+    response.redirect_handling();
     response.validate_and_update();
 
-    write_to_stream(&stream, response)
+    write_to_stream(&stream, &mut response)
 }
 
 fn initialize_response() -> Box<Response> {
@@ -166,10 +171,13 @@ fn parse_request(stream: &TcpStream, request: &mut Box<Request>) -> Result<Callb
     }
 
     let callback =
-        if let Some(result) = deserialize(raw, request) {
-            result
-        } else {
-            return Err(ConnError::ServiceUnavailable);
+        match deserialize(raw, request) {
+            (Some(cb), None) => cb,
+            (None, Some(path)) => {
+                // will return path buf in the future
+                unreachable!()
+            },
+            _ => return Err(ConnError::ServiceUnavailable)
         };
 
     if let Ok(client) = stream.peer_addr() {
@@ -198,13 +206,13 @@ fn read_stream(mut stream: &TcpStream, raw_req: &mut String) -> Option<ConnError
                     return Some(ConnError::ReadStreamFailure);
                 }
 
-                if len == 512 {
+                if len < 512 {
+                    break;
+                } else {
                     // possibly to have more to read, clear the buffer and load it again
                     buffer.iter_mut().for_each(|val| {
                         *val = 0;
                     });
-                } else {
-                    break;
                 }
             }
             Err(e) => {
@@ -221,12 +229,12 @@ fn read_stream(mut stream: &TcpStream, raw_req: &mut String) -> Option<ConnError
     None
 }
 
-fn deserialize(request: String, store: &mut Box<Request>) -> Option<Callback> {
+fn deserialize(request: String, store: &mut Box<Request>) -> (Option<Callback>, Option<PathBuf>) {
     if request.is_empty() {
-        return None;
+        return (None, None);
     }
 
-    let mut res = None;
+    let mut res = (None, None);
     let mut baseline_chan = None;
     let mut remainder_chan = None;
 
@@ -281,11 +289,10 @@ fn deserialize(request: String, store: &mut Box<Request>) -> Option<Callback> {
 
     if let Some(rx) = baseline_chan {
         if let Ok(route_info) = rx.recv_timeout(Duration::from_millis(128)) {
-            if route_info.0.is_some() {
+            res = route_info.0;
+            if res.0.is_some() || res.1.is_some() {
                 store.create_param(route_info.1);
             }
-
-            res = route_info.0;
         }
 
         if let Some(chan) = remainder_chan {

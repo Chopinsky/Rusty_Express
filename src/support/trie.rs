@@ -1,6 +1,6 @@
 #![allow(dead_code)]
 
-use crate::core::router::Callback;
+use crate::core::router::{Callback, TrieResult};
 use crate::hashbrown::HashMap;
 use crate::regex::Regex;
 use std::path::PathBuf;
@@ -187,10 +187,11 @@ impl RouteTrie {
     pub(crate) fn find(
         route_head: &RouteTrie,
         segments: &[String],
-        params: &mut Vec<(String, String)>,
+        params: &mut HashMap<String, String>,
     ) -> (Option<Callback>, Option<PathBuf>)
     {
         if let Some(last) = segments.last() {
+            //TODO: return actual path
             if last.contains('.') {
 
             }
@@ -202,7 +203,7 @@ impl RouteTrie {
     fn recursive_find(
         root: &Node,
         segments: &[String],
-        params: &mut Vec<(String, String)>,
+        params: &mut HashMap<String, String>,
     ) -> Option<Callback>
     {
         //TODO: return tuple options instead of just callback option
@@ -233,18 +234,22 @@ impl RouteTrie {
                 }
             }
 
-            params.push((param_node.field.name.clone(), head.clone()));
+            let cb =
+                if is_segments_tail {
+                    param_node.callback
+                } else if let Some(cb) = RouteTrie::recursive_find(param_node, &segments[1..], params) {
+                    Some(cb)
+                } else {
+                    None
+                };
 
-            if is_segments_tail {
-                return param_node.callback;
+            if cb.is_some() {
+                params.entry(param_node.field.name.clone()).or_insert(head.to_owned());
+                return cb;
             }
-
-            if let Some(cb) = RouteTrie::recursive_find(param_node, &segments[1..], params) {
-                return Some(cb);
-            }
-
-            params.pop();
         }
+
+        //TODO: if path, return too...
 
         None
     }
