@@ -20,8 +20,8 @@ fn main() {
     // Define router separately
     let mut router = Route::new();
     router
-        .get(RequestPath::Explicit("/"), Model::simple_response)
-        .get(RequestPath::Explicit("/index"), Model::simple_index);
+        .get(RequestPath::Explicit("/"), simple_response)
+        .get(RequestPath::Explicit("/index"), simple_index);
 
     server.def_router(router);
 
@@ -39,25 +39,35 @@ fn main() {
     );
 }
 
+pub fn simple_response(req: &Box<Request>, resp: &mut Box<Response>) {
+    work_with_context(req, resp);
+    resp.send("Hello world from rusty server!\n");
+    resp.status(200);
+}
+
+pub fn simple_index(req: &Box<Request>, resp: &mut Box<Response>) {
+    work_with_context(req, resp);
+    resp.send("Hello world from the index page!\n");
+    // the status 200 is inferred
+}
+
+fn work_with_context(req: &Request, resp: &mut Response) {
+    if let Err(e) = ServerContext::update_context(req, resp) {
+        // Error handling...
+        eprintln!("Error on updating the server context: {}", e);
+    }
+
+    if let Err(e) = ServerContext::process_with_context(req, resp) {
+        // Error handling...
+        eprintln!("Error on updating the server context: {}", e);
+    }
+}
+
 struct Model {
     count: u32,
 }
 
 impl Model {
-    pub fn simple_response(req: &Box<Request>, resp: &mut Box<Response>) {
-        Model::work_with_context(req, resp);
-
-        resp.send("Hello world from rusty server!\n");
-        resp.status(200);
-    }
-
-    pub fn simple_index(req: &Box<Request>, resp: &mut Box<Response>) {
-        Model::work_with_context(req, resp);
-
-        resp.send("Hello world from the index page!\n");
-        // the status 200 is inferred
-    }
-
     #[inline]
     pub fn new() -> Self {
         Model { count: 0 }
@@ -76,18 +86,6 @@ impl Model {
     #[inline]
     fn get_count(&self) -> u32 {
         self.count
-    }
-
-    fn work_with_context(req: &Request, resp: &mut Response) {
-        if let Err(e) = ServerContext::update_context(req, resp) {
-            // Error handling...
-            eprintln!("Error on updating the server context: {}", e);
-        }
-
-        if let Err(e) = ServerContext::process_with_context(req, resp) {
-            // Error handling...
-            eprintln!("Error on updating the server context: {}", e);
-        }
     }
 }
 

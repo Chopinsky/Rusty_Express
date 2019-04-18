@@ -1,6 +1,6 @@
 #![allow(dead_code)]
 
-use crate::core::router::{Callback, TrieResult};
+use crate::core::router::{Callback, RouteHandler};
 use crate::hashbrown::HashMap;
 use crate::regex::Regex;
 use std::path::PathBuf;
@@ -84,7 +84,7 @@ impl Node {
         // a params, otherwise, always create a new branch
         if !head.is_param {
             if let Some(child) = self.named_children.get_mut(&head.name) {
-                if segments.len() == 0 {
+                if segments.is_empty() {
                     // done, update the node
                     if (callback.is_some() && child.callback.is_some())
                         || (location.is_some() && child.location.is_some())
@@ -170,8 +170,8 @@ impl RouteTrie {
         self.root.named_children.is_empty() && self.root.params_children.is_empty()
     }
 
-    pub(crate) fn add(&mut self, segments: Vec<Field>, callback: Callback) {
-        self.root.insert(segments, Some(callback), None);
+    pub(crate) fn add(&mut self, segments: Vec<Field>, callback: Option<Callback>, location: Option<PathBuf>) {
+        self.root.insert(segments, callback, location);
     }
 
     // global: location + path/to/file/in/uri
@@ -188,7 +188,7 @@ impl RouteTrie {
         route_head: &RouteTrie,
         segments: &[String],
         params: &mut HashMap<String, String>,
-    ) -> (Option<Callback>, Option<PathBuf>)
+    ) -> RouteHandler
     {
         if let Some(last) = segments.last() {
             //TODO: return actual path
@@ -197,27 +197,25 @@ impl RouteTrie {
             }
         }
 
-        (RouteTrie::recursive_find(&route_head.root, segments, params), None)
+        RouteTrie::recursive_find(&route_head.root, segments, params)
     }
 
     fn recursive_find(
         root: &Node,
         segments: &[String],
         params: &mut HashMap<String, String>,
-    ) -> Option<Callback>
+    ) -> RouteHandler
     {
-        //TODO: return tuple options instead of just callback option
-
         if segments.is_empty() {
-            return None;
+            return RouteHandler::default();
         }
 
         let head = &segments[0];
-        let is_segments_tail = segments.len() <= 1;
+        let is_tail = segments.len() <= 1;
 
         if let Some(child) = root.named_children.get(head) {
-            if is_segments_tail {
-                return child.callback;
+            if is_tail {
+                return RouteHandler::new(child.callback, child.location.clone());
             }
 
             return RouteTrie::recursive_find(&child, &segments[1..], params);
@@ -234,24 +232,20 @@ impl RouteTrie {
                 }
             }
 
-            let cb =
-                if is_segments_tail {
-                    param_node.callback
-                } else if let Some(cb) = RouteTrie::recursive_find(param_node, &segments[1..], params) {
-                    Some(cb)
+            let result =
+                if is_tail {
+                    RouteHandler::new(param_node.callback, param_node.location.clone())
                 } else {
-                    None
+                    RouteTrie::recursive_find(param_node, &segments[1..], params)
                 };
 
-            if cb.is_some() {
+            if result.is_some() {
                 params.entry(param_node.field.name.clone()).or_insert(head.to_owned());
-                return cb;
+                return result;
             }
         }
 
-        //TODO: if path, return too...
-
-        None
+        RouteHandler::default()
     }
 }
 

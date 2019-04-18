@@ -54,7 +54,7 @@ pub mod prelude {
 }
 
 use std::net::{SocketAddr, TcpListener, TcpStream};
-use std::path::Path;
+use std::path::PathBuf;
 use std::thread;
 use std::time::Duration;
 
@@ -378,37 +378,40 @@ impl ServerDef for HttpServer {
 
 impl Router for HttpServer {
     fn get(&mut self, uri: RequestPath, callback: Callback) -> &mut Self {
-        Route::add_route(REST::GET, uri, callback);
+        Route::add_route(REST::GET, uri, RouteHandler::new(Some(callback), None));
         self
     }
 
     fn patch(&mut self, uri: RequestPath, callback: Callback) -> &mut Self {
-        Route::add_route(REST::PATCH, uri, callback);
+        Route::add_route(REST::PATCH, uri, RouteHandler::new(Some(callback), None));
         self
     }
 
     fn post(&mut self, uri: RequestPath, callback: Callback) -> &mut Self {
-        Route::add_route(REST::POST, uri, callback);
+        Route::add_route(REST::POST, uri, RouteHandler::new(Some(callback), None));
         self
     }
 
     fn put(&mut self, uri: RequestPath, callback: Callback) -> &mut Self {
-        Route::add_route(REST::PUT, uri, callback);
+        Route::add_route(REST::PUT, uri, RouteHandler::new(Some(callback), None));
         self
     }
 
     fn delete(&mut self, uri: RequestPath, callback: Callback) -> &mut Self {
-        Route::add_route(REST::DELETE, uri, callback);
+        Route::add_route(REST::DELETE, uri, RouteHandler::new(Some(callback), None));
         self
     }
 
     fn options(&mut self, uri: RequestPath, callback: Callback) -> &mut Self {
-        Route::add_route(REST::OPTIONS, uri, callback);
+        Route::add_route(REST::OPTIONS, uri, RouteHandler::new(Some(callback), None));
         self
     }
 
     fn other(&mut self, method: &str, uri: RequestPath, callback: Callback) -> &mut Self {
-        Route::add_route(REST::OTHER(method.to_uppercase()), uri, callback);
+        Route::add_route(REST::OTHER(
+            method.to_uppercase()), uri, RouteHandler::new(Some(callback), None)
+        );
+
         self
     }
 
@@ -417,9 +420,9 @@ impl Router for HttpServer {
         self
     }
 
-    fn use_static(&mut self, path: &Path) -> &mut Self {
-        //Route::use_static(path);
-        unimplemented!();
+    fn use_static(&mut self, path: PathBuf) -> &mut Self {
+        Route::add_static(REST::GET, path);
+        self
     }
 }
 

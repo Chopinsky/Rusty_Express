@@ -2,7 +2,7 @@
 #![allow(clippy::borrowed_box)]
 
 use std::fmt;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::RwLock;
 
 use crate::channel;
@@ -76,12 +76,12 @@ pub type Callback = fn(&Box<Request>, &mut Box<Response>);
 pub type AuthFunc = fn(&Box<Request>, &String) -> bool;
 
 struct RegexRoute {
-    pub regex: Regex,
-    pub handler: Callback,
+    regex: Regex,
+    handler: RouteHandler,
 }
 
 impl RegexRoute {
-    pub fn new(re: Regex, handler: Callback) -> Self {
+    pub(crate) fn new(re: Regex, handler: RouteHandler) -> Self {
         RegexRoute { regex: re, handler }
     }
 }
@@ -90,7 +90,7 @@ impl Clone for RegexRoute {
     fn clone(&self) -> Self {
         RegexRoute {
             regex: self.regex.clone(),
-            handler: self.handler,
+            handler: self.handler.clone(),
         }
     }
 }
@@ -102,7 +102,7 @@ struct StaticLocRoute {
 }
 
 pub(crate) struct RouteMap {
-    explicit: HashMap<String, Callback>,
+    explicit: HashMap<String, RouteHandler>,
     explicit_with_params: RouteTrie,
     wildcard: HashMap<String, RegexRoute>,
     static_path: Option<StaticLocRoute>,
@@ -118,7 +118,7 @@ impl RouteMap {
         }
     }
 
-    pub fn insert(&mut self, uri: RequestPath, callback: Callback) {
+    pub fn insert(&mut self, uri: RequestPath, callback: RouteHandler) {
         match uri {
             RequestPath::Explicit(req_uri) => {
                 if req_uri.is_empty() || !req_uri.starts_with('/') {
@@ -138,7 +138,10 @@ impl RouteMap {
 
                 if let Ok(re) = Regex::new(req_uri) {
                     self.wildcard
-                        .add(req_uri, RegexRoute::new(re, callback), false);
+                        .add(req_uri,
+                             RegexRoute::new(re, callback),
+                             false
+                        );
                 }
             }
             RequestPath::ExplicitWithParams(req_uri) => {
@@ -148,7 +151,7 @@ impl RouteMap {
                 }
 
                 self.explicit_with_params
-                    .add(RouteMap::params_parser(req_uri), callback);
+                    .add(RouteMap::params_parser(req_uri), callback.0, callback.1);
             }
         }
     }
@@ -258,19 +261,17 @@ impl RouteMap {
         result
     }
 
-    fn seek_path(&self, uri: &str, params: &mut HashMap<String, String>)
-        -> (Option<Callback>, Option<PathBuf>)
-    {
+    fn seek_path(&self, uri: &str, params: &mut HashMap<String, String>) -> RouteHandler {
         if let Some(callback) = self.explicit.get(uri) {
-            return (Some(*callback), None);
+            return callback.clone();
         }
 
         if !self.explicit_with_params.is_empty() {
-            let (cb, path) =
+            let result =
                 search_params_router(&self.explicit_with_params, uri, params);
 
-            if cb.is_some() || path.is_some() {
-                return (cb, path);
+            if result.is_some() {
+                return result;
             }
         }
 
@@ -278,9 +279,7 @@ impl RouteMap {
             return search_wildcard_router(&self.wildcard, uri);
         }
 
-        //let r = TrieResult(None, None);
-
-        (None, None)
+        RouteHandler(None, None)
     }
 }
 
@@ -331,13 +330,19 @@ impl Route {
         ))
     }
 
-    pub(crate) fn add_route(method: REST, uri: RequestPath, callback: Callback) {
+    pub(crate) fn add_route(method: REST, uri: RequestPath, callback: RouteHandler) {
         if let Ok(mut route) = ROUTER.write() {
             route.add(method, uri, callback);
         }
     }
 
-    fn add(&mut self, method: REST, uri: RequestPath, callback: Callback) {
+    pub(crate) fn add_static(method: REST, path: PathBuf) {
+        if let Ok(mut route) = ROUTER.write() {
+            route.set_static(method, path);
+        }
+    }
+
+    fn add(&mut self, method: REST, uri: RequestPath, callback: RouteHandler) {
         if let Some(r) = self.store.get_mut(&method) {
             //find, insert, done.
             r.insert(uri, callback);
@@ -346,6 +351,28 @@ impl Route {
 
         let mut map = RouteMap::new();
         map.insert(uri, callback);
+        self.store.insert(method, map);
+    }
+
+    fn set_static(&mut self, method: REST, path: PathBuf) {
+        if let Some(r) = self.store.get_mut(&method) {
+            //find, insert, done.
+            r.static_path.replace(StaticLocRoute {
+                location: path,
+                black_list: HashSet::new(),
+                white_list: HashSet::new(),
+            });
+
+            return;
+        }
+
+        let mut map = RouteMap::new();
+        map.static_path.replace(StaticLocRoute {
+            location: path,
+            black_list: HashSet::new(),
+            white_list: HashSet::new(),
+        });
+
         self.store.insert(method, map);
     }
 
@@ -364,37 +391,37 @@ pub trait Router {
     fn options(&mut self, uri: RequestPath, callback: Callback) -> &mut Self;
     fn other(&mut self, method: &str, uri: RequestPath, callback: Callback) -> &mut Self;
     fn all(&mut self, uri: RequestPath, callback: Callback) -> &mut Self;
-    fn use_static(&mut self, path: &Path) -> &mut Self;
+    fn use_static(&mut self, path: PathBuf) -> &mut Self;
 }
 
 impl Router for Route {
     fn get(&mut self, uri: RequestPath, callback: Callback) -> &mut Self {
-        self.add(REST::GET, uri, callback);
+        self.add(REST::GET, uri, RouteHandler(Some(callback), None));
         self
     }
 
     fn patch(&mut self, uri: RequestPath, callback: Callback) -> &mut Self {
-        self.add(REST::PATCH, uri, callback);
+        self.add(REST::PATCH, uri, RouteHandler(Some(callback), None));
         self
     }
 
     fn post(&mut self, uri: RequestPath, callback: Callback) -> &mut Self {
-        self.add(REST::POST, uri, callback);
+        self.add(REST::POST, uri, RouteHandler(Some(callback), None));
         self
     }
 
     fn put(&mut self, uri: RequestPath, callback: Callback) -> &mut Self {
-        self.add(REST::PUT, uri, callback);
+        self.add(REST::PUT, uri, RouteHandler(Some(callback), None));
         self
     }
 
     fn delete(&mut self, uri: RequestPath, callback: Callback) -> &mut Self {
-        self.add(REST::DELETE, uri, callback);
+        self.add(REST::DELETE, uri, RouteHandler(Some(callback), None));
         self
     }
 
     fn options(&mut self, uri: RequestPath, callback: Callback) -> &mut Self {
-        self.add(REST::OPTIONS, uri, callback);
+        self.add(REST::OPTIONS, uri, RouteHandler(Some(callback), None));
         self
     }
 
@@ -404,7 +431,7 @@ impl Router for Route {
         }
 
         let request_method = REST::OTHER(method.to_uppercase());
-        self.add(request_method, uri, callback);
+        self.add(request_method, uri, RouteHandler(Some(callback), None));
 
         self
     }
@@ -417,7 +444,9 @@ impl Router for Route {
         self.other("*", uri, callback)
     }
 
-    fn use_static(&mut self, path: &Path) -> &mut Self {
+    fn use_static(&mut self, path: PathBuf) -> &mut Self {
+        unimplemented!();
+
         assert!(
             path.is_dir(),
             "The static folder location must point to a folder"
@@ -429,23 +458,23 @@ impl Router for Route {
     }
 }
 
-pub(crate) trait RouteHandler {
-    fn seek_handler(
+pub(crate) trait RouteSeeker {
+    fn seek(
         method: &REST,
         uri: &str,
         header_only: bool,
-        tx: channel::Sender<((Option<Callback>, Option<PathBuf>), HashMap<String, String>)>,
+        tx: channel::Sender<(RouteHandler, HashMap<String, String>)>,
     );
 }
 
-impl RouteHandler for Route {
-    fn seek_handler(
+impl RouteSeeker for Route {
+    fn seek(
         method: &REST,
         uri: &str,
         header_only: bool,
-        tx: channel::Sender<((Option<Callback>, Option<PathBuf>), HashMap<String, String>)>,
+        tx: channel::Sender<(RouteHandler, HashMap<String, String>)>,
     ) {
-        let mut result = (None, None);
+        let mut result = RouteHandler(None, None);
         let mut params = HashMap::new();
 
         if let Ok(route_store) = ROUTER.read() {
@@ -458,7 +487,7 @@ impl RouteHandler for Route {
                 }
             }
 
-            if result.0.is_none() && result.1.is_none() {
+            if result.is_none() {
                 if let Some(all_routes) = route_store.store.get(&ROUTE_FOR_ALL) {
                     result = all_routes.seek_path(uri, &mut params);
                 }
@@ -471,14 +500,11 @@ impl RouteHandler for Route {
     }
 }
 
-fn search_wildcard_router(routes: &HashMap<String, RegexRoute>, uri: &str)
-    -> (Option<Callback>, Option<PathBuf>)
-{
-    let mut result = (None, None);
+fn search_wildcard_router(routes: &HashMap<String, RegexRoute>, uri: &str) -> RouteHandler {
+    let mut result = RouteHandler(None, None);
     for (_, route) in routes.iter() {
         if route.regex.is_match(&uri) {
-            //TODO: actual path
-            result = (Some(route.handler), None);
+            result = route.handler.clone();
             break;
         }
     }
@@ -490,25 +516,29 @@ fn search_params_router(
     route_head: &RouteTrie,
     uri: &str,
     params: &mut HashMap<String, String>
-) -> (Option<Callback>, Option<PathBuf>)
+) -> RouteHandler
 {
     let raw_segments: Vec<String> = uri
         .trim_matches('/')
         .split('/')
-        .map(|s| s.to_owned())
+        .map(String::from)
         .collect();
 
     params.reserve(raw_segments.len());
-    let (cb, path) =
+    let result =
         RouteTrie::find(route_head, raw_segments.as_slice(), params);
 
     params.shrink_to_fit();
-    (cb, path)
+    result
 }
 
-pub(crate) struct TrieResult(Option<Callback>, Option<PathBuf>);
+pub(crate) struct RouteHandler(Option<Callback>, Option<PathBuf>);
 
-impl TrieResult {
+impl RouteHandler {
+    pub(crate) fn new(cb: Option<Callback>, path: Option<PathBuf>) -> Self {
+        RouteHandler(cb, path)
+    }
+
     pub(crate) fn is_some(&self) -> bool {
         self.0.is_some() || self.1.is_some()
     }
@@ -518,6 +548,8 @@ impl TrieResult {
     }
 
     pub(crate) fn execute(&self, req: &Box<Request>, resp: &mut Box<Response>) {
+        assert!(self.is_some());
+
         if let Some(cb) = self.0 {
             cb(req, resp);
             return;
@@ -526,6 +558,18 @@ impl TrieResult {
         if let Some(path) = self.1.as_ref() {
             //TODO: read from the file and write to the resp body
         }
+    }
+}
+
+impl Default for RouteHandler {
+    fn default() -> Self {
+        RouteHandler(None, None)
+    }
+}
+
+impl Clone for RouteHandler {
+    fn clone(&self) -> Self {
+        RouteHandler(self.0, self.1.clone())
     }
 }
 

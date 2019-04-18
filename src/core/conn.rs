@@ -3,7 +3,6 @@
 use std::io::prelude::*;
 use std::io::BufWriter;
 use std::net::{Shutdown, TcpStream};
-use std::path::PathBuf;
 use std::str;
 use std::time::Duration;
 
@@ -12,7 +11,7 @@ use crate::core::config::ConnMetadata;
 use crate::core::http::{
     Request, RequestWriter, Response, ResponseManager, ResponseStates, ResponseWriter,
 };
-use crate::core::router::{Callback, Route, RouteHandler, REST};
+use crate::core::router::{Route, RouteSeeker, REST, RouteHandler};
 use crate::hashbrown::HashMap;
 use crate::support::{
     common::flush_buffer, common::write_to_buff, common::MapUpdates, debug, debug::InfoLevel,
@@ -23,7 +22,7 @@ static HEADER_END: [u8; 2] = [13, 10];
 static FLUSH_RETRY: u8 = 4;
 
 type ExecCode = u8;
-type BaseLine = Option<channel::Receiver<((Option<Callback>, Option<PathBuf>), HashMap<String, String>)>>;
+type BaseLine = Option<channel::Receiver<(RouteHandler, HashMap<String, String>)>>;
 
 #[derive(PartialEq, Eq, Clone, Copy)]
 enum ConnError {
@@ -72,7 +71,7 @@ pub(crate) fn send_err_resp(stream: TcpStream, err_code: u16) -> ExecCode {
 
 fn handle_response(
     stream: TcpStream,
-    callback: Callback,
+    callback: RouteHandler,
     request: Box<Request>,
     mut response: Box<Response>,
 ) -> ExecCode
@@ -87,7 +86,7 @@ fn handle_response(
     }
 
     // callback function will decide what to be written into the response
-    callback(&request, &mut response);
+    callback.execute(&request, &mut response);
 
     response.redirect_handling();
     response.validate_and_update();
@@ -160,7 +159,7 @@ fn stream_shutdown(stream: &TcpStream) -> u8 {
     0
 }
 
-fn parse_request(stream: &TcpStream, request: &mut Box<Request>) -> Result<Callback, ConnError> {
+fn parse_request(stream: &TcpStream, request: &mut Box<Request>) -> Result<RouteHandler, ConnError> {
     let mut raw = String::with_capacity(512); // 512 -- default buffer size
     if let Some(e) = read_stream(stream, &mut raw) {
         return Err(e);
@@ -170,15 +169,10 @@ fn parse_request(stream: &TcpStream, request: &mut Box<Request>) -> Result<Callb
         return Err(ConnError::EmptyRequest);
     }
 
-    let callback =
-        match deserialize(raw, request) {
-            (Some(cb), None) => cb,
-            (None, Some(path)) => {
-                // will return path buf in the future
-                unreachable!()
-            },
-            _ => return Err(ConnError::ServiceUnavailable)
-        };
+    let result = deserialize(raw, request);
+    if result.is_none() {
+        return Err(ConnError::ServiceUnavailable)
+    }
 
     if let Ok(client) = stream.peer_addr() {
         request.set_client(client);
@@ -190,7 +184,7 @@ fn parse_request(stream: &TcpStream, request: &mut Box<Request>) -> Result<Callb
         }
     }
 
-    Ok(callback)
+    Ok(result)
 }
 
 fn read_stream(mut stream: &TcpStream, raw_req: &mut String) -> Option<ConnError> {
@@ -229,12 +223,12 @@ fn read_stream(mut stream: &TcpStream, raw_req: &mut String) -> Option<ConnError
     None
 }
 
-fn deserialize(request: String, store: &mut Box<Request>) -> (Option<Callback>, Option<PathBuf>) {
+fn deserialize(request: String, store: &mut Box<Request>) -> RouteHandler {
     if request.is_empty() {
-        return (None, None);
+        return RouteHandler::new(None, None);
     }
 
-    let mut res = (None, None);
+    let mut res = RouteHandler::new(None, None);
     let mut baseline_chan = None;
     let mut remainder_chan = None;
 
@@ -288,10 +282,10 @@ fn deserialize(request: String, store: &mut Box<Request>) -> (Option<Callback>, 
     }
 
     if let Some(rx) = baseline_chan {
-        if let Ok(route_info) = rx.recv_timeout(Duration::from_millis(128)) {
-            res = route_info.0;
-            if res.0.is_some() || res.1.is_some() {
-                store.create_param(route_info.1);
+        if let Ok(result) = rx.recv_timeout(Duration::from_millis(128)) {
+            res = result.0;
+            if res.is_some() {
+                store.create_param(result.1);
             }
         }
 
@@ -352,7 +346,7 @@ pub(crate) fn parse_baseline(source: &str, req: &mut Box<Request>) -> BaseLine {
         let (tx, rx) = channel::unbounded();
         shared_pool::run(
             move || {
-                Route::seek_handler(&req_method, &uri, header_only, tx);
+                Route::seek(&req_method, &uri, header_only, tx);
             },
             TaskType::Request,
         );
