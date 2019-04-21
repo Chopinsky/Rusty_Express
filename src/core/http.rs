@@ -275,10 +275,9 @@ pub struct Response {
     cookie: Arc<HashMap<String, Cookie>>,
     header: HashMap<String, String>,
     header_only: bool,
-    body: String,
-    body_tx: Option<channel::Sender<String>>,
-    body_rx: Option<channel::Receiver<String>>,
     redirect: String,
+    body: String,
+    body_chan: Option<(channel::Sender<(String, u16)>, channel::Receiver<(String, u16)>)>,
     notifier: Option<(channel::Sender<String>, channel::Receiver<String>)>,
     subscriber: Option<(channel::Sender<String>, channel::Receiver<String>)>,
 }
@@ -448,7 +447,7 @@ impl ResponseStates for Response {
 
     #[inline]
     fn has_contents(&self) -> bool {
-        (self.is_header_only() || !self.body.is_empty() || self.body_rx.is_some())
+        (self.is_header_only() || !self.body.is_empty() || self.body_chan.is_some())
     }
 
     #[inline]
@@ -487,7 +486,9 @@ pub trait ResponseWriter {
     fn set_header(&mut self, field: &str, value: &str);
     fn send(&mut self, content: &str);
     fn send_file(&mut self, file_path: &str) -> u16;
+    fn send_file_from_path(&mut self, path: PathBuf) -> u16;
     fn send_file_async(&mut self, file_loc: &str);
+    fn send_file_from_path_async(&mut self, path: PathBuf);
     fn send_template<T: EngineContext + Send + Sync + 'static>(
         &mut self,
         file_path: &str,
@@ -599,48 +600,60 @@ impl ResponseWriter for Response {
     /// this auto-generated content type response attribute.
     /// ...
     fn send_file(&mut self, file_loc: &str) -> u16 {
-        //TODO - use meta path
-
         if self.is_header_only() {
             return 200;
         }
 
         if let Some(file_path) = get_file_path(file_loc) {
-            let status = open_file(&file_path, &mut self.body);
-
-            if status != 200 && status != 0 {
-                // if not opening the file correctly, reset the body for error page
-                self.body = String::new();
-            } else if status == 200 && self.content_type.is_empty() {
-                // if read the file good and not set the mime yet, set the mime
-                self.set_ext_mime_header(&file_path);
-            }
-
-            return status;
+            return self.send_file_from_path(file_path);
         }
 
         // if not getting the file path, then a 404
         404
     }
 
+    fn send_file_from_path(&mut self, path: PathBuf) -> u16 {
+        if self.is_header_only() {
+            return 200;
+        }
+
+        let status = open_file(&path, &mut self.body);
+
+        if status != 200 && status != 0 {
+            // if not opening the file correctly, reset the body for error page
+            self.body = String::new();
+        } else if status == 200 && self.content_type.is_empty() {
+            // if read the file good and not set the mime yet, set the mime
+            self.set_ext_mime_header(&path);
+        }
+
+        status
+    }
+
     fn send_file_async(&mut self, file_loc: &str) {
+        if let Some(path) = get_file_path(file_loc) {
+            self.send_file_from_path_async(path);
+        }
+    }
+
+    fn send_file_from_path_async(&mut self, path: PathBuf) {
+        // if header only, quit
         if self.is_header_only() {
             return;
         }
 
         // lazy init the tx-rx pair.
-        if self.body_tx.is_none() {
-            let (tx, rx) = channel::unbounded();
-            self.body_tx = Some(tx);
-            self.body_rx = Some(rx);
+        if self.body_chan.is_none() {
+            let (tx, rx) = channel::bounded(64);
+            self.body_chan = Some((tx, rx));
         }
 
-        if let Some(path) = get_file_path(&file_loc) {
-            self.set_ext_mime_header(&path);
+        // set header's mime extension field
+        self.set_ext_mime_header(&path);
 
-            if let Some(tx) = self.body_tx.as_ref() {
-                open_file_async(path, tx.clone());
-            }
+        // actually load the file to the response body
+        if let Some(chan) = self.body_chan.as_ref() {
+            open_file_async(path, chan.0.clone());
         }
     }
 
@@ -762,20 +775,23 @@ impl ResponseManager for Response {
     }
 
     fn validate_and_update(&mut self) {
-        if self.body_tx.is_some() {
-            // must drop the tx or we will hang indefinitely
-            self.body_tx = None;
-        }
-
         if self.status != 0 && (self.status < 200 || self.status == 204 || self.status == 304) {
             self.header_only(true);
         }
 
-        if !self.is_header_only() && self.body_rx.is_some() {
+        if !self.is_header_only() && self.body_chan.is_some() {
             // try to receive the async bodies
-            if let Some(ref rx) = self.body_rx {
-                for received in rx {
-                    self.body.push_str(&received);
+            if let Some(chan) = self.body_chan.take() {
+                for received in chan.1 {
+                    if received.1 == 200 {
+                        // read the content
+                        self.body.push_str(&received.0);
+                    } else {
+                        // faulty, clear the content
+                        self.status = 500;
+                        self.body.clear();
+                        break;
+                    }
                 }
             }
         }
@@ -976,26 +992,49 @@ fn open_file(file_path: &PathBuf, buf: &mut String) -> u16 {
     }
 }
 
-fn open_file_async(file_path: PathBuf, tx: channel::Sender<String>) {
-    shared_pool::run(
-        move || {
-            let mut buf = String::new();
-            match open_file(&file_path, &mut buf) {
-                404 | 500 if !buf.is_empty() => {
-                    buf.clear();
-                }
-                _ => { /* Nothing to do here */ }
-            }
+fn open_file_async(file_path: PathBuf, tx: channel::Sender<(String, u16)>) {
+    shared_pool::run(move || {
+        // try open the file
+        if let Ok(file) = File::open(file_path) {
+            let mut buf_reader = BufReader::new(file);
+            let mut buf = [0u8; 512];
 
-            if let Err(e) = tx.send(buf) {
-                debug::print(
-                    &format!("Unable to write the file to the stream: {}", e),
-                    InfoLevel::Warning,
-                );
+            loop {
+                match buf_reader.read(&mut buf) {
+                    Ok(len) => {
+                        if let Ok(content) = str::from_utf8(&buf[..len]) {
+                            if let Err(e) = tx.send((content.to_owned(), 200)) {
+                                debug::print(
+                                    &format!("Unable to write the file to the stream: {}", e),
+                                    InfoLevel::Warning,
+                                );
+                                break;
+                            }
+                        } else {
+                            if let Err(e) = tx.send((String::new(), 500)) {
+                                debug::print(
+                                    &format!("Unable to write the file to the stream: {}", e),
+                                    InfoLevel::Warning,
+                                );
+                            }
+
+                            break;
+                        }
+
+                        if len < 512 {
+                            break;
+                        }
+                    },
+                    Err(e) => {
+                        debug::print(&format!("Unable to read file: {}", e), InfoLevel::Warning);
+                        break;
+                    },
+                }
             }
-        },
-        TaskType::Response,
-    );
+        } else {
+            debug::print("Unable to open requested file for path", InfoLevel::Warning);
+        }
+    }, TaskType::Response);
 }
 
 fn get_status(status: u16) -> String {

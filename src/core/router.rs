@@ -6,7 +6,7 @@ use std::path::PathBuf;
 use std::sync::RwLock;
 
 use crate::channel;
-use crate::core::http::{Request, Response};
+use crate::core::http::{Request, Response, ResponseWriter};
 use crate::hashbrown::{HashMap, HashSet};
 use crate::support::common::MapUpdates;
 use crate::support::debug::{self, InfoLevel};
@@ -264,6 +264,21 @@ impl RouteMap {
     fn seek_path(&self, uri: &str, params: &mut HashMap<String, String>) -> RouteHandler {
         if let Some(callback) = self.explicit.get(uri) {
             return callback.clone();
+        }
+
+        if let Some(static_path) = self.static_path.as_ref() {
+            match search_static_router(&static_path, uri) {
+                Ok(res) => {
+                    // if res is some, we're done
+                    if res.is_some() {
+                        return res;
+                    }
+                },
+                Err(_) => {
+                    // either not in white-list, or in black-list, quit
+                    return RouteHandler::default();
+                },
+            }
         }
 
         if !self.explicit_with_params.is_empty() {
@@ -532,6 +547,60 @@ fn search_params_router(
     result
 }
 
+fn search_static_router(
+    path: &StaticLocRoute,
+    uri: &str,
+) -> Result<RouteHandler, ()>
+{
+    // check if static path can be met
+    let mut base = path.location.clone();
+    base.push(uri);
+
+    // only if the file exists
+    if base.exists() && base.is_file() {
+        // the requested file exists, now check white-list and black-list, in this order
+        let ext = match base.extension() {
+            Some(e) => {
+                let mut base = String::with_capacity(e.len() + 2);
+                base.push_str("*.");
+                if let Some(e_str) = e.to_str() {
+                    base.push_str(&e_str);
+                }
+
+                base
+            },
+            _ => String::new()
+        };
+
+        let file = match base.file_name() {
+            Some(f) => {
+                if let Some(f_str) = f.to_str() {
+                    String::from(f_str)
+                } else {
+                    String::new()
+                }
+            },
+            _ => String::new()
+        };
+
+        if !path.white_list.is_empty()
+            && (!path.white_list.contains(&ext) && !path.white_list.contains(&file))
+        {
+            return Err(());
+        }
+
+        if !path.black_list.is_empty()
+            && (path.black_list.contains(&ext) || path.black_list.contains(&file))
+        {
+            return Err(());
+        }
+
+        return Ok(RouteHandler(None, Some(base)))
+    }
+
+    Ok(RouteHandler::default())
+}
+
 pub(crate) struct RouteHandler(Option<Callback>, Option<PathBuf>);
 
 impl RouteHandler {
@@ -547,16 +616,16 @@ impl RouteHandler {
         self.0.is_none() && self.1.is_none()
     }
 
-    pub(crate) fn execute(&self, req: &Box<Request>, resp: &mut Box<Response>) {
+    pub(crate) fn execute(&mut self, req: &Box<Request>, resp: &mut Box<Response>) {
         assert!(self.is_some());
 
-        if let Some(cb) = self.0 {
+        if let Some(cb) = self.0.take() {
             cb(req, resp);
             return;
         }
 
-        if let Some(path) = self.1.as_ref() {
-            //TODO: read from the file and write to the resp body
+        if let Some(path) = self.1.take() {
+            resp.send_file_from_path_async(path)
         }
     }
 }

@@ -71,7 +71,7 @@ pub(crate) fn send_err_resp(stream: TcpStream, err_code: u16) -> ExecCode {
 
 fn handle_response(
     stream: TcpStream,
-    callback: RouteHandler,
+    mut callback: RouteHandler,
     request: Box<Request>,
     mut response: Box<Response>,
 ) -> ExecCode
@@ -208,7 +208,7 @@ fn read_stream(mut stream: &TcpStream, raw_req: &mut String) -> Option<ConnError
                         *val = 0;
                     });
                 }
-            }
+            },
             Err(e) => {
                 debug::print(
                     &format!("Reading stream disconnected -- {}", e),
@@ -216,7 +216,7 @@ fn read_stream(mut stream: &TcpStream, raw_req: &mut String) -> Option<ConnError
                 );
 
                 return Some(ConnError::ReadStreamFailure);
-            }
+            },
         };
     }
 
@@ -225,10 +225,10 @@ fn read_stream(mut stream: &TcpStream, raw_req: &mut String) -> Option<ConnError
 
 fn deserialize(request: String, store: &mut Box<Request>) -> RouteHandler {
     if request.is_empty() {
-        return RouteHandler::new(None, None);
+        return RouteHandler::default();
     }
 
-    let mut res = RouteHandler::new(None, None);
+    let mut res = RouteHandler::default();
     let mut baseline_chan = None;
     let mut remainder_chan = None;
 
@@ -238,11 +238,11 @@ fn deserialize(request: String, store: &mut Box<Request>) -> RouteHandler {
             1 => {
                 let remainder: String = info.to_owned();
                 if !remainder.is_empty() {
-                    let (tx_remainder, rx_remainder) = channel::unbounded();
+                    let (tx_remainder, rx_remainder) = channel::bounded(1);
 
                     let mut header: HashMap<String, String> = HashMap::new();
                     let mut cookie: HashMap<String, String> = HashMap::new();
-                    let mut body: Vec<String> = Vec::new();
+                    let mut body: Vec<String> = Vec::with_capacity(64);
 
                     shared_pool::run(
                         move || {
