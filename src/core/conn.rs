@@ -343,7 +343,7 @@ pub(crate) fn parse_baseline(source: &str, req: &mut Box<Request>) -> BaseLine {
         let uri = req.uri.to_owned();
         let req_method = req.method.clone();
 
-        let (tx, rx) = channel::unbounded();
+        let (tx, rx) = channel::bounded(1);
         shared_pool::run(
             move || {
                 Route::seek(&req_method, &uri, header_only, tx);
@@ -400,7 +400,7 @@ fn parse_headers(
 }
 
 fn split_path(source: &str, path: &mut String, scheme: &mut String, frag: &mut String) {
-    let uri = source.trim();
+    let uri = source.trim().trim_end_matches('/');
     if uri.is_empty() {
         path.push('/');
         return;

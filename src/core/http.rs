@@ -26,6 +26,9 @@ static VERSION: &'static str = "0.3.3";
 static RESP_TIMEOUT: Duration = Duration::from_millis(64);
 static LONG_CONN_TIMEOUT: Duration = Duration::from_secs(8);
 
+type BodyChan = (Option<Arc<channel::Sender<(String, u16)>>>, Option<channel::Receiver<(String, u16)>>);
+type NotifyChan = Option<(channel::Sender<String>, channel::Receiver<String>)>;
+
 //TODO: internal registered cache?
 
 pub struct Request {
@@ -277,9 +280,9 @@ pub struct Response {
     header_only: bool,
     redirect: String,
     body: String,
-    body_chan: Option<(channel::Sender<(String, u16)>, channel::Receiver<(String, u16)>)>,
-    notifier: Option<(channel::Sender<String>, channel::Receiver<String>)>,
-    subscriber: Option<(channel::Sender<String>, channel::Receiver<String>)>,
+    body_chan: BodyChan,
+    notifier: NotifyChan,
+    subscriber: NotifyChan,
 }
 
 impl Response {
@@ -447,7 +450,7 @@ impl ResponseStates for Response {
 
     #[inline]
     fn has_contents(&self) -> bool {
-        (self.is_header_only() || !self.body.is_empty() || self.body_chan.is_some())
+        (self.is_header_only() || !self.body.is_empty() || self.body_chan.0.is_some())
     }
 
     #[inline]
@@ -643,17 +646,17 @@ impl ResponseWriter for Response {
         }
 
         // lazy init the tx-rx pair.
-        if self.body_chan.is_none() {
+        if self.body_chan.0.is_none() {
             let (tx, rx) = channel::bounded(64);
-            self.body_chan = Some((tx, rx));
+            self.body_chan = (Some(Arc::new(tx)), Some(rx));
         }
 
         // set header's mime extension field
         self.set_ext_mime_header(&path);
 
         // actually load the file to the response body
-        if let Some(chan) = self.body_chan.as_ref() {
-            open_file_async(path, chan.0.clone());
+        if let Some(chan) = self.body_chan.0.as_ref() {
+            open_file_async(path, Arc::clone(chan));
         }
     }
 
@@ -779,10 +782,13 @@ impl ResponseManager for Response {
             self.header_only(true);
         }
 
-        if !self.is_header_only() && self.body_chan.is_some() {
+        if !self.is_header_only() && self.body_chan.1.is_some() {
+            // manual drop the transmission channel so we won't hang forever
+            drop(self.body_chan.0.take());
+
             // try to receive the async bodies
-            if let Some(chan) = self.body_chan.take() {
-                for received in chan.1 {
+            if let Some(chan) = self.body_chan.1.take() {
+                for received in chan {
                     if received.1 == 200 {
                         // read the content
                         self.body.push_str(&received.0);
@@ -992,8 +998,10 @@ fn open_file(file_path: &PathBuf, buf: &mut String) -> u16 {
     }
 }
 
-fn open_file_async(file_path: PathBuf, tx: channel::Sender<(String, u16)>) {
+fn open_file_async(file_path: PathBuf, tx: Arc<channel::Sender<(String, u16)>>) {
     shared_pool::run(move || {
+        assert!(file_path.is_file());
+
         // try open the file
         if let Ok(file) = File::open(file_path) {
             let mut buf_reader = BufReader::new(file);

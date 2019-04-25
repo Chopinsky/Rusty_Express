@@ -420,8 +420,26 @@ impl Router for HttpServer {
         self
     }
 
+    /// # Example
+    ///
+    /// ```
+    /// extern crate rusty_express;
+    /// use rusty_express::prelude::*;
+    /// use std::path::PathBuf;
+    /// fn main() {
+    ///    // define http server now
+    ///    let mut server = HttpServer::new();
+    ///    server.set_pool_size(8);
+    ///    server.use_static(PathBuf::from(r".\static"));
+    /// }
+    /// ```
     fn use_static(&mut self, path: PathBuf) -> &mut Self {
-        Route::add_static(REST::GET, path);
+        Route::add_static(REST::GET, None, path);
+        self
+    }
+
+    fn use_custom_static(&mut self, uri: RequestPath, path: PathBuf) -> &mut Self {
+        Route::add_static(REST::GET, Some(uri), path);
         self
     }
 }

@@ -19,7 +19,7 @@ pub fn simple_response(req: &Box<Request>, resp: &mut Box<Response>) {
     //            session.save();
     //            println!("New session: {}", session.get_id());
     //        }
-     */
+    */
 
     resp.send(&format!(
         "Hello world from rusty server from path: {}",

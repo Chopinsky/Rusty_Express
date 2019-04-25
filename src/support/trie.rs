@@ -174,29 +174,12 @@ impl RouteTrie {
         self.root.insert(segments, callback, location);
     }
 
-    // global: location + path/to/file/in/uri
-    pub(crate) fn add_global_static(&mut self, location: PathBuf) {
-        self.root.location.replace(location);
-    }
-
-    /*pub(crate)*/ fn add_local_static(&mut self, segments: Vec<Field>, location: PathBuf) {
-        //TODO: make the API public
-        self.root.insert(segments, None, Some(location));
-    }
-
     pub(crate) fn find(
         route_head: &RouteTrie,
         segments: &[String],
         params: &mut HashMap<String, String>,
     ) -> RouteHandler
     {
-        if let Some(last) = segments.last() {
-            //TODO: return actual path
-            if last.contains('.') {
-
-            }
-        }
-
         RouteTrie::recursive_find(&route_head.root, segments, params)
     }
 

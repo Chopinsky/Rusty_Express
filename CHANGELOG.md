@@ -9,7 +9,21 @@ update your trait implementations:
  fn update(&mut self, req: &Box<Request>, resp: &mut Box<Response>) -> ...  | fn update(&mut self, req: &Request, resp: &mut Response) -> ...
  fn process(&mut self, req: &Box<Request>, resp: &mut Box<Response>) -> ... | fn process(&mut self, req: &Request, resp: &mut Response) -> ... 
  
-- New context related APIs: //TODO ...
+- Adding new API to support setup of a static folder location, which will be used to serve files
+in this folder without naming every available files in the router:
+```rust
+extern crate rusty_express;
+
+use rusty_express::prelude::*;
+use std::path::PathBuf;
+
+fn main() {
+    // define http server now
+    let mut server = HttpServer::new();
+    server.set_pool_size(8);
+    server.use_static(PathBuf::from(r".\static"));
+}
+``` 
  
 # 2019-01
 ## 0.4.1

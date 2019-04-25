@@ -4,6 +4,7 @@
 use std::fmt;
 use std::path::PathBuf;
 use std::sync::RwLock;
+use std::fs;
 
 use crate::channel;
 use crate::core::http::{Request, Response, ResponseWriter};
@@ -261,15 +262,36 @@ impl RouteMap {
         result
     }
 
-    fn seek_path(&self, uri: &str, params: &mut HashMap<String, String>) -> RouteHandler {
-        if let Some(callback) = self.explicit.get(uri) {
-            return callback.clone();
+    fn seek_path(&self, raw_uri: &str, params: &mut HashMap<String, String>) -> RouteHandler {
+        if raw_uri.is_empty() {
+            return RouteHandler::default();
+        }
+
+        let mut actual_uri = "/";
+        let mut file_name = "";
+
+        raw_uri.rsplitn(2, '/').enumerate().for_each(|(i, x)| {
+            if i == 0 && x.contains('.') {
+                file_name = x;
+            } else {
+                if file_name.is_empty() {
+                    actual_uri = raw_uri;
+                } else if !x.is_empty() {
+                    actual_uri = x;
+                }
+            }
+        });
+
+        if let Some(callback) = self.explicit.get(actual_uri) {
+            return RouteHandler::update_handler(callback.clone(), file_name);
         }
 
         if let Some(static_path) = self.static_path.as_ref() {
-            match search_static_router(&static_path, uri) {
+            match search_static_router(&static_path, raw_uri) {
                 Ok(res) => {
-                    // if res is some, we're done
+                    // if res is some, we're done. Searching with the full sym-link, so we use
+                    // the raw uri instead of the /custom/path/to/uri, and we don't want to
+                    // append the file name again since we check the file-existence already
                     if res.is_some() {
                         return res;
                     }
@@ -283,15 +305,18 @@ impl RouteMap {
 
         if !self.explicit_with_params.is_empty() {
             let result =
-                search_params_router(&self.explicit_with_params, uri, params);
+                search_params_router(&self.explicit_with_params, actual_uri, params);
 
             if result.is_some() {
-                return result;
+                return RouteHandler::update_handler(result, file_name);
             }
         }
 
         if !self.wildcard.is_empty() {
-            return search_wildcard_router(&self.wildcard, uri);
+            return RouteHandler::update_handler(
+                search_wildcard_router(&self.wildcard, actual_uri),
+                file_name
+            );
         }
 
         RouteHandler(None, None)
@@ -351,9 +376,12 @@ impl Route {
         }
     }
 
-    pub(crate) fn add_static(method: REST, path: PathBuf) {
+    pub(crate) fn add_static(method: REST, uri: Option<RequestPath>, path: PathBuf) {
         if let Ok(mut route) = ROUTER.write() {
-            route.set_static(method, path);
+            match uri {
+                Some(u) => route.add(method, u, RouteHandler(None, Some(path))),
+                None => route.set_static(method, path),
+            }
         }
     }
 
@@ -370,24 +398,24 @@ impl Route {
     }
 
     fn set_static(&mut self, method: REST, path: PathBuf) {
+        if !path.exists() || !path.is_dir() {
+            panic!("The static path must point to a folder");
+        }
+
+        let static_route = StaticLocRoute {
+            location: path,
+            black_list: HashSet::new(),
+            white_list: HashSet::new(),
+        };
+
         if let Some(r) = self.store.get_mut(&method) {
             //find, insert, done.
-            r.static_path.replace(StaticLocRoute {
-                location: path,
-                black_list: HashSet::new(),
-                white_list: HashSet::new(),
-            });
-
+            r.static_path.replace(static_route);
             return;
         }
 
         let mut map = RouteMap::new();
-        map.static_path.replace(StaticLocRoute {
-            location: path,
-            black_list: HashSet::new(),
-            white_list: HashSet::new(),
-        });
-
+        map.static_path.replace(static_route);
         self.store.insert(method, map);
     }
 
@@ -407,6 +435,7 @@ pub trait Router {
     fn other(&mut self, method: &str, uri: RequestPath, callback: Callback) -> &mut Self;
     fn all(&mut self, uri: RequestPath, callback: Callback) -> &mut Self;
     fn use_static(&mut self, path: PathBuf) -> &mut Self;
+    fn use_custom_static(&mut self, uri: RequestPath, path: PathBuf) -> &mut Self;
 }
 
 impl Router for Route {
@@ -459,16 +488,27 @@ impl Router for Route {
         self.other("*", uri, callback)
     }
 
+
+    /// # Example
+    ///
+    /// ```
+    /// extern crate rusty_express;
+    /// use rusty_express::prelude::*;
+    /// use std::path::PathBuf;
+    /// fn main() {
+    ///    // define http server now
+    ///    let mut server = HttpServer::new();
+    ///    server.set_pool_size(8);
+    ///    server.use_static(PathBuf::from(r".\static"));
+    /// }
+    /// ```
     fn use_static(&mut self, path: PathBuf) -> &mut Self {
-        unimplemented!();
+        self.set_static(REST::GET, path);
+        self
+    }
 
-        assert!(
-            path.is_dir(),
-            "The static folder location must point to a folder"
-        );
-
-        //TODO: impl
-
+    fn use_custom_static(&mut self, uri: RequestPath, path: PathBuf) -> &mut Self {
+        self.add(REST::GET, uri, RouteHandler(None, Some(path)));
         self
     }
 }
@@ -549,30 +589,33 @@ fn search_params_router(
 
 fn search_static_router(
     path: &StaticLocRoute,
-    uri: &str,
+    raw_uri: &str,
 ) -> Result<RouteHandler, ()>
 {
     // check if static path can be met
-    let mut base = path.location.clone();
-    base.push(uri);
+    let mut normalized_uri = path.location.clone();
+    normalized_uri.push(raw_uri.trim_start_matches(|x| x == '.' || x == '/'));
+
+    let meta = match fs::metadata(&normalized_uri) {
+        Ok(m) => m,
+        _ => return Ok(RouteHandler::default()),
+    };
 
     // only if the file exists
-    if base.exists() && base.is_file() {
+    if meta.is_file() {
         // the requested file exists, now check white-list and black-list, in this order
-        let ext = match base.extension() {
+        let ext = match normalized_uri.extension() {
             Some(e) => {
-                let mut base = String::with_capacity(e.len() + 2);
-                base.push_str("*.");
                 if let Some(e_str) = e.to_str() {
-                    base.push_str(&e_str);
+                    ["*.", e_str].join("")
+                } else {
+                    String::new()
                 }
-
-                base
             },
             _ => String::new()
         };
 
-        let file = match base.file_name() {
+        let file = match normalized_uri.file_name() {
             Some(f) => {
                 if let Some(f_str) = f.to_str() {
                     String::from(f_str)
@@ -584,18 +627,20 @@ fn search_static_router(
         };
 
         if !path.white_list.is_empty()
-            && (!path.white_list.contains(&ext) && !path.white_list.contains(&file))
+            && (!ext.is_empty() && !path.white_list.contains(&ext))
+            && (!file.is_empty() && !path.white_list.contains(&file))
         {
             return Err(());
         }
 
         if !path.black_list.is_empty()
-            && (path.black_list.contains(&ext) || path.black_list.contains(&file))
+            && ((!ext.is_empty() && path.black_list.contains(&ext))
+            || (!file.is_empty() && path.black_list.contains(&file)))
         {
             return Err(());
         }
 
-        return Ok(RouteHandler(None, Some(base)))
+        return Ok(RouteHandler(None, Some(normalized_uri)))
     }
 
     Ok(RouteHandler::default())
@@ -625,8 +670,21 @@ impl RouteHandler {
         }
 
         if let Some(path) = self.1.take() {
-            resp.send_file_from_path_async(path)
+            resp.send_file_from_path_async(path);
         }
+    }
+
+    fn update_handler(mut handler: RouteHandler, file_name: &str) -> RouteHandler {
+        if file_name.is_empty() {
+            return handler;
+        }
+
+        if let Some(mut p) = handler.1.take() {
+            p.push(file_name);
+            handler.1.replace(p);
+        };
+
+        handler
     }
 }
 
