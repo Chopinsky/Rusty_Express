@@ -273,12 +273,13 @@ impl RouteMap {
         raw_uri.rsplitn(2, '/').enumerate().for_each(|(i, x)| {
             if i == 0 && x.contains('.') {
                 file_name = x;
-            } else {
-                if file_name.is_empty() {
-                    actual_uri = raw_uri;
-                } else if !x.is_empty() {
-                    actual_uri = x;
-                }
+                return;
+            }
+
+            if file_name.is_empty() {
+                actual_uri = raw_uri;
+            } else if !x.is_empty() {
+                actual_uri = x;
             }
         });
 
@@ -670,6 +671,7 @@ impl RouteHandler {
         }
 
         if let Some(path) = self.1.take() {
+            //TODO: need to send params through cookie? or other headers
             resp.send_file_from_path_async(path);
         }
     }

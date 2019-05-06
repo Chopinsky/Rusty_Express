@@ -10,8 +10,8 @@ static mut CONTEXT: Option<RwLock<Box<ServerContextProvider>>> = None;
 pub type ServerContextProvider = ContextProvider + Sync + Send;
 
 pub trait ContextProvider {
-    fn update(&mut self, req: &Request, resp: &mut Response) -> Result<(), &'static str>;
-    fn process(&self, req: &Request, resp: &mut Response) -> Result<(), &'static str>;
+    fn update(&mut self, req: &Box<Request>, resp: &mut Box<Response>) -> Result<(), &'static str>;
+    fn process(&self, req: &Box<Request>, resp: &mut Box<Response>) -> Result<(), &'static str>;
 }
 
 /// Move the ownership of the context object to the server, such that it can be managed when
@@ -33,8 +33,8 @@ pub fn set_context(context: Box<ServerContextProvider>) {
 ///
 /// For examples, see [`https://github.com/Chopinsky/Rusty_Express/blob/master/examples/use_router.rs`]
 pub fn update_context(
-    req: &Request,
-    resp: &mut Response
+    req: &Box<Request>,
+    resp: &mut Box<Response>
 ) -> Result<(), &'static str>
 {
     if let Some(ctx) = unsafe { CONTEXT.as_mut() } {
@@ -52,8 +52,8 @@ pub fn update_context(
 ///
 /// For examples, see [`https://github.com/Chopinsky/Rusty_Express/blob/master/examples/use_router.rs`]
 pub fn process_with_context(
-    req: &Request,
-    resp: &mut Response,
+    req: &Box<Request>,
+    resp: &mut Box<Response>,
 ) -> Result<(), &'static str>
 {
     if let Some(ctx) = unsafe { CONTEXT.as_ref() } {

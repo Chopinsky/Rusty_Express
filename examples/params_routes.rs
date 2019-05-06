@@ -31,6 +31,7 @@ pub fn simple_response(req: &Box<Request>, resp: &mut Box<Response>) {
         "Hello world from rusty server from {}!<br />",
         req.uri
     ));
+
     resp.status(200);
     resp.set_content_type("text/html");
 }

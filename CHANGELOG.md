@@ -1,16 +1,8 @@
 # 2019-04
 ## 0.4.2
-- Breaking change: now `ContextProvider` trait no longer take boxed request/response objects
-(i.e. `Box<Request>` and `Box<Response>`), instead, these objects are now un-boxed. So please
-update your trait implementations:
-
- Old            | New
- ------------- | -------------
- fn update(&mut self, req: &Box<Request>, resp: &mut Box<Response>) -> ...  | fn update(&mut self, req: &Request, resp: &mut Response) -> ...
- fn process(&mut self, req: &Box<Request>, resp: &mut Box<Response>) -> ... | fn process(&mut self, req: &Request, resp: &mut Response) -> ... 
- 
-- Adding new API to support setup of a static folder location, which will be used to serve files
+- New API to support setup of a static folder location, which will be used to serve files
 in this folder without naming every available files in the router:
+
 ```rust
 extern crate rusty_express;
 
@@ -24,6 +16,8 @@ fn main() {
     server.use_static(PathBuf::from(r".\static"));
 }
 ``` 
+
+For more examples, please see [`examples/static_folder.rs`].
  
 # 2019-01
 ## 0.4.1
