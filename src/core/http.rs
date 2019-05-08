@@ -3,7 +3,7 @@
 use std::fs::File;
 use std::io::prelude::*;
 use std::io::{BufReader, BufWriter};
-use std::net::{SocketAddr, TcpStream};
+use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::str;
 use std::sync::Arc;
@@ -17,6 +17,7 @@ use crate::core::router::REST;
 use crate::support::{common::*, debug, debug::InfoLevel, shared_pool, TaskType};
 use chrono::prelude::*;
 use hashbrown::{hash_map::Iter, HashMap};
+use crate::core::conn::Stream;
 
 static FOUR_OH_FOUR: &'static str = include_str!("../default/404.html");
 static FOUR_OH_ONE: &'static str = include_str!("../default/401.html");
@@ -766,9 +767,9 @@ impl ResponseWriter for Response {
 pub(crate) trait ResponseManager {
     fn header_only(&mut self, header_only: bool);
     fn validate_and_update(&mut self);
-    fn write_header(&self, buffer: &mut BufWriter<&TcpStream>);
-    fn write_body(&self, buffer: &mut BufWriter<&TcpStream>);
-    fn keep_long_conn(&mut self, clone: TcpStream, buffer: &mut BufWriter<&TcpStream>);
+    fn write_header(&self, buffer: &mut BufWriter<&mut Stream>);
+    fn write_body(&self, buffer: &mut BufWriter<&mut Stream>);
+    fn keep_long_conn(&mut self, clone: Stream, buffer: &mut BufWriter<&mut Stream>);
 }
 
 impl ResponseManager for Response {
@@ -833,11 +834,11 @@ impl ResponseManager for Response {
         }
     }
 
-    fn write_header(&self, buffer: &mut BufWriter<&TcpStream>) {
+    fn write_header(&self, buffer: &mut BufWriter<&mut Stream>) {
         write_to_buff(buffer, self.resp_header().as_bytes());
     }
 
-    fn write_body(&self, buffer: &mut BufWriter<&TcpStream>) {
+    fn write_body(&self, buffer: &mut BufWriter<&mut Stream>) {
         if self.has_contents() {
             // the content length should have been set in the header, see function resp_header
             write_to_buff(buffer, self.body.as_bytes());
@@ -847,7 +848,7 @@ impl ResponseManager for Response {
         }
     }
 
-    fn keep_long_conn(&mut self, stream_clone: TcpStream, buffer: &mut BufWriter<&TcpStream>) {
+    fn keep_long_conn(&mut self, stream_clone: Stream, buffer: &mut BufWriter<&mut Stream>) {
         if self.has_contents() {
             // the content length should have been set in the header, see function resp_header
             stream_trunk(&self.body, buffer);
@@ -888,7 +889,7 @@ impl ResponseManager for Response {
     }
 }
 
-fn broadcast_new_communications(sender: channel::Sender<String>, mut stream_clone: TcpStream) {
+fn broadcast_new_communications(sender: channel::Sender<String>, mut stream_clone: Stream) {
     thread::spawn(move || {
         let mut buffer = [0u8; 512];
 
@@ -928,17 +929,16 @@ fn broadcast_new_communications(sender: channel::Sender<String>, mut stream_clon
     });
 }
 
-fn stream_trunk(content: &str, buffer: &mut BufWriter<&TcpStream>) {
+fn stream_trunk(content: &str, buffer: &mut BufWriter<&mut Stream>) {
     // the content length should have been set in the header, see function resp_header
     write_to_buff(buffer, content.len().to_string().as_bytes());
     write_line_break(buffer);
     write_to_buff(buffer, content.as_bytes());
     write_line_break(buffer);
-
     flush_buffer(buffer);
 }
 
-fn stream_default_body(status: u16, buffer: &mut BufWriter<&TcpStream>) {
+fn stream_default_body(status: u16, buffer: &mut BufWriter<&mut Stream>) {
     match status {
         //explicit error status
         0 | 404 => write_default_page(400, buffer),
@@ -947,7 +947,7 @@ fn stream_default_body(status: u16, buffer: &mut BufWriter<&TcpStream>) {
     };
 }
 
-fn write_default_page(status: u16, buffer: &mut BufWriter<&TcpStream>) {
+fn write_default_page(status: u16, buffer: &mut BufWriter<&mut Stream>) {
     match status {
         500 => {
             /* return default 500 page */

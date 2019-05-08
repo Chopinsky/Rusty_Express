@@ -1,8 +1,8 @@
 #![allow(clippy::borrowed_box)]
+#![allow(dead_code)]
 
-use std::io::prelude::*;
-use std::io::BufWriter;
-use std::net::{Shutdown, TcpStream};
+use std::io::{self, prelude::*, BufWriter, Error, ErrorKind};
+use std::net::{TcpStream, Shutdown, SocketAddr};
 use std::str;
 use std::time::Duration;
 
@@ -13,6 +13,7 @@ use crate::core::http::{
 };
 use crate::core::router::{Route, RouteSeeker, REST, RouteHandler};
 use crate::hashbrown::HashMap;
+use crate::native_tls::TlsStream;
 use crate::support::{
     common::flush_buffer, common::write_to_buff, common::MapUpdates, debug, debug::InfoLevel,
     shared_pool, TaskType,
@@ -32,10 +33,62 @@ enum ConnError {
     ServiceUnavailable,
 }
 
-pub(crate) fn handle_connection(stream: TcpStream) -> ExecCode {
+pub(crate) enum Stream {
+    Tcp(TcpStream),
+    Tls(Box<TlsStream<TcpStream>>),
+}
+
+impl Stream {
+    pub(crate) fn shutdown(&mut self, how: Shutdown) -> io::Result<()> {
+        match self {
+            Stream::Tcp(tcp) => tcp.shutdown(how),
+            Stream::Tls(ref mut tls) => tls.shutdown(),
+        }
+    }
+
+    pub(crate) fn set_read_timeout(&self, dur: Option<Duration>) -> io::Result<()> {
+        match self {
+            Stream::Tcp(tcp) => tcp.set_read_timeout(dur),
+            Stream::Tls(tls) => tls.get_ref().set_read_timeout(dur),
+        }
+    }
+
+    pub(crate) fn set_write_timeout(&self, dur: Option<Duration>) -> io::Result<()> {
+        match self {
+            Stream::Tcp(tcp) => tcp.set_write_timeout(dur),
+            Stream::Tls(tls) => tls.get_ref().set_write_timeout(dur),
+        }
+    }
+
+    pub(crate) fn take_error(&self) -> io::Result<Option<io::Error>> {
+        match self {
+            Stream::Tcp(tcp) => tcp.take_error(),
+            Stream::Tls(tls) => tls.get_ref().take_error(),
+        }
+    }
+
+    fn peer_addr(&self) -> io::Result<SocketAddr> {
+        match self {
+            Stream::Tcp(tcp) => tcp.peer_addr(),
+            Stream::Tls(tls) => tls.get_ref().peer_addr(),
+        }
+    }
+
+    // Side effect: TLS stream will be downgraded to TCP stream since the handshake has been done
+    fn try_clone(&self) -> io::Result<Stream> {
+        match self {
+            Stream::Tcp(tcp) => tcp.try_clone().map(|t| {
+                Stream::Tcp(t)
+            }),
+            _ => Err(Error::new(ErrorKind::InvalidInput, "TLS connection can't be kept long-live")),
+        }
+    }
+}
+
+pub(crate) fn handle_connection(mut stream: Stream) -> ExecCode {
     let mut request = Box::new(Request::new());
 
-    let callback = match parse_request(&stream, &mut request) {
+    let callback = match parse_request(&mut stream, &mut request) {
         Err(err) => {
             let status: u16 = match err {
                 ConnError::EmptyRequest => 400,
@@ -56,7 +109,7 @@ pub(crate) fn handle_connection(stream: TcpStream) -> ExecCode {
                 InfoLevel::Error,
             );
 
-            return write_to_stream(&stream, &mut build_err_response(status));
+            return write_to_stream(stream, &mut build_err_response(status));
         }
         Ok(cb) => cb,
     };
@@ -64,13 +117,38 @@ pub(crate) fn handle_connection(stream: TcpStream) -> ExecCode {
     handle_response(stream, callback, request, initialize_response())
 }
 
+impl Read for Stream {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        match self {
+            Stream::Tcp(tcp) => tcp.read(buf),
+            Stream::Tls(tls) => tls.read(buf),
+        }
+    }
+}
+
+impl Write for Stream {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        match self {
+            Stream::Tcp(tcp) => tcp.write(buf),
+            Stream::Tls(tls) => tls.write(buf),
+        }
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        match self {
+            Stream::Tcp(tcp) => tcp.flush(),
+            Stream::Tls(tls) => tls.flush(),
+        }
+    }
+}
+
 #[inline]
-pub(crate) fn send_err_resp(stream: TcpStream, err_code: u16) -> ExecCode {
-    write_to_stream(&stream, &mut build_err_response(err_code))
+pub(crate) fn send_err_resp(stream: Stream, err_code: u16) -> ExecCode {
+    write_to_stream(stream, &mut build_err_response(err_code))
 }
 
 fn handle_response(
-    stream: TcpStream,
+    stream: Stream,
     mut callback: RouteHandler,
     request: Box<Request>,
     mut response: Box<Response>,
@@ -91,7 +169,7 @@ fn handle_response(
     response.redirect_handling();
     response.validate_and_update();
 
-    write_to_stream(&stream, &mut response)
+    write_to_stream(stream, &mut response)
 }
 
 fn initialize_response() -> Box<Response> {
@@ -102,8 +180,17 @@ fn initialize_response() -> Box<Response> {
     }
 }
 
-fn write_to_stream(stream: &TcpStream, response: &mut Response) -> ExecCode {
-    let mut writer = BufWriter::new(stream);
+fn write_to_stream(mut stream: Stream, response: &mut Response) -> ExecCode {
+    let s_clone = if response.to_keep_alive() {
+        match  stream.try_clone() {
+            Ok(s) => Some(s),
+            _ => None,
+        }
+    } else {
+        None
+    };
+
+    let mut writer = BufWriter::new(&mut stream);
 
     // Serialize the header to the stream
     response.write_header(&mut writer);
@@ -116,7 +203,10 @@ fn write_to_stream(stream: &TcpStream, response: &mut Response) -> ExecCode {
         return flush_buffer(&mut writer);
     }
 
-    if !response.to_keep_alive() {
+    if let Some(s) = s_clone {
+        // serialize_trunked_body will block until all the keep-alive i/o are done
+        response.keep_long_conn(s, &mut writer);
+    } else {
         // else, write the body to the stream
         response.write_body(&mut writer);
 
@@ -129,22 +219,13 @@ fn write_to_stream(stream: &TcpStream, response: &mut Response) -> ExecCode {
                 break;
             }
         }
-
-        // regardless of buffer being flushed, close the stream now.
-        return stream_shutdown(&stream);
     }
 
-    if let Ok(clone) = stream.try_clone() {
-        // serialize_trunked_body will block until all the keep-alive i/o are done
-        response.keep_long_conn(clone, &mut writer);
-    }
-
-    // trunked keep-alive i/o is done, shut down the stream for good since copies
-    // can be listening on read/write
-    stream_shutdown(&stream)
+    // regardless of buffer being flushed, close the stream now.
+    stream_shutdown(writer.get_mut())
 }
 
-fn stream_shutdown(stream: &TcpStream) -> u8 {
+fn stream_shutdown(stream: &mut Stream) -> u8 {
     if let Err(err) = stream.shutdown(Shutdown::Both) {
         debug::print(
             &format!(
@@ -159,7 +240,7 @@ fn stream_shutdown(stream: &TcpStream) -> u8 {
     0
 }
 
-fn parse_request(stream: &TcpStream, request: &mut Box<Request>) -> Result<RouteHandler, ConnError> {
+fn parse_request(stream: &mut Stream, request: &mut Box<Request>) -> Result<RouteHandler, ConnError> {
     let mut raw = String::with_capacity(512); // 512 -- default buffer size
     if let Some(e) = read_stream(stream, &mut raw) {
         return Err(e);
@@ -187,7 +268,7 @@ fn parse_request(stream: &TcpStream, request: &mut Box<Request>) -> Result<Route
     Ok(result)
 }
 
-fn read_stream(mut stream: &TcpStream, raw_req: &mut String) -> Option<ConnError> {
+fn read_stream(stream: &mut Stream, raw_req: &mut String) -> Option<ConnError> {
     let mut buffer = [0u8; 512];
 
     loop {

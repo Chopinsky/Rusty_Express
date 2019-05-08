@@ -1,8 +1,8 @@
 use std::io::{BufWriter, Write};
-use std::net::TcpStream;
 
 use crate::debug::{self, InfoLevel};
 use crate::hashbrown::HashMap;
+use crate::core::conn::Stream;
 
 pub trait MapUpdates<T> {
     fn add(&mut self, field: &str, value: T, allow_replace: bool) -> Option<T>;
@@ -57,7 +57,7 @@ impl LineBreakUtil for String {
     }
 }
 
-pub fn write_to_buff(buffer: &mut BufWriter<&TcpStream>, content: &[u8]) {
+pub(crate) fn write_to_buff(buffer: &mut BufWriter<&mut Stream>, content: &[u8]) {
     if let Err(err) = buffer.write(content) {
         debug::print(
             &format!(
@@ -69,11 +69,11 @@ pub fn write_to_buff(buffer: &mut BufWriter<&TcpStream>, content: &[u8]) {
     }
 }
 
-pub fn write_line_break(buffer: &mut BufWriter<&TcpStream>) {
+pub(crate) fn write_line_break(buffer: &mut BufWriter<&mut Stream>) {
     let _ = buffer.write(&[13, 10]);
 }
 
-pub fn flush_buffer(buffer: &mut BufWriter<&TcpStream>) -> u8 {
+pub(crate) fn flush_buffer(buffer: &mut BufWriter<&mut Stream>) -> u8 {
     if let Err(err) = buffer.flush() {
         debug::print(
             &format!(

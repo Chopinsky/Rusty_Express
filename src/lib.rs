@@ -25,6 +25,7 @@
 extern crate lazy_static;
 extern crate chrono;
 extern crate hashbrown;
+extern crate native_tls;
 extern crate num_cpus;
 extern crate parking_lot;
 extern crate rand;
@@ -191,7 +192,7 @@ impl HttpServer {
                 match message {
                     ControlMessage::Terminate => {
                         if let Ok(s) = stream {
-                            send_err_resp(s, 503);
+                            send_err_resp(Stream::Tcp(s), 503);
                         }
 
                         break;
@@ -246,7 +247,7 @@ impl HttpServer {
 
         workers_pool.execute(move || {
             stream.set_timeout(read_timeout, write_timeout);
-            handle_connection(stream);
+            handle_connection(Stream::Tcp(stream));
         });
     }
 
