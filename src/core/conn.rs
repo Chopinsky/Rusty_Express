@@ -80,15 +80,20 @@ impl Stream {
             Stream::Tcp(tcp) => tcp.try_clone().map(|t| {
                 Stream::Tcp(t)
             }),
-            _ => Err(Error::new(ErrorKind::InvalidInput, "TLS connection can't be kept long-live")),
+            _ => Err(Error::new(ErrorKind::InvalidInput, "TLS connection shouldn't be kept long-live")),
+        }
+    }
+
+    fn is_tls(&self) -> bool {
+        match self {
+            Stream::Tls(_) => true,
+            _ => false,
         }
     }
 }
 
 pub(crate) fn handle_connection(mut stream: Stream) -> ExecCode {
-    let mut request = Box::new(Request::new());
-
-    let callback = match parse_request(&mut stream, &mut request) {
+    let (callback, request) = match parse_request(&mut stream) {
         Err(err) => {
             let status: u16 = match err {
                 ConnError::EmptyRequest => 400,
@@ -114,7 +119,8 @@ pub(crate) fn handle_connection(mut stream: Stream) -> ExecCode {
         Ok(cb) => cb,
     };
 
-    handle_response(stream, callback, request, initialize_response())
+    let is_tls = stream.is_tls();
+    handle_response(stream, callback, request, initialize_response(is_tls))
 }
 
 impl Read for Stream {
@@ -172,12 +178,18 @@ fn handle_response(
     write_to_stream(stream, &mut response)
 }
 
-fn initialize_response() -> Box<Response> {
+fn initialize_response(is_tls: bool) -> Box<Response> {
     let header = ConnMetadata::get_default_header();
-    match header {
+    let mut resp = match header {
         None => Box::new(Response::new()),
         Some(h) => Box::new(Response::new_with_default_header(h)),
+    };
+
+    if is_tls {
+        resp.can_keep_alive(false);
     }
+
+    resp
 }
 
 fn write_to_stream(mut stream: Stream, response: &mut Response) -> ExecCode {
@@ -240,7 +252,7 @@ fn stream_shutdown(stream: &mut Stream) -> u8 {
     0
 }
 
-fn parse_request(stream: &mut Stream, request: &mut Box<Request>) -> Result<RouteHandler, ConnError> {
+fn parse_request(stream: &mut Stream) -> Result<(RouteHandler, Box<Request>), ConnError> {
     let mut raw = String::with_capacity(512); // 512 -- default buffer size
     if let Some(e) = read_stream(stream, &mut raw) {
         return Err(e);
@@ -250,7 +262,9 @@ fn parse_request(stream: &mut Stream, request: &mut Box<Request>) -> Result<Rout
         return Err(ConnError::EmptyRequest);
     }
 
-    let result = deserialize(raw, request);
+    let mut request = Box::new(Request::new());
+    let result = deserialize(raw, &mut request);
+
     if result.is_none() {
         return Err(ConnError::ServiceUnavailable)
     }
@@ -265,7 +279,7 @@ fn parse_request(stream: &mut Stream, request: &mut Box<Request>) -> Result<Rout
         }
     }
 
-    Ok(result)
+    Ok((result, request))
 }
 
 fn read_stream(stream: &mut Stream, raw_req: &mut String) -> Option<ConnError> {

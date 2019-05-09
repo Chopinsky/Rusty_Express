@@ -32,6 +32,20 @@ type NotifyChan = Option<(channel::Sender<String>, channel::Receiver<String>)>;
 
 //TODO: internal registered cache?
 
+#[derive(PartialOrd, PartialEq)]
+enum KeepAliveStatus {
+    NotSet,
+    TlsConn,
+    Forbidden,
+    KeepAlive,
+}
+
+impl Default for KeepAliveStatus {
+    fn default() -> Self {
+        KeepAliveStatus::NotSet
+    }
+}
+
 pub struct Request {
     pub method: REST,
     pub uri: String,
@@ -272,8 +286,7 @@ impl RequestWriter for Request {
 #[derive(Default)]
 pub struct Response {
     status: u16,
-    can_keep_alive: bool,
-    keep_alive: bool,
+    keep_alive: KeepAliveStatus,
     content_type: String,
     content_length: Option<String>,
     cookie: Arc<HashMap<String, Cookie>>,
@@ -335,7 +348,7 @@ impl Response {
         write_headers(
             &self.header,
             &mut header,
-            self.keep_alive && self.can_keep_alive,
+            self.to_keep_alive(),
         );
 
         if !self.content_type.is_empty() {
@@ -366,7 +379,7 @@ impl Response {
         }
 
         if !self.header.contains_key("connection") {
-            let (connection, count) = if self.keep_alive && self.can_keep_alive {
+            let (connection, count) = if self.to_keep_alive() {
                 ("keep-alive", 10)
             } else {
                 ("close", 5)
@@ -419,7 +432,7 @@ pub trait ResponseStates {
 impl ResponseStates for Response {
     #[inline]
     fn to_keep_alive(&self) -> bool {
-        self.keep_alive
+        self.keep_alive == KeepAliveStatus::KeepAlive
     }
 
     #[inline]
@@ -549,15 +562,18 @@ impl ResponseWriter for Response {
                 }
             }
             "connection" => {
-                if self.keep_alive && !allow_replace {
+                if self.to_keep_alive() && !allow_replace {
                     // if already toggled to keep alive and don't allow override, we're done
                     return;
                 }
 
-                if (&value.to_lowercase()[..]).eq("keep-alive") && self.can_keep_alive {
-                    self.keep_alive = true;
-                } else {
-                    self.keep_alive = false;
+                match &value.to_lowercase()[..] {
+                    "keep-alive" if self.keep_alive == KeepAliveStatus::NotSet => {
+                        self.keep_alive = KeepAliveStatus::KeepAlive
+                    },
+                    "tls" => self.keep_alive = KeepAliveStatus::TlsConn,
+                    "forbidden" => self.keep_alive = KeepAliveStatus::Forbidden,
+                    _ => { /* Otherwise, don't update the keep_alive field */ },
                 }
             }
             _ => {
@@ -740,15 +756,19 @@ impl ResponseWriter for Response {
 
     #[inline]
     fn can_keep_alive(&mut self, can_keep_alive: bool) {
-        self.can_keep_alive = can_keep_alive;
+        self.keep_alive = if !can_keep_alive {
+            KeepAliveStatus::Forbidden
+        } else {
+            KeepAliveStatus::NotSet
+        }
     }
 
     fn keep_alive(&mut self, to_keep: bool) {
-        if self.can_keep_alive && to_keep {
-            self.keep_alive = true;
-        } else {
-            self.keep_alive = false;
+        if self.keep_alive == KeepAliveStatus::TlsConn || self.keep_alive == KeepAliveStatus::Forbidden {
+            return;
         }
+
+        self.keep_alive = if to_keep { KeepAliveStatus::KeepAlive } else { KeepAliveStatus::NotSet };
     }
 
     fn set_content_type(&mut self, content_type: &str) {

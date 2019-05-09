@@ -56,6 +56,7 @@ pub mod prelude {
 
 use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
@@ -68,6 +69,7 @@ use self::support::session::*;
 use self::support::{shared_pool, ThreadPool};
 use crossbeam_channel as channel;
 use hashbrown::HashMap;
+use native_tls::TlsAcceptor;
 
 //TODO: Impl middlewear
 
@@ -182,6 +184,8 @@ impl HttpServer {
         self.session_cleanup_config();
         self.state.toggle_running_state(true);
 
+        //TODO: impl TLS setup ...
+        let acceptor: Option<Arc<TlsAcceptor>> = None;
         let pool_size = self.config.get_pool_size();
 
         let mut workers_pool = setup_worker_pools(pool_size);
@@ -226,7 +230,9 @@ impl HttpServer {
             }
 
             match stream {
-                Ok(s) => self.handle_stream(s, &mut workers_pool),
+                Ok(s) => {
+                    self.handle_stream(s, &mut workers_pool, &acceptor);
+                },
                 Err(e) => debug::print(
                     &format!("Failed to receive the upcoming stream: {}", e)[..],
                     InfoLevel::Warning,
@@ -241,13 +247,32 @@ impl HttpServer {
         self.state.toggle_running_state(false);
     }
 
-    fn handle_stream(&self, stream: TcpStream, workers_pool: &mut ThreadPool) {
+    fn handle_stream(&self, stream: TcpStream, workers_pool: &mut ThreadPool, acceptor: &Option<Arc<TlsAcceptor>>) {
         let read_timeout = u64::from(self.config.get_read_timeout());
         let write_timeout = u64::from(self.config.get_write_timeout());
 
+        let acceptor_clone = if let Some(acceptor) = acceptor {
+            Some(acceptor.clone())
+        } else {
+            None
+        };
+
         workers_pool.execute(move || {
             stream.set_timeout(read_timeout, write_timeout);
-            handle_connection(Stream::Tcp(stream));
+            if let Some(a) = acceptor_clone {
+                // handshake and encrypt
+                match a.accept(stream) {
+                    Ok(s) => {
+                        handle_connection(Stream::Tls(Box::new(s)));
+                    },
+                    Err(e) => debug::print(
+                        &format!("Failed to receive the upcoming stream: {:?}", e)[..],
+                        InfoLevel::Error,
+                    ),
+                };
+            } else{
+                handle_connection(Stream::Tcp(stream));
+            }
         });
     }
 
