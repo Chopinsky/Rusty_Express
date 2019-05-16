@@ -7,12 +7,12 @@ use parking_lot::RwLock;
 use std::cmp;
 use std::time::Duration;
 
-//TODO: load config from file, e.g. config.toml
+//TODO: load config from file, e.g. config.toml?
 
-lazy_static! {
+lazy_static!(
     static ref VIEW_ENGINES: RwLock<HashMap<String, Box<ViewEngine>>> = RwLock::new(HashMap::new());
     static ref METADATA_STORE: RwLock<ConnMetadata> = RwLock::new(ConnMetadata::new());
-}
+);
 
 pub struct ServerConfig {
     pool_size: usize,
@@ -84,7 +84,7 @@ impl ServerConfig {
 
     pub fn use_default_header(header: HashMap<String, String>) {
         let mut store = METADATA_STORE.write();
-        (*store).header = Box::new(header);
+        (*store).header = header;
     }
 
     pub fn set_default_header(field: String, value: String, replace: bool) {
@@ -112,18 +112,6 @@ impl Default for ServerConfig {
     }
 }
 
-impl Clone for ServerConfig {
-    fn clone(&self) -> Self {
-        ServerConfig {
-            pool_size: self.pool_size,
-            read_timeout: self.read_timeout,
-            write_timeout: self.write_timeout,
-            use_session_autoclean: self.use_session_autoclean,
-            session_auto_clean_period: self.session_auto_clean_period,
-        }
-    }
-}
-
 /// Function type alias `ViewEngine` represents the function signature required for the external
 /// view engine framework to be used in the Rusty_Express. Each engine shall be specific to handle one
 /// type of html-template. The 1st parameter represents the raw template content in string format,
@@ -138,7 +126,9 @@ pub type ViewEngine = fn(&mut String, Box<EngineContext + Send + Sync>) -> u16;
 /// as the return value)
 ///
 /// # Examples
-/// ```rust
+/// ```no_run
+/// use rusty_express::prelude::*;
+///
 /// pub struct RenderModel {
 ///     id: String,
 ///     user: String,
@@ -151,7 +141,7 @@ pub type ViewEngine = fn(&mut String, Box<EngineContext + Send + Sync>) -> u16;
 ///             "User" => Ok(self.user.to_owned()),
 ///             "ID" => Ok(self.id.to_owned()),
 ///             "Email" => Ok(self.email.to_owned()),
-///             _ => Err(&format!("Unable to provide information for the key: {}", field)[..]),
+///             _ => Err(&format_err!("Unable to provide information for the key: {}", field)[..]),
 ///         }
 ///     }
 /// }
@@ -209,15 +199,15 @@ impl ViewEngineParser for ServerConfig {
 pub type PageGenerator = fn() -> String;
 
 pub struct ConnMetadata {
-    header: Box<HashMap<String, String>>,
-    status_page_generators: Box<HashMap<u16, PageGenerator>>,
+    header: HashMap<String, String>,
+    status_page_generators: HashMap<u16, PageGenerator>,
 }
 
 impl ConnMetadata {
     pub fn new() -> Self {
         ConnMetadata {
-            header: Box::new(HashMap::new()),
-            status_page_generators: Box::new(HashMap::new()),
+            header: HashMap::new(),
+            status_page_generators: HashMap::new(),
         }
     }
 
@@ -225,7 +215,7 @@ impl ConnMetadata {
     pub fn get_default_header() -> Option<HashMap<String, String>> {
         let store = METADATA_STORE.read();
         if !store.header.is_empty() {
-            return Some((*store.header).clone());
+            return Some(store.header.clone());
         }
 
         None
@@ -239,14 +229,5 @@ impl ConnMetadata {
         }
 
         store.status_page_generators.get(&status).cloned()
-    }
-}
-
-impl Clone for ConnMetadata {
-    fn clone(&self) -> Self {
-        ConnMetadata {
-            header: self.header.clone(),
-            status_page_generators: self.status_page_generators.clone(),
-        }
     }
 }

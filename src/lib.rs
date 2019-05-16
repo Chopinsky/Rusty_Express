@@ -123,16 +123,16 @@ impl HttpServer {
         });
 
         // obtain the control message courier service and start the callback
-        let control_handler = if let Some(cb) = callback {
-            let sender = self.state.get_courier_sender();
-            Some(thread::spawn(move || {
-                // sleep 100 ms to avoid racing with the main server before it's ready to take control messages.
-                thread::sleep(Duration::from_millis(100));
-                cb(sender);
-            }))
-        } else {
-            None
-        };
+        let control_handler =
+            callback.map(|cb| {
+                let sender = self.state.get_courier_sender();
+
+                thread::spawn(move || {
+                    // sleep 100 ms to avoid racing with the main server before it's ready to take control messages.
+                    thread::sleep(Duration::from_millis(96));
+                    cb(sender);
+                })
+            });
 
         // launch the service, now this will block until the server is shutdown
         println!("Listening for connections on port {}", port);
@@ -169,10 +169,9 @@ impl HttpServer {
             return;
         }
 
-        let sender = self.state.get_courier_sender();
-
-        if sender
-            .send(ControlMessage::HotLoadConfig(self.config.clone()))
+        if self
+            .state
+            .courier_deliver(ControlMessage::HotReloadConfig)
             .is_err()
         {
             debug::print("Failed to hot reload the configuration", InfoLevel::Error);
@@ -200,6 +199,9 @@ impl HttpServer {
                         }
 
                         break;
+                    }
+                    ControlMessage::HotReloadConfig => {
+                        self.session_cleanup_config();
                     }
                     ControlMessage::HotLoadRouter(r) => {
                         if let Err(err) = Route::use_router(r) {
@@ -288,9 +290,11 @@ impl HttpServer {
 
 impl Default for HttpServer {
     fn default() -> Self {
+        // reset the router with the new server instance
+        Route::init();
+
         HttpServer {
-            //router: Route::new(),
-            config: ServerConfig::new(),
+            config: ServerConfig::default(),
             state: ServerStates::new(),
         }
     }

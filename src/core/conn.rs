@@ -27,6 +27,7 @@ type BaseLine = Option<channel::Receiver<(RouteHandler, HashMap<String, String>)
 
 #[derive(PartialEq, Eq, Clone, Copy)]
 enum ConnError {
+    HeartBeat,
     EmptyRequest,
     ReadStreamFailure,
     AccessDenied,
@@ -99,14 +100,14 @@ pub(crate) fn handle_connection(mut stream: Stream) -> ExecCode {
                 ConnError::EmptyRequest => 400,
                 ConnError::AccessDenied => 401,
                 ConnError::ServiceUnavailable => 404,
-                ConnError::ReadStreamFailure => {
+                ConnError::ReadStreamFailure | ConnError::HeartBeat => {
                     // connection is sour, shutdown now
                     if let Err(err) = stream.shutdown(Shutdown::Both) {
                         return 1;
                     }
 
                     return 0;
-                }
+                },
             };
 
             debug::print(
@@ -253,17 +254,15 @@ fn stream_shutdown(stream: &mut Stream) -> u8 {
 }
 
 fn parse_request(stream: &mut Stream) -> Result<(RouteHandler, Box<Request>), ConnError> {
-    let mut raw = String::with_capacity(512); // 512 -- default buffer size
-    if let Some(e) = read_stream(stream, &mut raw) {
-        return Err(e);
-    };
+    let raw = read_stream(stream)?;
+    let trimmed = raw.trim_matches(|c| c == '\r' || c == '\n' || c == '\u{0}');
 
-    if raw.trim_matches(|c| c == '\r' || c == '\n' || c == '\u{0}').is_empty() {
+    if trimmed.is_empty() {
         return Err(ConnError::EmptyRequest);
     }
 
     let mut request = Box::new(Request::new());
-    let result = deserialize(raw, &mut request);
+    let result = deserialize(trimmed, &mut request);
 
     if result.is_none() {
         return Err(ConnError::ServiceUnavailable)
@@ -282,26 +281,33 @@ fn parse_request(stream: &mut Stream) -> Result<(RouteHandler, Box<Request>), Co
     Ok((result, request))
 }
 
-fn read_stream(stream: &mut Stream, raw_req: &mut String) -> Option<ConnError> {
+fn read_stream(stream: &mut Stream) -> Result<String, ConnError> {
     let mut buffer = [0u8; 512];
+    let mut raw_req = String::with_capacity(512);
 
     loop {
         match stream.read(&mut buffer) {
             Ok(len) => {
-                if let Ok(req_slice) = str::from_utf8(&buffer[..len]) {
-                    raw_req.push_str(req_slice);
-                } else {
-                    debug::print("Failed to parse the request stream", InfoLevel::Warning);
-                    return Some(ConnError::ReadStreamFailure);
+                if len == 0 && raw_req.is_empty() {
+                    // if the request is a mere handshake with no request data, we return
+                    return Err(ConnError::HeartBeat);
                 }
 
-                if len < 512 {
-                    break;
+                if let Ok(req_slice) = str::from_utf8(&buffer[..len]) {
+                    if len < 512 {
+                        // trim end if we're at the end of the request stream
+                        raw_req.push_str(
+                            req_slice.trim_end_matches(|c| c == '\r' || c == '\n' || c == '\u{0}')
+                        );
+
+                        return Ok(raw_req);
+                    } else {
+                        // if there are more to read, don't trim and continue
+                        raw_req.push_str(req_slice);
+                    }
                 } else {
-                    // possibly to have more to read, clear the buffer and load it again
-                    buffer.iter_mut().for_each(|val| {
-                        *val = 0;
-                    });
+                    debug::print("Failed to parse the request stream", InfoLevel::Warning);
+                    return Err(ConnError::ReadStreamFailure);
                 }
             },
             Err(e) => {
@@ -310,15 +316,13 @@ fn read_stream(stream: &mut Stream, raw_req: &mut String) -> Option<ConnError> {
                     InfoLevel::Warning,
                 );
 
-                return Some(ConnError::ReadStreamFailure);
+                return Err(ConnError::ReadStreamFailure);
             },
         };
     }
-
-    None
 }
 
-fn deserialize(request: String, store: &mut Box<Request>) -> RouteHandler {
+fn deserialize(request: &str, store: &mut Box<Request>) -> RouteHandler {
     if request.is_empty() {
         return RouteHandler::default();
     }
@@ -397,7 +401,6 @@ fn deserialize(request: String, store: &mut Box<Request>) -> RouteHandler {
 }
 
 pub(crate) fn parse_baseline(source: &str, req: &mut Box<Request>) -> BaseLine {
-    let mut header_only = false;
     let mut raw_scheme = String::new();
     let mut raw_fragment = String::new();
 
@@ -414,14 +417,7 @@ pub(crate) fn parse_baseline(source: &str, req: &mut Box<Request>) -> BaseLine {
                     "POST" => REST::POST,
                     "DELETE" => REST::DELETE,
                     "OPTIONS" => REST::OPTIONS,
-                    _ => {
-                        let others = info.to_uppercase();
-                        if others.eq(&String::from("HEADER")) {
-                            header_only = true;
-                        }
-
-                        REST::OTHER(others)
-                    }
+                    _ => REST::OTHER(info.to_uppercase())
                 };
 
                 req.method = base_method;
@@ -440,9 +436,7 @@ pub(crate) fn parse_baseline(source: &str, req: &mut Box<Request>) -> BaseLine {
 
         let (tx, rx) = channel::bounded(1);
         shared_pool::run(
-            move || {
-                Route::seek(&req_method, &uri, header_only, tx);
-            },
+            move || Route::seek(&req_method, &uri, tx),
             TaskType::Request,
         );
 

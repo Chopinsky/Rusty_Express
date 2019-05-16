@@ -1,14 +1,16 @@
 #![allow(dead_code)]
 
+use std::thread::JoinHandle;
+
 use super::config::ServerConfig;
 use super::router::Route;
 use crate::channel::{self, TryRecvError};
 use crate::support::debug::{self, InfoLevel};
 use crate::support::session::*;
-use std::thread::*;
 
 pub enum ControlMessage {
     Terminate,
+    HotReloadConfig,
     HotLoadRouter(Route),
     HotLoadConfig(ServerConfig),
     Custom(String),
@@ -44,7 +46,11 @@ impl ServerStates {
 
     #[inline]
     pub(crate) fn get_courier_sender(&self) -> channel::Sender<ControlMessage> {
-        channel::Sender::clone(&self.courier_channel.0)
+        self.courier_channel.0.clone()
+    }
+
+    pub(crate) fn courier_deliver(&self, msg: ControlMessage) -> Result<(), channel::SendError<ControlMessage>> {
+        self.courier_channel.0.send(msg)
     }
 
     #[inline]

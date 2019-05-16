@@ -1,4 +1,8 @@
 # 2019-04
+## 0.4.3
+- This version starts to support use of TLS connections.
+
+# 2019-04
 ## 0.4.2
 - New API to support setup of a static folder location, which will be used to serve files
 in this folder without naming every available files in the router:

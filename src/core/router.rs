@@ -2,9 +2,8 @@
 #![allow(clippy::borrowed_box)]
 
 use std::fmt;
-use std::path::PathBuf;
-use std::sync::RwLock;
 use std::fs;
+use std::path::PathBuf;
 
 use crate::channel;
 use crate::core::http::{Request, Response, ResponseWriter};
@@ -14,12 +13,10 @@ use crate::support::debug::{self, InfoLevel};
 use crate::support::Field;
 use crate::support::RouteTrie;
 
+use parking_lot::RwLock;
 use regex::Regex;
 
-lazy_static! {
-    static ref ROUTE_FOR_ALL: REST = REST::OTHER(String::from("*"));
-    static ref ROUTER: RwLock<Route> = RwLock::new(Route::new());
-}
+static mut ROUTER: Option<RwLock<Route>> = None; // RwLock::new(Route::new());
 
 #[derive(PartialEq, Eq, Hash, Clone)]
 pub enum REST {
@@ -342,47 +339,40 @@ pub struct Route {
 }
 
 impl Route {
+    pub(crate) fn init() {
+        unsafe { ROUTER.replace(RwLock::new(Route::new())); }
+    }
+
     pub fn new() -> Self {
         Default::default()
     }
 
     pub fn get_auth_func() -> Option<AuthFunc> {
-        if let Ok(route) = ROUTER.read() {
-            return route.auth_func;
-        }
-
-        None
+        let route = Route::router_ref().read();
+        route.auth_func
     }
 
     pub fn set_auth_func(auth_func: Option<AuthFunc>) {
-        if let Ok(mut route) = ROUTER.write() {
-            route.auth_func = auth_func;
-        }
+        let mut route = Route::router_ref().write();
+        route.auth_func = auth_func;
     }
 
     pub fn use_router(another: Route) -> Result<(), String> {
-        if let Ok(mut route) = ROUTER.write() {
-            route.replace_with(another);
-            return Ok(());
-        }
-
-        Err(String::from(
-            "Unable to define the router, please try again...",
-        ))
+        let mut route = Route::router_ref().write();
+        route.replace_with(another);
+        Ok(())
     }
 
     pub(crate) fn add_route(method: REST, uri: RequestPath, callback: RouteHandler) {
-        if let Ok(mut route) = ROUTER.write() {
-            route.add(method, uri, callback);
-        }
+        let mut route = Route::router_ref().write();
+        route.add(method, uri, callback);
     }
 
     pub(crate) fn add_static(method: REST, uri: Option<RequestPath>, path: PathBuf) {
-        if let Ok(mut route) = ROUTER.write() {
-            match uri {
-                Some(u) => route.add(method, u, RouteHandler(None, Some(path))),
-                None => route.set_static(method, path),
-            }
+        let mut route = Route::router_ref().write();
+        match uri {
+            Some(u) => route.add(method, u, RouteHandler(None, Some(path))),
+            None => route.set_static(method, path),
         }
     }
 
@@ -423,6 +413,10 @@ impl Route {
     fn replace_with(&mut self, mut another: Route) {
         self.store = another.store;
         self.auth_func = another.auth_func.take();
+    }
+
+    fn router_ref() -> &'static RwLock<Route> {
+        unsafe { ROUTER.as_ref().unwrap() }
     }
 }
 
@@ -518,7 +512,6 @@ pub(crate) trait RouteSeeker {
     fn seek(
         method: &REST,
         uri: &str,
-        header_only: bool,
         tx: channel::Sender<(RouteHandler, HashMap<String, String>)>,
     );
 }
@@ -527,24 +520,30 @@ impl RouteSeeker for Route {
     fn seek(
         method: &REST,
         uri: &str,
-        header_only: bool,
         tx: channel::Sender<(RouteHandler, HashMap<String, String>)>,
     ) {
         let mut result = RouteHandler(None, None);
         let mut params = HashMap::new();
 
-        if let Ok(route_store) = ROUTER.read() {
+        // keep the route_store in limited scope so we can release the read lock ASAP
+        {
+            let route_store = Route::router_ref().read();
+
+            // get from the method
             if let Some(routes) = route_store.store.get(method) {
                 result = routes.seek_path(uri, &mut params);
-            } else if header_only {
-                //if a header only request, fallback to search with REST::GET
+            }
+
+            // if a header only request, fallback to search with REST::GET
+            if result.is_none() && method == &REST::OTHER(String::from("HEADER")) {
                 if let Some(routes) = route_store.store.get(&REST::GET) {
                     result = routes.seek_path(uri, &mut params);
                 }
             }
 
+            // otherwise, try the all-match routes
             if result.is_none() {
-                if let Some(all_routes) = route_store.store.get(&ROUTE_FOR_ALL) {
+                if let Some(all_routes) = route_store.store.get(&REST::OTHER(String::from("*"))) {
                     result = all_routes.seek_path(uri, &mut params);
                 }
             }
