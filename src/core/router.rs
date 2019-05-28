@@ -670,7 +670,6 @@ impl RouteHandler {
         }
 
         if let Some(path) = self.1.take() {
-            //TODO: need to send params through cookie? or other headers
             resp.send_file_from_path_async(path);
         }
     }

@@ -22,7 +22,7 @@ use crate::core::conn::Stream;
 static FOUR_OH_FOUR: &'static str = include_str!("../default/404.html");
 static FOUR_OH_ONE: &'static str = include_str!("../default/401.html");
 static FIVE_HUNDRED: &'static str = include_str!("../default/500.html");
-static VERSION: &'static str = "0.3.3";
+static VERSION: &'static str = env!("CARGO_PKG_VERSION");
 
 static RESP_TIMEOUT: Duration = Duration::from_millis(64);
 static LONG_CONN_TIMEOUT: Duration = Duration::from_secs(8);
