@@ -184,6 +184,8 @@ impl HttpServer {
         self.state.toggle_running_state(true);
 
         //TODO: impl TLS setup ...
+        //TODO: impl SSL config ...
+
         let acceptor: Option<Arc<TlsAcceptor>> = None;
         let pool_size = self.config.get_pool_size();
 

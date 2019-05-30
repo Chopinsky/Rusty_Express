@@ -6,7 +6,7 @@ use std::time::Duration;
 
 use crate::channel::{self, Receiver, SendTimeoutError, Sender};
 use crate::support::debug::{self, InfoLevel};
-use parking_lot::{Once, ONCE_INIT};
+use parking_lot::{Once, OnceState, ONCE_INIT};
 
 const CHAN_SIZE: usize = 512;
 const POOL_CAP: usize = 65535;
@@ -205,6 +205,11 @@ static ONCE: Once = ONCE_INIT;
 static mut POOL: Option<Pool> = None;
 
 pub(crate) fn initialize_with(sizes: Vec<usize>) {
+    assert_eq!(
+        ONCE.state(), OnceState::New,
+        ">>> Only 1 instance of the server is allowed per process ... <<<"
+    );
+
     ONCE.call_once(|| {
         let pool_sizes: Vec<usize> = sizes
             .iter()
@@ -222,7 +227,7 @@ pub(crate) fn initialize_with(sizes: Vec<usize>) {
 
         // Put it in the heap so it can outlive this call
         unsafe {
-            POOL = Some(Pool {
+            POOL.replace(Pool {
                 req_workers: Box::new(ThreadPool::new(req_size)),
                 resp_workers: Box::new(ThreadPool::new(2 * resp_size)),
             });

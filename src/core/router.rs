@@ -260,8 +260,23 @@ impl RouteMap {
     }
 
     fn seek_path(&self, raw_uri: &str, params: &mut HashMap<String, String>) -> RouteHandler {
+        //TODO: should we support random static files? still incorrect with the static path under
+        //      explicit path ... should check if a static path is matching with it ...
+
         if raw_uri.is_empty() {
             return RouteHandler::default();
+        }
+
+        let route = self.search(raw_uri, "", "", params);
+        if route.is_some() {
+            return route;
+        }
+
+        /*
+            Exact uri match failed, now try parsing the file name if it contains one.
+        */
+        if !params.is_empty() {
+            params.clear();
         }
 
         let mut actual_uri = "/";
@@ -280,41 +295,65 @@ impl RouteMap {
             }
         });
 
-        if let Some(callback) = self.explicit.get(actual_uri) {
-            return RouteHandler::update_handler(callback.clone(), file_name);
+        // uri doesn't contain a file name, actual_uri === raw_uri, done (and route not found).
+        if file_name.is_empty() {
+            return RouteHandler::default();
         }
 
-        if let Some(static_path) = self.static_path.as_ref() {
-            match search_static_router(&static_path, raw_uri) {
-                Ok(res) => {
-                    // if res is some, we're done. Searching with the full sym-link, so we use
-                    // the raw uri instead of the /custom/path/to/uri, and we don't want to
-                    // append the file name again since we check the file-existence already
-                    if res.is_some() {
-                        return res;
-                    }
-                },
-                Err(_) => {
-                    // either not in white-list, or in black-list, quit
-                    return RouteHandler::default();
-                },
+        return self.search(actual_uri, raw_uri, file_name, params);
+    }
+
+    fn search(
+        &self,
+        uri: &str,
+        raw_uri: &str,
+        file_name: &str,
+        params: &mut HashMap<String, String>,
+    ) -> RouteHandler
+    {
+        let for_file = !file_name.is_empty();
+
+        if let Some(callback) = self.explicit.get(uri) {
+            // only exact match can return: callback and no file name, or path with file name (custom
+            if (!for_file && callback.0.is_some()) || (for_file && callback.1.is_some()) {
+                return RouteHandler::update_handler(callback.clone(), file_name);
+            }
+        }
+
+        if for_file {
+            if let Some(static_path) = self.static_path.as_ref() {
+                match search_static_router(&static_path, raw_uri) {
+                    Ok(res) => {
+                        // if res is some, we're done. Searching with the full sym-link, so we use
+                        // the raw uri instead of the /custom/path/to/uri, and we don't want to
+                        // append the file name again since we check the file-existence already
+                        if res.is_some() {
+                            return res;
+                        }
+                    },
+                    Err(_) => {
+                        // either not in white-list, or in black-list, quit
+                        return RouteHandler::default();
+                    },
+                }
             }
         }
 
         if !self.explicit_with_params.is_empty() {
             let result =
-                search_params_router(&self.explicit_with_params, actual_uri, params);
+                search_params_router(&self.explicit_with_params, uri, params);
 
-            if result.is_some() {
+            if (!for_file && result.0.is_some()) || (for_file && result.1.is_some()) {
                 return RouteHandler::update_handler(result, file_name);
             }
         }
 
         if !self.wildcard.is_empty() {
-            return RouteHandler::update_handler(
-                search_wildcard_router(&self.wildcard, actual_uri),
-                file_name
-            );
+            let result = search_wildcard_router(&self.wildcard, uri);
+
+            if (!for_file && result.0.is_some()) || (for_file && result.1.is_some()) {
+                return RouteHandler::update_handler(result,file_name);
+            }
         }
 
         RouteHandler(None, None)
@@ -387,6 +426,8 @@ impl Route {
         map.insert(uri, callback);
         self.store.insert(method, map);
     }
+
+    //TODO: expose black list and white list setter/getter
 
     fn set_static(&mut self, method: REST, path: PathBuf) {
         if !path.exists() || !path.is_dir() {
@@ -522,6 +563,8 @@ impl RouteSeeker for Route {
         uri: &str,
         tx: channel::Sender<(RouteHandler, HashMap<String, String>)>,
     ) {
+        //TODO: bug -- Explicit("/") also matching with any /*.* routes...
+
         let mut result = RouteHandler(None, None);
         let mut params = HashMap::new();
 
@@ -680,6 +723,11 @@ impl RouteHandler {
         }
 
         if let Some(mut p) = handler.1.take() {
+            assert!(
+                handler.0.is_none(),
+                "Router error: callback and static files are found for this route ..."
+            );
+
             p.push(file_name);
             handler.1.replace(p);
         };

@@ -1,6 +1,7 @@
 # 2019-04
 ## 0.4.3
 - This version starts to support use of TLS connections.
+- Fixing bugs in the router when using the static path.
 
 # 2019-04
 ## 0.4.2

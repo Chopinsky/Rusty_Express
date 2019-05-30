@@ -103,7 +103,7 @@ impl ServerConfig {
 impl Default for ServerConfig {
     fn default() -> Self {
         ServerConfig {
-            pool_size: cmp::max(num_cpus::get(), 4),
+            pool_size: cmp::max(4*num_cpus::get(), 8),
             read_timeout: 0,
             write_timeout: 0,
             use_session_autoclean: false,
