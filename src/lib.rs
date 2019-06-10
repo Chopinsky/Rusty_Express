@@ -5,11 +5,11 @@
 //! # Examples
 //! ```
 //! extern crate rusty_express as express;
-//! use express::prelude::{HttpServer, RequestPath, Request, Response};
+//! use express::prelude::*;
 //!
 //! fn main() {
 //!    let mut server = HttpServer::new();
-//!     server.get(RequestPath::Explicit("/"), simple_response);
+//!    server.get(RequestPath::Explicit("/"), simple_response);
 //!    server.listen(8080);
 //! }
 //!
@@ -44,7 +44,7 @@ pub mod prelude {
     pub use crate::core::cookie::*;
     pub use crate::core::http::{Request, RequestWriter, Response, ResponseStates, ResponseWriter};
     pub use crate::core::router::{RequestPath, Route, Router, REST};
-    pub use crate::core::states::ControlMessage;
+    pub use crate::core::states::{AsyncController, ControlMessage};
     pub use crate::{HttpServer, ServerDef};
 
     #[cfg(feature = "session")]
@@ -97,7 +97,7 @@ impl HttpServer {
     ///
     /// ```rust
     /// extern crate rusty_express as express;
-    /// use express::prelude::{HttpServer};
+    /// use express::prelude::{HttpServer, ServerDef, Router};
     ///
     /// let mut server = HttpServer::new();
     /// server.def_router(router);
@@ -111,10 +111,13 @@ impl HttpServer {
     pub fn listen_and_serve(
         &mut self,
         port: u16,
-        callback: Option<fn(channel::Sender<ControlMessage>)>,
+        callback: Option<fn(AsyncController)>,
     ) {
         // initialize the debug service, which setup the debug level based on the environment variable
         debug::initialize();
+
+        // update the server state for the socket-host address
+        self.state.set_port(port);
 
         // create the listener
         let server_address = SocketAddr::from(([127, 0, 0, 1], port));
@@ -136,6 +139,8 @@ impl HttpServer {
 
         // launch the service, now this will block until the server is shutdown
         println!("Listening for connections on port {}", port);
+
+        // actually mounting the server
         self.launch_with(&listener);
 
         // start to shut down the TcpListener
@@ -154,7 +159,7 @@ impl HttpServer {
 
     #[inline]
     #[must_use]
-    pub fn get_courier(&self) -> channel::Sender<ControlMessage> {
+    pub fn get_courier(&self) -> AsyncController {
         self.state.get_courier_sender()
     }
 
@@ -183,7 +188,7 @@ impl HttpServer {
         self.session_cleanup_config();
         self.state.toggle_running_state(true);
 
-        //TODO: impl TLS setup ...
+        //TODO: impl TLS setup ... then sanitize the info
         //TODO: impl SSL config ...
 
         let acceptor: Option<Arc<TlsAcceptor>> = None;
@@ -235,7 +240,7 @@ impl HttpServer {
 
             match stream {
                 Ok(s) => {
-                    self.handle_stream(s, &mut workers_pool, &acceptor);
+                    self.handle_stream(s, &mut workers_pool, acceptor.clone());
                 },
                 Err(e) => debug::print(
                     &format!("Failed to receive the upcoming stream: {}", e)[..],
@@ -251,19 +256,13 @@ impl HttpServer {
         self.state.toggle_running_state(false);
     }
 
-    fn handle_stream(&self, stream: TcpStream, workers_pool: &mut ThreadPool, acceptor: &Option<Arc<TlsAcceptor>>) {
+    fn handle_stream(&self, stream: TcpStream, workers_pool: &mut ThreadPool, acceptor: Option<Arc<TlsAcceptor>>) {
         let read_timeout = u64::from(self.config.get_read_timeout());
         let write_timeout = u64::from(self.config.get_write_timeout());
 
-        let acceptor_clone = if let Some(acceptor) = acceptor {
-            Some(acceptor.clone())
-        } else {
-            None
-        };
-
         workers_pool.execute(move || {
             stream.set_timeout(read_timeout, write_timeout);
-            if let Some(a) = acceptor_clone {
+            if let Some(a) = acceptor {
                 // handshake and encrypt
                 match a.accept(stream) {
                     Ok(s) => {

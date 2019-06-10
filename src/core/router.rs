@@ -260,9 +260,6 @@ impl RouteMap {
     }
 
     fn seek_path(&self, raw_uri: &str, params: &mut HashMap<String, String>) -> RouteHandler {
-        //TODO: should we support random static files? still incorrect with the static path under
-        //      explicit path ... should check if a static path is matching with it ...
-
         if raw_uri.is_empty() {
             return RouteHandler::default();
         }
@@ -563,8 +560,6 @@ impl RouteSeeker for Route {
         uri: &str,
         tx: channel::Sender<(RouteHandler, HashMap<String, String>)>,
     ) {
-        //TODO: bug -- Explicit("/") also matching with any /*.* routes...
-
         let mut result = RouteHandler(None, None);
         let mut params = HashMap::new();
 

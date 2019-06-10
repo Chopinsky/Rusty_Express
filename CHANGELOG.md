@@ -2,6 +2,8 @@
 ## 0.4.3
 - This version starts to support use of TLS connections.
 - Fixing bugs in the router when using the static path.
+- The server-launching callback function will take a struct wrapper for the control
+message sender, the `AsyncController`. 
 
 # 2019-04
 ## 0.4.2
