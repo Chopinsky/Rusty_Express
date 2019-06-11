@@ -14,10 +14,10 @@ use crate::channel;
 use crate::core::config::{ConnMetadata, EngineContext, ServerConfig, ViewEngineParser};
 use crate::core::cookie::*;
 use crate::core::router::REST;
+use crate::core::stream::Stream;
 use crate::support::{common::*, debug, debug::InfoLevel, shared_pool, TaskType};
 use chrono::prelude::*;
 use hashbrown::{hash_map::Iter, HashMap};
-use crate::core::conn::Stream;
 
 static FOUR_OH_FOUR: &'static str = include_str!("../default/404.html");
 static FOUR_OH_ONE: &'static str = include_str!("../default/401.html");

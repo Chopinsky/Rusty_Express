@@ -1,7 +1,7 @@
 #![allow(dead_code)]
 
 use std::thread::JoinHandle;
-use std::net::SocketAddr;
+use std::net::{SocketAddr, TcpStream, Shutdown};
 
 use super::config::ServerConfig;
 use super::router::Route;
@@ -25,15 +25,18 @@ impl AsyncController {
     }
 
     pub fn send(&self, message: ControlMessage) -> Result<(), SendError<ControlMessage>> {
-        self.0.send(message)?;
-
         match message {
             ControlMessage::Terminate => {
-                //TODO: connect to self address --
-                // let s = TcpStream::connect(self.1)
-                // if let Ok(ss) = s { let _ = ss.shutdown(Shutdown::Both); }
-            }
-            _ => {}
+                self.0.send(ControlMessage::Terminate)?;
+
+                // initiate a connection such that the terminal signal can be immediately picked up
+                if let Ok(client) = TcpStream::connect(self.1) {
+                    let _ = client.shutdown(Shutdown::Both);
+                }
+            },
+            other_msg => {
+                self.0.send(other_msg)?;
+            },
         };
 
         Ok(())

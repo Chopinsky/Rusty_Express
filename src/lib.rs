@@ -64,6 +64,7 @@ use self::core::config::{ServerConfig, ViewEngine, ViewEngineDefinition};
 use self::core::conn::*;
 use self::core::router::*;
 use self::core::states::*;
+use self::core::stream::*;
 use self::support::debug::{self, InfoLevel};
 use self::support::session::*;
 use self::support::{shared_pool, ThreadPool};
@@ -126,22 +127,27 @@ impl HttpServer {
         });
 
         // obtain the control message courier service and start the callback
-        let control_handler =
-            callback.map(|cb| {
+        let (control_handler, controller_tx) =
+            if let Some(cb) = callback {
                 let sender = self.state.get_courier_sender();
+                let (tx, rx) = channel::bounded(1);
 
-                thread::spawn(move || {
-                    // sleep 100 ms to avoid racing with the main server before it's ready to take control messages.
-                    thread::sleep(Duration::from_millis(96));
+                let handler = thread::spawn(move || {
+                    // wait for server to launch before it's ready to take control messages.
+                    let _ = rx.recv();
                     cb(sender);
-                })
-            });
+                });
+
+                (Some(handler), Some(tx))
+            } else {
+                (None, None)
+            };
 
         // launch the service, now this will block until the server is shutdown
         println!("Listening for connections on port {}", port);
 
         // actually mounting the server
-        self.launch_with(&listener);
+        self.launch_with(&listener, controller_tx);
 
         // start to shut down the TcpListener
         println!("Shutting down...");
@@ -183,19 +189,31 @@ impl HttpServer {
         }
     }
 
-    fn launch_with(&mut self, listener: &TcpListener) {
+    fn launch_with(&mut self, listener: &TcpListener, mut cb_sig: Option<channel::Sender<()>>) {
         // if using the session module and allow auto clean up, launch the service now.
         self.session_cleanup_config();
         self.state.toggle_running_state(true);
 
-        //TODO: impl TLS setup ... then sanitize the info
-        //TODO: impl SSL config ...
+        //TODO: impl TLS setup ... then sanitize the info ... impl SSL config?
 
         let acceptor: Option<Arc<TlsAcceptor>> = None;
         let pool_size = self.config.get_pool_size();
 
         let mut workers_pool = setup_worker_pools(pool_size);
         workers_pool.toggle_auto_expansion(true);
+
+        // notify the server launcher that we're ready to serve incoming streams
+        if let Some(sender) = cb_sig.take() {
+            sender.send(()).unwrap_or_else(|err| {
+                debug::print(
+                    &format!(
+                        "Failed to notify the server launching callback function: {}",
+                        err
+                    )[..],
+                    InfoLevel::Warning,
+                );
+            });
+        }
 
         for stream in listener.incoming() {
             if let Some(message) = self.state.courier_fetch() {
@@ -211,7 +229,7 @@ impl HttpServer {
                         self.session_cleanup_config();
                     }
                     ControlMessage::HotLoadRouter(r) => {
-                        if let Err(err) = Route::use_router(r) {
+                        Route::use_router(r).unwrap_or_else(|err| {
                             debug::print(
                                 &format!(
                                     "An error has taken place when trying to update the router: {}",
@@ -219,7 +237,7 @@ impl HttpServer {
                                 )[..],
                                 InfoLevel::Warning,
                             );
-                        }
+                        });
                     }
                     ControlMessage::HotLoadConfig(c) => {
                         if c.get_pool_size() != self.config.get_pool_size() {

@@ -1,8 +1,8 @@
 #![allow(clippy::borrowed_box)]
 #![allow(dead_code)]
 
-use std::io::{self, prelude::*, BufWriter, Error, ErrorKind};
-use std::net::{TcpStream, Shutdown, SocketAddr};
+use std::io::{prelude::*, BufWriter};
+use std::net::Shutdown;
 use std::str;
 use std::time::Duration;
 
@@ -12,8 +12,8 @@ use crate::core::http::{
     Request, RequestWriter, Response, ResponseManager, ResponseStates, ResponseWriter,
 };
 use crate::core::router::{Route, RouteSeeker, REST, RouteHandler};
+use crate::core::stream::Stream;
 use crate::hashbrown::HashMap;
-use crate::native_tls::TlsStream;
 use crate::support::{
     common::flush_buffer, common::write_to_buff, common::MapUpdates, debug, debug::InfoLevel,
     shared_pool, TaskType,
@@ -25,6 +25,9 @@ static FLUSH_RETRY: u8 = 4;
 type ExecCode = u8;
 type BaseLine = Option<channel::Receiver<(RouteHandler, HashMap<String, String>)>>;
 
+//TODO/P3: in lib, launch workers that will handle the request parsing, and write to the stream.
+//         implementation shall be built in this module
+
 #[derive(PartialEq, Eq, Clone, Copy)]
 enum ConnError {
     HeartBeat,
@@ -34,67 +37,10 @@ enum ConnError {
     ServiceUnavailable,
 }
 
-pub(crate) enum Stream {
-    Tcp(TcpStream),
-    Tls(Box<TlsStream<TcpStream>>),
-}
-
-impl Stream {
-    pub(crate) fn shutdown(&mut self, how: Shutdown) -> io::Result<()> {
-        match self {
-            Stream::Tcp(tcp) => tcp.shutdown(how),
-            Stream::Tls(ref mut tls) => tls.shutdown(),
-        }
-    }
-
-    pub(crate) fn set_read_timeout(&self, dur: Option<Duration>) -> io::Result<()> {
-        match self {
-            Stream::Tcp(tcp) => tcp.set_read_timeout(dur),
-            Stream::Tls(tls) => tls.get_ref().set_read_timeout(dur),
-        }
-    }
-
-    pub(crate) fn set_write_timeout(&self, dur: Option<Duration>) -> io::Result<()> {
-        match self {
-            Stream::Tcp(tcp) => tcp.set_write_timeout(dur),
-            Stream::Tls(tls) => tls.get_ref().set_write_timeout(dur),
-        }
-    }
-
-    pub(crate) fn take_error(&self) -> io::Result<Option<io::Error>> {
-        match self {
-            Stream::Tcp(tcp) => tcp.take_error(),
-            Stream::Tls(tls) => tls.get_ref().take_error(),
-        }
-    }
-
-    fn peer_addr(&self) -> io::Result<SocketAddr> {
-        match self {
-            Stream::Tcp(tcp) => tcp.peer_addr(),
-            Stream::Tls(tls) => tls.get_ref().peer_addr(),
-        }
-    }
-
-    // Side effect: TLS stream will be downgraded to TCP stream since the handshake has been done
-    fn try_clone(&self) -> io::Result<Stream> {
-        match self {
-            Stream::Tcp(tcp) => tcp.try_clone().map(|t| {
-                Stream::Tcp(t)
-            }),
-            _ => Err(Error::new(ErrorKind::InvalidInput, "TLS connection shouldn't be kept long-live")),
-        }
-    }
-
-    fn is_tls(&self) -> bool {
-        match self {
-            Stream::Tls(_) => true,
-            _ => false,
-        }
-    }
-}
-
 pub(crate) fn handle_connection(mut stream: Stream) -> ExecCode {
-    let (callback, request) = match parse_request(&mut stream) {
+    //TODO/P2: refactor this code, such that we send request to a worker who will generate the resp
+    //         and we will write them to this stream in sequence.
+    let (callback, request) = match recv_request(&mut stream) {
         Err(err) => {
             let status: u16 = match err {
                 ConnError::EmptyRequest => 400,
@@ -116,37 +62,12 @@ pub(crate) fn handle_connection(mut stream: Stream) -> ExecCode {
             );
 
             return write_to_stream(stream, &mut build_err_response(status));
-        }
+        },
         Ok(cb) => cb,
     };
 
     let is_tls = stream.is_tls();
-    handle_response(stream, callback, request, initialize_response(is_tls))
-}
-
-impl Read for Stream {
-    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
-        match self {
-            Stream::Tcp(tcp) => tcp.read(buf),
-            Stream::Tls(tls) => tls.read(buf),
-        }
-    }
-}
-
-impl Write for Stream {
-    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-        match self {
-            Stream::Tcp(tcp) => tcp.write(buf),
-            Stream::Tls(tls) => tls.write(buf),
-        }
-    }
-
-    fn flush(&mut self) -> io::Result<()> {
-        match self {
-            Stream::Tcp(tcp) => tcp.flush(),
-            Stream::Tls(tls) => tls.flush(),
-        }
-    }
+    send_response(stream, request, callback, is_tls)
 }
 
 #[inline]
@@ -154,13 +75,14 @@ pub(crate) fn send_err_resp(stream: Stream, err_code: u16) -> ExecCode {
     write_to_stream(stream, &mut build_err_response(err_code))
 }
 
-fn handle_response(
+fn send_response(
     stream: Stream,
-    mut callback: RouteHandler,
     request: Box<Request>,
-    mut response: Box<Response>,
+    mut callback: RouteHandler,
+    is_tls: bool,
 ) -> ExecCode
 {
+    let mut response = initialize_response(is_tls);
     match request.header("connection") {
         Some(ref val) if val.eq(&String::from("close")) => response.can_keep_alive(false),
         _ => response.can_keep_alive(true),
@@ -253,8 +175,10 @@ fn stream_shutdown(stream: &mut Stream) -> u8 {
     0
 }
 
-fn parse_request(stream: &mut Stream) -> Result<(RouteHandler, Box<Request>), ConnError> {
-    let raw = read_stream(stream)?;
+fn recv_request(stream: &mut Stream) -> Result<(RouteHandler, Box<Request>), ConnError> {
+    //TODO/P1: continuous read from this stream until we shall close it up.
+    //      use channel to request
+    let raw = read_content(stream)?;
     let trimmed = raw.trim_matches(|c| c == '\r' || c == '\n' || c == '\u{0}');
 
     if trimmed.is_empty() {
@@ -262,7 +186,7 @@ fn parse_request(stream: &mut Stream) -> Result<(RouteHandler, Box<Request>), Co
     }
 
     let mut request = Box::new(Request::new());
-    let result = deserialize(trimmed, &mut request);
+    let result = parse_request(trimmed, &mut request);
 
     if result.is_none() {
         return Err(ConnError::ServiceUnavailable)
@@ -281,7 +205,7 @@ fn parse_request(stream: &mut Stream) -> Result<(RouteHandler, Box<Request>), Co
     Ok((result, request))
 }
 
-fn read_stream(stream: &mut Stream) -> Result<String, ConnError> {
+fn read_content(stream: &mut Stream) -> Result<String, ConnError> {
     let mut buffer = [0u8; 512];
     let mut raw_req = String::with_capacity(512);
 
@@ -322,7 +246,7 @@ fn read_stream(stream: &mut Stream) -> Result<String, ConnError> {
     }
 }
 
-fn deserialize(request: &str, store: &mut Box<Request>) -> RouteHandler {
+fn parse_request(request: &str, store: &mut Box<Request>) -> RouteHandler {
     if request.is_empty() {
         return RouteHandler::default();
     }
@@ -400,7 +324,7 @@ fn deserialize(request: &str, store: &mut Box<Request>) -> RouteHandler {
     res
 }
 
-pub(crate) fn parse_baseline(source: &str, req: &mut Box<Request>) -> BaseLine {
+fn parse_baseline(source: &str, req: &mut Box<Request>) -> BaseLine {
     let mut raw_scheme = String::new();
     let mut raw_fragment = String::new();
 

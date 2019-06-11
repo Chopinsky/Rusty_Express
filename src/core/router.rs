@@ -297,7 +297,7 @@ impl RouteMap {
             return RouteHandler::default();
         }
 
-        return self.search(actual_uri, raw_uri, file_name, params);
+        self.search(actual_uri, raw_uri, file_name, params)
     }
 
     fn search(

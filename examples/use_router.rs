@@ -25,12 +25,13 @@ fn main() {
 
     server.def_router(router);
 
-    //server.listen(8080);
     server.listen_and_serve(
         8080,
         Some(|sender| {
-            // automatically shutting down after 60 seconds
-            thread::sleep(Duration::from_secs(60));
+            // automatically shutting down after 30 seconds
+            thread::sleep(Duration::from_secs(30));
+
+            println!("Get ready to shutdown the server...");
 
             if let Err(_) = sender.send(ControlMessage::Terminate) {
                 eprintln!("Failed to send the server shutdown message...");
@@ -51,7 +52,7 @@ pub fn simple_index(req: &Box<Request>, resp: &mut Box<Response>) {
     // the status 200 is inferred
 }
 
-fn work_with_context(req: &Request, resp: &mut Response) {
+fn work_with_context(req: &Box<Request>, resp: &mut Box<Response>) {
     if let Err(e) = ServerContext::update_context(req, resp) {
         // Error handling...
         eprintln!("Error on updating the server context: {}", e);
@@ -96,12 +97,12 @@ impl Clone for Model {
 }
 
 impl ContextProvider for Model {
-    fn update(&mut self, req: &Request, resp: &mut Response) -> Result<(), &'static str> {
+    fn update(&mut self, req: &Box<Request>, resp: &mut Box<Response>) -> Result<(), &'static str> {
         self.add_one();
         Ok(())
     }
 
-    fn process(&self, _req: &Request, _resp: &mut Response) -> Result<(), &'static str> {
+    fn process(&self, _req: &Box<Request>, _resp: &mut Box<Response>) -> Result<(), &'static str> {
         println!("Visit count: {}", self.count);
         Ok(())
     }
