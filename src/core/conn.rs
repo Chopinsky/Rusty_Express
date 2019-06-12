@@ -2,33 +2,32 @@
 #![allow(dead_code)]
 
 use std::io::{prelude::*, BufWriter};
-use std::net::Shutdown;
+use std::net::{Shutdown, SocketAddr};
 use std::str;
+use std::sync::Arc;
 use std::time::Duration;
 
-use crate::channel;
 use crate::core::config::ConnMetadata;
 use crate::core::http::{
     Request, RequestWriter, Response, ResponseManager, ResponseStates, ResponseWriter,
 };
 use crate::core::router::{Route, RouteSeeker, REST, RouteHandler};
 use crate::core::stream::Stream;
-use crate::hashbrown::HashMap;
 use crate::support::{
     common::flush_buffer, common::write_to_buff, common::MapUpdates, debug, debug::InfoLevel,
     shared_pool, TaskType,
 };
 
+use crate::channel::{self, Sender, Receiver};
+use crate::hashbrown::HashMap;
+
 static HEADER_END: [u8; 2] = [13, 10];
 static FLUSH_RETRY: u8 = 4;
 
 type ExecCode = u8;
-type BaseLine = Option<channel::Receiver<(RouteHandler, HashMap<String, String>)>>;
+type BaseLine = Option<Receiver<(RouteHandler, HashMap<String, String>)>>;
 
-//TODO/P3: in lib, launch workers that will handle the request parsing, and write to the stream.
-//         implementation shall be built in this module
-
-#[derive(PartialEq, Eq, Clone, Copy)]
+#[derive(PartialEq, Eq, Clone, Copy, Debug)]
 enum ConnError {
     HeartBeat,
     EmptyRequest,
@@ -37,9 +36,355 @@ enum ConnError {
     ServiceUnavailable,
 }
 
+//TODO: >>>> Rewrite Start <<<<
+
+pub(crate) trait StreamHandler {
+    fn process(self, is_tls: bool);
+}
+
+impl StreamHandler for Stream {
+    fn process(mut self, is_tls: bool) {
+        // split the stream such that we can read while writing latest responses
+        let mut reader_stream =
+            match self.try_clone() {
+                Ok(s) => s,
+                Err(_) => return,
+            };
+
+        // pipeline-1: keep listening to the reader stream
+        let (sender, receiver) = channel::bounded(8);
+        shared_pool::run(move || reader_stream.recv_request(sender), TaskType::StreamLoader);
+
+        // pipeline-2: once receiving a request, parse and serve, then send the response back to be written back
+        let (resp_tx, resp_rx) = channel::bounded(8);
+        let addr = self.peer_addr();
+        shared_pool::run(move || handle_requests(receiver, resp_tx, addr.ok(), is_tls), TaskType::Parser);
+
+        // pipeline-end: receive the response, write them back
+        while let Ok((id, resp)) = resp_rx.recv_timeout(Duration::from_secs(16)) {
+            //TODO: check if the responses are in order, otherwise, push into a queue until its turn
+            //      if id == 0, meaning an internal error happened, return immediately
+            self.write_back(resp);
+        }
+
+        // shut down the stream after we're done
+        if let Err(err) = self.shutdown(Shutdown::Both) {
+            debug::print(
+                &format!(
+                    "Encountered errors while shutting down the trunked body stream: {}",
+                    err
+                ),
+                InfoLevel::Warning,
+            );
+        }
+    }
+}
+
+trait StreamMaker {
+    fn recv_request(&mut self, chan: Sender<(usize, Result<String, ConnError>)>);
+    fn write_back(&mut self, response: Box<Response>);
+}
+
+impl StreamMaker for Stream {
+    fn recv_request(&mut self, chan: Sender<(usize, Result<String, ConnError>)>) {
+        let mut buffer = [0u8; 512];
+        let mut raw_req = String::with_capacity(512);
+        let mut req_id = 1;
+
+        loop {
+            match self.read(&mut buffer) {
+                Ok(len) => {
+                    if len == 0 {
+                        //TODO: should we wait instead of sending the heart-beat??
+
+                        if raw_req.is_empty() {
+                            // if the request is a mere handshake with no request data
+                            chan.send((req_id, Err(ConnError::HeartBeat))).unwrap_or_default();
+                        } else {
+                            // if we have no more incoming stream, sending it to parser and wrap up
+                            chan.send((req_id, Ok(raw_req.clone()))).unwrap_or_default();
+                        }
+
+                        return;
+                    } else if let Ok(req_slice) = str::from_utf8(&buffer[..len]) {
+                        //TODO: if meeting double empty lines, aka request-line-break, start a new request
+                        //      raw segment
+
+                        if len < 512 {
+                            // trim end if we're at the end of the request stream
+                            raw_req.push_str(
+                                req_slice.trim_end_matches(|c| c == '\r' || c == '\n' || c == '\u{0}')
+                            );
+
+                            // done with this request, sending it to parser
+                            chan.send((req_id, Ok(raw_req.clone()))).unwrap_or_default();
+                            raw_req.clear();
+                            req_id += 1;
+                        } else {
+                            // if there are more to read, don't trim and continue reading
+                            raw_req.push_str(req_slice);
+                        }
+
+                        //TODO: if done with this stream, break
+                    } else {
+                        debug::print("Failed to parse the request stream", InfoLevel::Warning);
+                        chan.send((req_id, Err(ConnError::ReadStreamFailure))).unwrap_or_default();
+                        return;
+                    }
+                },
+                Err(e) => {
+                    debug::print(
+                        &format!("Reading stream disconnected -- {}", e),
+                        InfoLevel::Warning,
+                    );
+
+                    chan.send((req_id, Err(ConnError::ReadStreamFailure))).unwrap_or_default();
+                    return;
+                },
+            };
+        }
+    }
+
+    fn write_back(&mut self, response: Box<Response>) {
+        let mut writer = BufWriter::new(self);
+
+        // Serialize the header to the stream
+        response.write_header(&mut writer);
+
+        // Blank line to indicate the end of the response header
+        write_to_buff(&mut writer, &HEADER_END);
+
+        // If header only, we're done
+        if response.is_header_only() {
+            flush_buffer(&mut writer);
+            return;
+        }
+
+        // write the body to the stream
+        response.write_body(&mut writer);
+
+        // flush the buffer and shutdown the connection: we're done; no need for explicit shutdown
+        // the stream as it's dropped automatically on out-of-the-scope.
+        let mut retry: u8 = 0;
+        while retry < FLUSH_RETRY {
+            retry += 1;
+            if flush_buffer(&mut writer) == 0 {
+                break;
+            }
+        }
+    }
+}
+
+fn handle_requests(
+    inbox: Receiver<(usize, Result<String, ConnError>)>,
+    outbox: Sender<(usize, Box<Response>)>,
+    peer_addr: Option<SocketAddr>,
+    is_tls: bool,
+)
+{
+    let outbox = Arc::new(outbox);
+    for (id, req) in inbox {
+        match req {
+            Ok(source) => {
+                let outbox_clone = Arc::clone(&outbox);
+                shared_pool::run(move || {
+                    serve_connection(source, id, outbox_clone, peer_addr, is_tls);
+                }, TaskType::Request);
+            },
+            Err(err) => {
+                if err != ConnError::HeartBeat {
+                    debug::print(
+                        &format!("Error on parsing request: {:?}", err),
+                        InfoLevel::Error,
+                    );
+                }
+
+                outbox.send(
+                    (id, Box::new(build_err_response(map_err_code(err))))
+                ).unwrap_or_default();
+                return;
+            },
+        }
+    }
+}
+
+fn serve_connection(
+    source: String, id: usize, outbox: Arc<Sender<(usize, Box<Response>)>>, peer_addr: Option<SocketAddr>, is_tls: bool
+)
+{
+    ///////////////////////////
+    // >>> Build Request <<< /
+    //////////////////////////
+
+    // prepare the request source string to be parsed
+    let trimmed = source.trim_matches(|c| c == '\r' || c == '\n' || c == '\u{0}');
+    if trimmed.is_empty() {
+        outbox.send((
+            id, Box::new(build_err_response(map_err_code(ConnError::EmptyRequest))))
+        ).unwrap_or_default();
+        return;
+    }
+
+    // now parse the request and find the proper request handler
+    let mut request = Box::new(Request::new());
+    let mut callback = parse_request_sync(trimmed, &mut request);
+
+    // not matching any given router, return null
+    if callback.is_none() {
+        outbox.send(
+            (id, Box::new(build_err_response(map_err_code(ConnError::ServiceUnavailable))))
+        ).unwrap_or_default();
+        return;
+    }
+
+    // setup peer address
+    if let Some(client) = peer_addr {
+        request.set_client(client);
+    }
+
+    // check server authorization on certain path
+    if let Some(auth) = Route::get_auth_func() {
+        if !auth(&request, &request.uri) {
+            outbox.send(
+                (id, Box::new(build_err_response(map_err_code(ConnError::AccessDenied))))
+            ).unwrap_or_default();
+            return;
+        }
+    }
+
+    ////////////////////////////
+    // >>> Build Response <<< /
+    ///////////////////////////
+
+    // generating the reponse and setup stuff
+    let mut response = initialize_response(is_tls);
+    match request.header("connection") {
+        Some(ref val) if val.eq(&String::from("close")) => response.can_keep_alive(false),
+        _ => response.can_keep_alive(true),
+    };
+
+    if request.method.eq(&REST::OTHER(String::from("HEAD"))) {
+        response.header_only(true);
+    }
+
+    // callback function will decide what to be written into the response
+    callback.execute(&request, &mut response);
+
+    // update the response based on critical conditions
+    response.redirect_handling();
+    response.validate_and_update();
+
+    // done, send response back
+    outbox.send((id, response)).unwrap_or_default();
+}
+
+fn parse_request_sync(source: &str, request: &mut Box<Request>) -> RouteHandler {
+    if source.is_empty() {
+        return RouteHandler::default();
+    }
+
+    let mut handler = RouteHandler::default();
+    for (index, info) in source.trim().splitn(2, "\r\n").enumerate() {
+        match index {
+            0 => {
+                let res = parse_baseline_sync(&info, request);
+                if res.0.is_some() {
+                    request.create_param(res.1);
+                }
+
+                handler = res.0;
+            },
+            1 => parse_remainder_sync(info, request),
+            _ => break,
+        }
+    }
+
+    handler
+}
+
+fn parse_baseline_sync(source: &str, req: &mut Box<Request>) -> (RouteHandler, HashMap<String, String>) {
+    let mut raw_scheme = String::new();
+    let mut raw_fragment = String::new();
+
+    for (index, info) in source.split_whitespace().enumerate() {
+        if index < 2 && info.is_empty() {
+            return (RouteHandler::default(), HashMap::new());
+        }
+
+        match index {
+            0 => {
+                let base_method = match &info.to_uppercase()[..] {
+                    "GET" => REST::GET,
+                    "PUT" => REST::PUT,
+                    "POST" => REST::POST,
+                    "DELETE" => REST::DELETE,
+                    "OPTIONS" => REST::OPTIONS,
+                    _ => REST::OTHER(info.to_uppercase())
+                };
+
+                req.method = base_method;
+            }
+            1 => split_path(info, &mut req.uri, &mut raw_scheme, &mut raw_fragment),
+            2 => req.write_header("HTTP_VERSION", info, true),
+            _ => {
+                break;
+            }
+        };
+    }
+
+    if !req.uri.is_empty() {
+        let res = Route::seek_sync(&req.method, &req.uri);
+
+        // now do more work on non-essential parsing
+        if !raw_fragment.is_empty() {
+            req.set_fragment(raw_fragment);
+        }
+
+        if !raw_scheme.is_empty() {
+            req.create_scheme(parse_scheme(raw_scheme));
+        }
+
+        return res;
+    }
+
+    (RouteHandler::default(), HashMap::new())
+}
+
+fn parse_remainder_sync(info: &str, req: &mut Box<Request>) {
+    let remainder: String = info.to_owned();
+    if remainder.is_empty() {
+        return;
+    }
+
+    let mut header: HashMap<String, String> = HashMap::new();
+    let mut cookie: HashMap<String, String> = HashMap::new();
+    let mut body: Vec<String> = Vec::with_capacity(64);
+    let mut is_body = false;
+
+    for line in remainder.lines() {
+        if line.is_empty() && !is_body {
+            // meeting the empty line dividing header and body
+            is_body = true;
+            continue;
+        }
+
+        parse_headers(
+            line,
+            is_body,
+            &mut header,
+            &mut cookie,
+            &mut body,
+        );
+    }
+
+    req.set_headers(header);
+    req.set_cookies(cookie);
+    req.set_bodies(body);
+}
+
+//TODO: >>>> Rewrite End <<<<
+
 pub(crate) fn handle_connection(mut stream: Stream) -> ExecCode {
-    //TODO/P2: refactor this code, such that we send request to a worker who will generate the resp
-    //         and we will write them to this stream in sequence.
     let (callback, request) = match recv_request(&mut stream) {
         Err(err) => {
             let status: u16 = match err {
@@ -61,7 +406,7 @@ pub(crate) fn handle_connection(mut stream: Stream) -> ExecCode {
                 InfoLevel::Error,
             );
 
-            return write_to_stream(stream, &mut build_err_response(status));
+            return write_to_stream(stream, Box::new(build_err_response(status)));
         },
         Ok(cb) => cb,
     };
@@ -72,7 +417,7 @@ pub(crate) fn handle_connection(mut stream: Stream) -> ExecCode {
 
 #[inline]
 pub(crate) fn send_err_resp(stream: Stream, err_code: u16) -> ExecCode {
-    write_to_stream(stream, &mut build_err_response(err_code))
+    write_to_stream(stream, Box::new(build_err_response(err_code)))
 }
 
 fn send_response(
@@ -98,7 +443,7 @@ fn send_response(
     response.redirect_handling();
     response.validate_and_update();
 
-    write_to_stream(stream, &mut response)
+    write_to_stream(stream, response)
 }
 
 fn initialize_response(is_tls: bool) -> Box<Response> {
@@ -115,7 +460,7 @@ fn initialize_response(is_tls: bool) -> Box<Response> {
     resp
 }
 
-fn write_to_stream(mut stream: Stream, response: &mut Response) -> ExecCode {
+fn write_to_stream(mut stream: Stream, mut response: Box<Response>) -> ExecCode {
     let s_clone = if response.to_keep_alive() {
         match  stream.try_clone() {
             Ok(s) => Some(s),
@@ -176,8 +521,6 @@ fn stream_shutdown(stream: &mut Stream) -> u8 {
 }
 
 fn recv_request(stream: &mut Stream) -> Result<(RouteHandler, Box<Request>), ConnError> {
-    //TODO/P1: continuous read from this stream until we shall close it up.
-    //      use channel to request
     let raw = read_content(stream)?;
     let trimmed = raw.trim_matches(|c| c == '\r' || c == '\n' || c == '\u{0}');
 
@@ -246,8 +589,8 @@ fn read_content(stream: &mut Stream) -> Result<String, ConnError> {
     }
 }
 
-fn parse_request(request: &str, store: &mut Box<Request>) -> RouteHandler {
-    if request.is_empty() {
+fn parse_request(source: &str, store: &mut Box<Request>) -> RouteHandler {
+    if source.is_empty() {
         return RouteHandler::default();
     }
 
@@ -255,50 +598,47 @@ fn parse_request(request: &str, store: &mut Box<Request>) -> RouteHandler {
     let mut baseline_chan = None;
     let mut remainder_chan = None;
 
-    for (index, info) in request.trim().splitn(2, "\r\n").enumerate() {
+    for (index, info) in source.trim().splitn(2, "\r\n").enumerate() {
         match index {
             0 => baseline_chan = parse_baseline(&info, store),
             1 => {
                 let remainder: String = info.to_owned();
-                if !remainder.is_empty() {
-                    let (tx_remainder, rx_remainder) = channel::bounded(1);
-
-                    let mut header: HashMap<String, String> = HashMap::new();
-                    let mut cookie: HashMap<String, String> = HashMap::new();
-                    let mut body: Vec<String> = Vec::with_capacity(64);
-
-                    shared_pool::run(
-                        move || {
-                            let mut is_body = false;
-
-                            for line in remainder.lines() {
-                                if line.is_empty() && !is_body {
-                                    // meeting the empty line dividing header and body
-                                    is_body = true;
-                                    continue;
-                                }
-
-                                parse_headers(
-                                    line,
-                                    is_body,
-                                    &mut header,
-                                    &mut cookie,
-                                    &mut body,
-                                );
-                            }
-
-                            if tx_remainder.send((header, cookie, body)).is_err() {
-                                debug::print(
-                                    "Unable to construct the remainder of the request.",
-                                    InfoLevel::Error,
-                                );
-                            }
-                        },
-                        TaskType::Request,
-                    );
-
-                    remainder_chan = Some(rx_remainder)
+                if remainder.is_empty() {
+                    break;
                 }
+
+                let (tx_remainder, rx_remainder) = channel::bounded(1);
+                let mut header: HashMap<String, String> = HashMap::new();
+                let mut cookie: HashMap<String, String> = HashMap::new();
+                let mut body: Vec<String> = Vec::with_capacity(64);
+
+                shared_pool::run(move || {
+                    let mut is_body = false;
+                    for line in remainder.lines() {
+                        if line.is_empty() && !is_body {
+                            // meeting the empty line dividing header and body
+                            is_body = true;
+                            continue;
+                        }
+
+                        parse_headers(
+                            line,
+                            is_body,
+                            &mut header,
+                            &mut cookie,
+                            &mut body,
+                        );
+                    }
+
+                    if tx_remainder.send((header, cookie, body)).is_err() {
+                        debug::print(
+                            "Unable to construct the remainder of the request.",
+                            InfoLevel::Error,
+                        );
+                    }
+                }, TaskType::Request);
+
+                remainder_chan = Some(rx_remainder)
             }
             _ => break,
         }
@@ -505,6 +845,10 @@ fn build_err_response(err_status: u16) -> Response {
     let mut resp = Response::new();
 
     resp.status(err_status);
+    if err_status == 0 {
+        return resp;
+    }
+
     resp.validate_and_update();
     resp.keep_alive(false);
 
@@ -513,4 +857,13 @@ fn build_err_response(err_status: u16) -> Response {
     }
 
     resp
+}
+
+fn map_err_code(err: ConnError) -> u16 {
+    match err {
+        ConnError::EmptyRequest => 400,
+        ConnError::AccessDenied => 401,
+        ConnError::ServiceUnavailable => 404,
+        ConnError::ReadStreamFailure | ConnError::HeartBeat => 0,
+    }
 }

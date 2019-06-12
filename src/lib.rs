@@ -284,7 +284,8 @@ impl HttpServer {
                 // handshake and encrypt
                 match a.accept(stream) {
                     Ok(s) => {
-                        handle_connection(Stream::Tls(Box::new(s)));
+//                        handle_connection(Stream::Tls(Box::new(s)));
+                        Stream::Tls(Box::new(s)).process(true);
                     },
                     Err(e) => debug::print(
                         &format!("Failed to receive the upcoming stream: {:?}", e)[..],
@@ -292,7 +293,8 @@ impl HttpServer {
                     ),
                 };
             } else{
-                handle_connection(Stream::Tcp(stream));
+//                handle_connection(Stream::Tcp(stream));
+                Stream::Tcp(stream).process(false);
             }
         });
     }

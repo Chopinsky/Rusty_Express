@@ -547,19 +547,18 @@ impl Router for Route {
 }
 
 pub(crate) trait RouteSeeker {
-    fn seek(
-        method: &REST,
-        uri: &str,
-        tx: channel::Sender<(RouteHandler, HashMap<String, String>)>,
-    );
+    fn seek(method: &REST, uri: &str, tx: channel::Sender<(RouteHandler, HashMap<String, String>)>);
+    fn seek_sync(method: &REST, uri: &str) -> (RouteHandler, HashMap<String, String>);
 }
 
 impl RouteSeeker for Route {
-    fn seek(
-        method: &REST,
-        uri: &str,
-        tx: channel::Sender<(RouteHandler, HashMap<String, String>)>,
-    ) {
+    fn seek(method: &REST, uri: &str, tx: channel::Sender<(RouteHandler, HashMap<String, String>)>) {
+        if let Err(e) = tx.send(Self::seek_sync(method, uri)) {
+            debug::print("Unable to find the route handler", InfoLevel::Error);
+        }
+    }
+
+    fn seek_sync(method: &REST, uri: &str) -> (RouteHandler, HashMap<String, String>) {
         let mut result = RouteHandler(None, None);
         let mut params = HashMap::new();
 
@@ -587,9 +586,7 @@ impl RouteSeeker for Route {
             }
         }
 
-        if let Err(e) = tx.send((result, params)) {
-            debug::print("Unable to find the route handler", InfoLevel::Error);
-        }
+        (result, params)
     }
 }
 

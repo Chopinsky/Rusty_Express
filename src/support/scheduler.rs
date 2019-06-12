@@ -12,7 +12,7 @@ const CHAN_SIZE: usize = 512;
 const POOL_CAP: usize = 65535;
 const POOL_INC_STEP: usize = 4;
 const TIMEOUT: Duration = Duration::from_millis(200);
-const YIELD_DURATION: Duration = Duration::from_millis(16);
+const YIELD_DURATION: Duration = Duration::from_millis(64);
 
 static IS_CLOSING: AtomicBool = AtomicBool::new(false);
 
@@ -52,7 +52,7 @@ impl ThreadPool {
 
         let mut workers = Vec::with_capacity(pool_size);
         (0..pool_size).for_each(|id| {
-            workers.push(Worker::new(id, receiver.clone()));
+            workers.push(Worker::launch(id, receiver.clone(), false));
         });
 
         ThreadPool {
@@ -97,7 +97,7 @@ impl ThreadPool {
     fn dispatch(&mut self, message: Message, retry: u8) {
         match self
             .sender
-            .send_timeout(message, Duration::from_millis(2048))
+            .send_timeout(message, Duration::from_millis(8))
         {
             Err(SendTimeoutError::Timeout(msg)) => {
                 debug::print("Unable to distribute the job: execution timed out, all workers are busy for too long", InfoLevel::Error);
@@ -107,7 +107,7 @@ impl ThreadPool {
                         let start = self.workers.len();
                         (0..POOL_INC_STEP).for_each(|id| {
                             self.workers
-                                .push(Worker::new(start + id, self.receiver.clone()));
+                                .push(Worker::launch(start + id, self.receiver.clone(), true));
                         });
                     }
 
@@ -115,6 +115,7 @@ impl ThreadPool {
                         &format!("Try again for the {} times...", retry + 1),
                         InfoLevel::Error,
                     );
+
                     self.dispatch(msg, retry + 1);
                 }
             }
@@ -145,23 +146,25 @@ struct Worker {
 }
 
 impl Worker {
-    fn new(id: usize, receiver: Receiver<Message>) -> Worker {
+    fn launch(id: usize, work_queue: Receiver<Message>, is_extra: bool) -> Worker {
         let thread = thread::spawn(move || {
             let mut work = None;
 
             loop {
-                if IS_CLOSING.load(Ordering::SeqCst) {
+                if IS_CLOSING.load(Ordering::Relaxed) {
                     return;
                 }
 
-                if let Ok(message) = receiver.recv_timeout(YIELD_DURATION) {
+                if let Ok(message) = work_queue.recv_timeout(YIELD_DURATION) {
                     match message {
                         Message::NewJob(job) => work = Some(job),
                         Message::Terminate => {
-                            IS_CLOSING.store(true, Ordering::SeqCst);
+                            IS_CLOSING.store(true, Ordering::Release);
                             return;
                         }
                     }
+                } else if is_extra {
+                    return;
                 }
 
                 if let Some(job) = work.take() {
@@ -192,13 +195,17 @@ impl Drop for Worker {
 }
 
 struct Pool {
-    req_workers: Box<ThreadPool>,
-    resp_workers: Box<ThreadPool>,
+    req_workers: ThreadPool,
+    resp_workers: ThreadPool,
+    parser_workers: ThreadPool,
+    stream_workers: ThreadPool,
 }
 
 pub enum TaskType {
     Request,
     Response,
+    Parser,
+    StreamLoader,
 }
 
 static ONCE: Once = ONCE_INIT;
@@ -219,7 +226,7 @@ pub(crate) fn initialize_with(sizes: Vec<usize>) {
             })
             .collect();
 
-        let (req_size, resp_size) = match pool_sizes.len() {
+        let (worker_size, parser_size) = match pool_sizes.len() {
             1 => (pool_sizes[0], pool_sizes[0]),
             2 => (pool_sizes[0], pool_sizes[1]),
             _ => panic!("Requiring vec sizes of 2 for each, or 1 for all"),
@@ -228,8 +235,10 @@ pub(crate) fn initialize_with(sizes: Vec<usize>) {
         // Put it in the heap so it can outlive this call
         unsafe {
             POOL.replace(Pool {
-                req_workers: Box::new(ThreadPool::new(req_size)),
-                resp_workers: Box::new(ThreadPool::new(2 * resp_size)),
+                req_workers: ThreadPool::new(worker_size),
+                resp_workers: ThreadPool::new(worker_size),
+                parser_workers: ThreadPool::new(parser_size),
+                stream_workers: ThreadPool::new(parser_size),
             });
         }
     });
@@ -243,15 +252,13 @@ where
         if let Some(ref mut pool) = POOL {
             // if pool has been created
             match task {
-                TaskType::Request => {
-                    pool.req_workers.execute(f);
-                    return;
-                }
-                TaskType::Response => {
-                    pool.resp_workers.execute(f);
-                    return;
-                }
+                TaskType::Request => pool.req_workers.execute(f),
+                TaskType::Response => pool.resp_workers.execute(f),
+                TaskType::Parser => pool.parser_workers.execute(f),
+                TaskType::StreamLoader => pool.stream_workers.execute(f),
             };
+
+            return;
         }
 
         // otherwise, spawn to a new thread for the work;

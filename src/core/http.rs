@@ -893,16 +893,11 @@ impl ResponseManager for Response {
 
         if let Some(ref notifier) = self.notifier {
             // listen to any replies from the server routes
-            loop {
-                match notifier.1.recv_timeout(LONG_CONN_TIMEOUT) {
-                    Ok(message) => {
-                        stream_trunk(&message, buffer);
-                        if message.is_empty() {
-                            // if a 0-length reply, then we're done after the reply and shall break out
-                            return;
-                        }
-                    }
-                    Err(_) => return,
+            while let Ok(message) = notifier.1.recv_timeout(LONG_CONN_TIMEOUT) {
+                stream_trunk(&message, buffer);
+                if message.is_empty() {
+                    // if a 0-length reply, then we're done after the reply and shall break out
+                    return;
                 }
             }
         }
