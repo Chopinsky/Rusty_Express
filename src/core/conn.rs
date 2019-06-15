@@ -1,7 +1,7 @@
 #![allow(clippy::borrowed_box)]
 #![allow(dead_code)]
 
-use std::io::{prelude::*, BufWriter};
+use std::io::{prelude::*, BufWriter, ErrorKind};
 use std::net::{Shutdown, SocketAddr};
 use std::str;
 use std::sync::Arc;
@@ -28,7 +28,7 @@ type ExecCode = u8;
 type BaseLine = Option<Receiver<(RouteHandler, HashMap<String, String>)>>;
 
 #[derive(PartialEq, Eq, Clone, Copy, Debug)]
-enum ConnError {
+enum StreamException {
     HeartBeat,
     EmptyRequest,
     ReadStreamFailure,
@@ -86,66 +86,79 @@ impl StreamHandler for Stream {
 }
 
 trait PipelineWorker {
-    fn recv_request(&mut self, chan: Sender<(usize, Result<String, ConnError>)>);
+    fn recv_request(&mut self, chan: Sender<Result<String, StreamException>>);
     fn write_back(&mut self, response: Box<Response>);
 }
 
 impl PipelineWorker for Stream {
-    fn recv_request(&mut self, chan: Sender<(usize, Result<String, ConnError>)>) {
+    fn recv_request(&mut self, chan: Sender<Result<String, StreamException>>) {
         let mut buffer = [0u8; 512];
         let mut raw_req = String::with_capacity(512);
-        let mut req_id = 1;
 
         loop {
+            // read will block until there're data to read; if not, then we're good to quit
             match self.read(&mut buffer) {
                 Ok(len) => {
+                    // if no more request data left to read
                     if len == 0 {
-                        if raw_req.is_empty() {
-                            // if the request is a mere handshake with no request data
-                            chan.send((req_id, Err(ConnError::HeartBeat))).unwrap_or_default();
-                        } else {
+                        if !raw_req.is_empty() {
                             // if we have no more incoming stream, sending it to parser and wrap up
-                            chan.send((req_id, Ok(raw_req.clone()))).unwrap_or_default();
-                        }
+                            chan.send(Ok(raw_req.clone())).unwrap_or_default();
+                        } else {
+                            // send a heart-beat
+                            chan.send(Err(StreamException::HeartBeat)).unwrap_or_default();
+                        };
 
-                        return;
-                    } else if let Ok(req_slice) = str::from_utf8(&buffer[..len]) {
+                        // reader shall close because keep-alive header is not `keep-alive` or `close`
+                        break;
+                    }
+
+                    // if there are request data to read, convert bytes to string
+                    if let Ok(content) = str::from_utf8(&buffer[..len]) {
                         if len < 512 {
                             // trim end if we're at the end of the request stream
-                            raw_req.push_str(
-                                req_slice.trim_end_matches(|c| c == '\r' || c == '\n' || c == '\u{0}')
-                            );
+                            raw_req.push_str(content);
 
                             // done with this request, sending it to parser; if the channel is closed,
                             // meaning the stream is closed, we quit as well.
-                            if chan.send((req_id, Ok(raw_req.clone()))).is_err() {
-                                return;
+                            if chan.send(Ok(raw_req.clone())).is_err() {
+                                break;
                             }
 
                             // reset the buffer-states
                             raw_req.clear();
-                            req_id += 1;
                         } else {
-                            // if there are more to read, don't trim and continue reading
-                            raw_req.push_str(req_slice);
+                            // if there are more to read, don't trim and continue reading. Don't trim
+                            // since the end of the `content` maybe the line breaker between head and
+                            // body and we don't want to lose that info
+                            raw_req.push_str(content);
                         }
                     } else {
+                        // failed at string conversion, quit reader stream
                         debug::print("Failed to parse the request stream", InfoLevel::Warning);
-                        chan.send((req_id, Err(ConnError::ReadStreamFailure))).unwrap_or_default();
-                        return;
+                        chan.send(Err(StreamException::ReadStreamFailure)).unwrap_or_default();
+                        break;
                     }
                 },
                 Err(e) => {
-                    debug::print(
-                        &format!("Reading stream disconnected -- {}", e),
-                        InfoLevel::Warning,
-                    );
+                    // handle read errors. If timeout, meaning we've waited long enough for more requests
+                    // but none are received, close the stream now.
+                    if e.kind() != ErrorKind::TimedOut {
+                        debug::print(
+                            &format!("Reading stream disconnected -- {}", e),
+                            InfoLevel::Warning,
+                        );
 
-                    chan.send((req_id, Err(ConnError::ReadStreamFailure))).unwrap_or_default();
-                    return;
+                        chan.send(Err(StreamException::ReadStreamFailure)).unwrap_or_default();
+                    }
+
+                    break;
                 },
             };
         }
+
+        // shutdown the read stream regardless of the reason
+        self.shutdown(Shutdown::Read).unwrap_or_default();
     }
 
     fn write_back(&mut self, response: Box<Response>) {
@@ -179,14 +192,16 @@ impl PipelineWorker for Stream {
 }
 
 fn handle_requests(
-    inbox: Receiver<(usize, Result<String, ConnError>)>,
+    inbox: Receiver<Result<String, StreamException>>,
     outbox: Sender<(usize, Box<Response>)>,
     peer_addr: Option<SocketAddr>,
     is_tls: bool,
 )
 {
+    let mut req_id = 1;
     let outbox = Arc::new(outbox);
-    for (id, req) in inbox {
+
+    for req in inbox {
         match req {
             Ok(source) => {
                 //TODO: not so simple... need to parse the request to know if it could contain a body
@@ -200,20 +215,21 @@ fn handle_requests(
 
                 let outbox_clone = Arc::clone(&outbox);
                 shared_pool::run(move || {
-                    serve_connection(source, id, outbox_clone, peer_addr, is_tls);
+                    serve_connection(source, req_id, outbox_clone, peer_addr, is_tls);
                 }, TaskType::Request);
+
+                // TODO: incremental of id at every new request instead
+                req_id += 1;
             },
             Err(err) => {
-                if err != ConnError::HeartBeat {
-                    debug::print(
-                        &format!("Error on parsing request: {:?}", err),
-                        InfoLevel::Error,
-                    );
+                if err != StreamException::HeartBeat {
+                    // if only a read stream heart-beat, meaning we're still waiting for new requests
+                    // to come, just continue with the listener.
+                    outbox.send(
+                        (0, Box::new(build_err_response(map_err_code(err))))
+                    ).unwrap_or_default();
                 }
 
-                outbox.send(
-                    (id, Box::new(build_err_response(map_err_code(err))))
-                ).unwrap_or_default();
                 return;
             },
         }
@@ -232,10 +248,10 @@ fn serve_connection(
     //////////////////////////
 
     // prepare the request source string to be parsed
-    let trimmed = source.trim_matches(|c| c == '\r' || c == '\n' || c == '\u{0}');
+    let trimmed = source.trim_end_matches(|c| c == '\r' || c == '\n' || c == '\u{0}');
     if trimmed.is_empty() {
         outbox.send((
-            id, Box::new(build_err_response(map_err_code(ConnError::EmptyRequest))))
+            id, Box::new(build_err_response(map_err_code(StreamException::EmptyRequest))))
         ).unwrap_or_default();
         return;
     }
@@ -247,7 +263,7 @@ fn serve_connection(
     // not matching any given router, return null
     if callback.is_none() {
         outbox.send(
-            (id, Box::new(build_err_response(map_err_code(ConnError::ServiceUnavailable))))
+            (id, Box::new(build_err_response(map_err_code(StreamException::ServiceUnavailable))))
         ).unwrap_or_default();
         return;
     }
@@ -261,7 +277,7 @@ fn serve_connection(
     if let Some(auth) = Route::get_auth_func() {
         if !auth(&request, &request.uri) {
             outbox.send(
-                (id, Box::new(build_err_response(map_err_code(ConnError::AccessDenied))))
+                (id, Box::new(build_err_response(map_err_code(StreamException::AccessDenied))))
             ).unwrap_or_default();
             return;
         }
@@ -551,12 +567,12 @@ fn build_err_response(err_status: u16) -> Response {
     resp
 }
 
-fn map_err_code(err: ConnError) -> u16 {
+fn map_err_code(err: StreamException) -> u16 {
     match err {
-        ConnError::EmptyRequest => 400,
-        ConnError::AccessDenied => 401,
-        ConnError::ServiceUnavailable => 404,
-        ConnError::ReadStreamFailure | ConnError::HeartBeat => 0,
+        StreamException::EmptyRequest => 400,
+        StreamException::AccessDenied => 401,
+        StreamException::ServiceUnavailable => 404,
+        StreamException::ReadStreamFailure | StreamException::HeartBeat => 0,
     }
 }
 
@@ -588,19 +604,15 @@ mod async_handler {
     pub(crate) fn handle_connection(mut stream: Stream) -> ExecCode {
         let (callback, request) = match recv_request(&mut stream) {
             Err(err) => {
-                let status: u16 = match err {
-                    ConnError::EmptyRequest => 400,
-                    ConnError::AccessDenied => 401,
-                    ConnError::ServiceUnavailable => 404,
-                    ConnError::ReadStreamFailure | ConnError::HeartBeat => {
-                        // connection is sour, shutdown now
-                        if let Err(err) = stream.shutdown(Shutdown::Both) {
-                            return 1;
-                        }
+                let status = map_err_code(err);
+                if status == 0 {
+                    // connection is sour, shutdown now
+                    if let Err(err) = stream.shutdown(Shutdown::Both) {
+                        return 1;
+                    }
 
-                        return 0;
-                    },
-                };
+                    return 0;
+                }
 
                 debug::print(
                     &format!("Error on parsing request: {}", status),
@@ -687,19 +699,19 @@ mod async_handler {
         stream_shutdown(writer.get_mut())
     }
 
-    fn recv_request(stream: &mut Stream) -> Result<(RouteHandler, Box<Request>), ConnError> {
+    fn recv_request(stream: &mut Stream) -> Result<(RouteHandler, Box<Request>), StreamException> {
         let raw = read_content(stream)?;
         let trimmed = raw.trim_matches(|c| c == '\r' || c == '\n' || c == '\u{0}');
 
         if trimmed.is_empty() {
-            return Err(ConnError::EmptyRequest);
+            return Err(StreamException::EmptyRequest);
         }
 
         let mut request = Box::new(Request::new());
         let result = parse_request(trimmed, &mut request);
 
         if result.is_none() {
-            return Err(ConnError::ServiceUnavailable)
+            return Err(StreamException::ServiceUnavailable)
         }
 
         if let Ok(client) = stream.peer_addr() {
@@ -708,14 +720,14 @@ mod async_handler {
 
         if let Some(auth) = Route::get_auth_func() {
             if !auth(&request, &request.uri) {
-                return Err(ConnError::AccessDenied);
+                return Err(StreamException::AccessDenied);
             }
         }
 
         Ok((result, request))
     }
 
-    fn read_content(stream: &mut Stream) -> Result<String, ConnError> {
+    fn read_content(stream: &mut Stream) -> Result<String, StreamException> {
         let mut buffer = [0u8; 512];
         let mut raw_req = String::with_capacity(512);
 
@@ -724,7 +736,7 @@ mod async_handler {
                 Ok(len) => {
                     if len == 0 && raw_req.is_empty() {
                         // if the request is a mere handshake with no request data, we return
-                        return Err(ConnError::HeartBeat);
+                        return Err(StreamException::HeartBeat);
                     }
 
                     if let Ok(req_slice) = str::from_utf8(&buffer[..len]) {
@@ -741,7 +753,7 @@ mod async_handler {
                         }
                     } else {
                         debug::print("Failed to parse the request stream", InfoLevel::Warning);
-                        return Err(ConnError::ReadStreamFailure);
+                        return Err(StreamException::ReadStreamFailure);
                     }
                 },
                 Err(e) => {
@@ -750,7 +762,7 @@ mod async_handler {
                         InfoLevel::Warning,
                     );
 
-                    return Err(ConnError::ReadStreamFailure);
+                    return Err(StreamException::ReadStreamFailure);
                 },
             };
         }
