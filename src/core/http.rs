@@ -51,7 +51,7 @@ pub struct Request {
     pub uri: String,
     header: HashMap<String, String>,
     cookie: HashMap<String, String>,
-    body: Vec<String>,
+    body: String,
     scheme: HashMap<String, Vec<String>>,
     fragment: String,
     params: HashMap<String, String>,
@@ -77,6 +77,13 @@ impl Request {
         match self.header.get(&field[..]) {
             Some(value) => Some(value.to_owned()),
             None => None,
+        }
+    }
+
+    pub fn keep_alive(&self) -> bool {
+        match self.header("connection") {
+            None => false,
+            Some(val) => &val != "keep-alive",
         }
     }
 
@@ -163,7 +170,7 @@ impl Request {
         }
 
         if !self.body.is_empty() {
-            source.insert(String::from("body"), (&self.body).flat());
+            source.insert(String::from("body"), self.body.to_owned());
         }
 
         if !self.header.is_empty() {
@@ -197,7 +204,7 @@ impl Request {
         self.cookie = cookie;
     }
 
-    pub(crate) fn set_bodies(&mut self, body: Vec<String>) {
+    pub(crate) fn set_body(&mut self, body: String) {
         self.body = body;
     }
 }
@@ -209,7 +216,7 @@ impl Default for Request {
             uri: String::new(),
             header: HashMap::new(),
             cookie: HashMap::new(),
-            body: Vec::new(),
+            body: String::new(),
             scheme: HashMap::new(),
             fragment: String::new(),
             params: HashMap::new(),
@@ -279,7 +286,7 @@ impl RequestWriter for Request {
     }
 
     fn extend_body(&mut self, content: &str) {
-        self.body.push(content.to_owned());
+        self.body.push_str(content);
     }
 }
 

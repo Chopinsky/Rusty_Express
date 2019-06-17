@@ -2,6 +2,7 @@
 #![allow(dead_code)]
 
 use std::io::{prelude::*, BufWriter, ErrorKind};
+use std::mem;
 use std::net::{Shutdown, SocketAddr};
 use std::str;
 use std::sync::Arc;
@@ -241,75 +242,121 @@ fn serve_connection(
     is_tls: bool
 ) -> Result<usize, ErrorKind>
 {
+    // prepare the request source string to be parsed
     let mut next_id = base_id;
+    let trimmed = source.trim_end_matches(|c| c == '\r' || c == '\n' || c == '\u{0}');
 
-    //TODO: make `build_response` an iterator and handle each of the yielded responses in a separate
-    //      and dedicated thread.
+    if trimmed.is_empty() {
+        return send_err(next_id, outbox,StreamException::EmptyRequest);
+    }
 
-    let result = build_response(source, next_id, peer_addr);
-    {
-        //TODO: iterate inner logic placeholder.
+    // now parse the request and find the proper request handler
+    let mut request = Box::new(Request::new());
+    let mut callback = RouteHandler::default();
+    let mut to_close = false;
+    let mut body_size: usize = 0;
 
-        // unwrap the request callback got from the response
-        match result {
-            Ok((r, c)) => {
-                let outbox_clone = Arc::clone(outbox);
-                shared_pool::run(move || {
-                    outbox_clone.send(
-                        (next_id, build_request(r, c, is_tls))
-                    ).unwrap_or_default();
-                }, TaskType::Request);
-            },
-            Err(e) => {
-                if outbox.send((next_id, build_err_response(map_err_code(e)))).is_err() {
+    // header-body or header-header separation is built with an empty line, or "\r\n\r\n".
+    for raw_req in trimmed.split("\r\n\r\n") {
+        // if parsing the body from the next trunk, append the body then start processing the request
+        // otherwise, just continue with parsing the new request.
+        let next: &str =
+            if body_size > 0 && callback.is_some() {
+                // append the body and finishing off handing over the last request.
+                let (body, remainder): (&str, &str) = raw_req.split_at(body_size);
+                request.set_body(body.to_owned());
+
+                process_request(next_id, &mut request, &mut callback, outbox, is_tls);
+                next_id += 1;
+
+                if to_close {
                     return Err(ErrorKind::ConnectionAborted);
                 }
-            },
+
+                // send the remainder work to finish parsing and processing
+                remainder
+            } else {
+                // pick the new request to work with.
+                raw_req
+            };
+
+        if next.is_empty() {
+            // reset and continue
+            body_size = 0;
+            continue;
+        }
+
+        // Get callback from the next request
+        callback = parse_request_sync(next, &mut request);
+        to_close = !request.keep_alive();
+
+        // not matching any given router, return null
+        if callback.is_none() || request.uri.is_empty() {
+            return send_err(next_id, outbox, StreamException::ServiceUnavailable);
+        }
+
+        // check server authorization on certain path
+        if let Some(auth) = Route::get_auth_func() {
+            if !auth(&request, &request.uri) {
+                return send_err(next_id, outbox, StreamException::AccessDenied);
+            }
+        }
+
+        // setup peer address
+        if let Some(client) = peer_addr {
+            request.set_client(client);
+        }
+
+        // get the body size and parse the amount from the next trunk.
+        body_size = match request.header("content-length") {
+            Some(val) => val.parse::<usize>().unwrap_or(0),
+            None => 0,
         };
 
-        // TODO: incremental of id at every new request instead
-        next_id += 1;
+        // if no body's attached with this request, we're done parsing and send the request for
+        // processing now.
+        if body_size == 0 {
+            process_request(next_id, &mut request, &mut callback, outbox, is_tls);
+            next_id += 1;
+        }
+
+        //TODO: handle the trunked body stream, aka split the part before the final `boundary` in
+        //      the next trunk
     }
 
     Ok(next_id)
 }
 
-fn build_response(
-    source: String, id: usize, peer_addr: Option<SocketAddr>
-) -> Result<(Box<Request>, RouteHandler), StreamException>
+fn send_err(
+    base_id: usize, outbox: &Arc<Sender<(usize, Box<Response>)>>, err: StreamException,
+) -> Result<usize, ErrorKind>
 {
-    //TODO: now the parser portion will be moved to the caller. Only the executor portion will be
-    //      moved into this spawned thread.
-
-    // prepare the request source string to be parsed
-    let trimmed = source.trim_end_matches(|c| c == '\r' || c == '\n' || c == '\u{0}');
-    if trimmed.is_empty() {
-        return Err(StreamException::EmptyRequest);
+    if outbox.send(
+        (base_id, build_err_response(map_err_code(err)))
+    ).is_err() {
+        return Err(ErrorKind::ConnectionAborted);
     }
 
-    // now parse the request and find the proper request handler
-    let mut request = Box::new(Request::new());
+    Ok(base_id + 1)
+}
 
-    // check server authorization on certain path
-    if let Some(auth) = Route::get_auth_func() {
-        if !auth(&request, &request.uri) {
-            return Err(StreamException::AccessDenied);
-        }
-    }
+fn process_request(
+    next_id: usize,
+    request: &mut Box<Request>,
+    callback: &mut RouteHandler,
+    outbox: &Arc<Sender<(usize, Box<Response>)>>,
+    is_tls: bool,
+)
+{
+    let r = mem::replace(request, Box::new(Request::new()));
+    let c = mem::replace(callback, RouteHandler::default());
+    let outbox_clone = Arc::clone(outbox);
 
-    let callback = parse_request_sync(trimmed, &mut request);
-
-    // not matching any given router, return null
-    if callback.is_none() {
-        return Err(StreamException::ServiceUnavailable);
-    }
-
-    // setup peer address
-    if let Some(client) = peer_addr {
-        request.set_client(client);
-    }
-
-    Ok((request, callback))
+    shared_pool::run(move || {
+        outbox_clone.send(
+            (next_id, build_request(r, c, is_tls))
+        ).unwrap_or_default();
+    }, TaskType::Request);
 }
 
 fn build_request(
@@ -422,7 +469,7 @@ fn parse_remainder_sync(info: &str, req: &mut Box<Request>) {
 
     let mut header: HashMap<String, String> = HashMap::new();
     let mut cookie: HashMap<String, String> = HashMap::new();
-    let mut body: Vec<String> = Vec::with_capacity(64);
+    let mut body: String = String::with_capacity(1024);
     let mut is_body = false;
 
     for line in remainder.lines() {
@@ -443,7 +490,7 @@ fn parse_remainder_sync(info: &str, req: &mut Box<Request>) {
 
     req.set_headers(header);
     req.set_cookies(cookie);
-    req.set_bodies(body);
+    req.set_body(body);
 }
 
 fn initialize_response(is_tls: bool) -> Box<Response> {
@@ -465,7 +512,7 @@ fn parse_headers(
     is_body: bool,
     header: &mut HashMap<String, String>,
     cookie: &mut HashMap<String, String>,
-    body: &mut Vec<String>,
+    body: &mut String,
 )
 {
     if !is_body {
@@ -489,7 +536,7 @@ fn parse_headers(
             }
         }
     } else {
-        body.push(line.to_owned());
+        body.push_str(line);
     }
 }
 
@@ -822,7 +869,7 @@ mod async_handler {
                     let (tx_remainder, rx_remainder) = channel::bounded(1);
                     let mut header: HashMap<String, String> = HashMap::new();
                     let mut cookie: HashMap<String, String> = HashMap::new();
-                    let mut body: Vec<String> = Vec::with_capacity(64);
+                    let mut body: String = String::with_capacity(1024);
 
                     shared_pool::run(move || {
                         let mut is_body = false;
@@ -868,7 +915,7 @@ mod async_handler {
                 if let Ok((header, cookie, body)) = chan.recv_timeout(Duration::from_secs(8)) {
                     store.set_headers(header);
                     store.set_cookies(cookie);
-                    store.set_bodies(body);
+                    store.set_body(body);
                 }
             }
         }
