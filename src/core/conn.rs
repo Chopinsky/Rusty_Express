@@ -213,20 +213,17 @@ fn handle_requests(
                 //      Otherwise, just parse the remainder and set the flags (if no more body to
                 //      append, just send); skip empty chunk.
 
-                let outbox_clone = Arc::clone(&outbox);
-                shared_pool::run(move || {
-                    serve_connection(source, req_id, outbox_clone, peer_addr, is_tls);
-                }, TaskType::Request);
-
-                // TODO: incremental of id at every new request instead
-                req_id += 1;
+                match serve_connection(source, req_id, &outbox, peer_addr, is_tls) {
+                    Ok(id) => req_id = id,
+                    Err(_) => return,
+                };
             },
             Err(err) => {
                 if err != StreamException::HeartBeat {
                     // if only a read stream heart-beat, meaning we're still waiting for new requests
                     // to come, just continue with the listener.
                     outbox.send(
-                        (0, Box::new(build_err_response(map_err_code(err))))
+                        (0, build_err_response(map_err_code(err)))
                     ).unwrap_or_default();
                 }
 
@@ -237,35 +234,74 @@ fn handle_requests(
 }
 
 fn serve_connection(
-    source: String, id: usize, outbox: Arc<Sender<(usize, Box<Response>)>>, peer_addr: Option<SocketAddr>, is_tls: bool
-)
+    source: String,
+    base_id: usize,
+    outbox: &Arc<Sender<(usize, Box<Response>)>>,
+    peer_addr: Option<SocketAddr>,
+    is_tls: bool
+) -> Result<usize, ErrorKind>
+{
+    let mut next_id = base_id;
+
+    //TODO: make `build_response` an iterator and handle each of the yielded responses in a separate
+    //      and dedicated thread.
+
+    let result = build_response(source, next_id, peer_addr);
+    {
+        //TODO: iterate inner logic placeholder.
+
+        // unwrap the request callback got from the response
+        match result {
+            Ok((r, c)) => {
+                let outbox_clone = Arc::clone(outbox);
+                shared_pool::run(move || {
+                    outbox_clone.send(
+                        (next_id, build_request(r, c, is_tls))
+                    ).unwrap_or_default();
+                }, TaskType::Request);
+            },
+            Err(e) => {
+                if outbox.send((next_id, build_err_response(map_err_code(e)))).is_err() {
+                    return Err(ErrorKind::ConnectionAborted);
+                }
+            },
+        };
+
+        // TODO: incremental of id at every new request instead
+        next_id += 1;
+    }
+
+    Ok(next_id)
+}
+
+fn build_response(
+    source: String, id: usize, peer_addr: Option<SocketAddr>
+) -> Result<(Box<Request>, RouteHandler), StreamException>
 {
     //TODO: now the parser portion will be moved to the caller. Only the executor portion will be
     //      moved into this spawned thread.
 
-    ///////////////////////////
-    // >>> Build Request <<< /
-    //////////////////////////
-
     // prepare the request source string to be parsed
     let trimmed = source.trim_end_matches(|c| c == '\r' || c == '\n' || c == '\u{0}');
     if trimmed.is_empty() {
-        outbox.send((
-            id, Box::new(build_err_response(map_err_code(StreamException::EmptyRequest))))
-        ).unwrap_or_default();
-        return;
+        return Err(StreamException::EmptyRequest);
     }
 
     // now parse the request and find the proper request handler
     let mut request = Box::new(Request::new());
-    let mut callback = parse_request_sync(trimmed, &mut request);
+
+    // check server authorization on certain path
+    if let Some(auth) = Route::get_auth_func() {
+        if !auth(&request, &request.uri) {
+            return Err(StreamException::AccessDenied);
+        }
+    }
+
+    let callback = parse_request_sync(trimmed, &mut request);
 
     // not matching any given router, return null
     if callback.is_none() {
-        outbox.send(
-            (id, Box::new(build_err_response(map_err_code(StreamException::ServiceUnavailable))))
-        ).unwrap_or_default();
-        return;
+        return Err(StreamException::ServiceUnavailable);
     }
 
     // setup peer address
@@ -273,21 +309,18 @@ fn serve_connection(
         request.set_client(client);
     }
 
-    // check server authorization on certain path
-    if let Some(auth) = Route::get_auth_func() {
-        if !auth(&request, &request.uri) {
-            outbox.send(
-                (id, Box::new(build_err_response(map_err_code(StreamException::AccessDenied))))
-            ).unwrap_or_default();
-            return;
-        }
-    }
+    Ok((request, callback))
+}
 
+fn build_request(
+    request: Box<Request>, mut callback: RouteHandler, is_tls: bool,
+) -> Box<Response>
+{
     ////////////////////////////
     // >>> Build Response <<< /
     ///////////////////////////
 
-    // generating the reponse and setup stuff
+    // generating the response and setup stuff
     let mut response = initialize_response(is_tls);
     match request.header("connection") {
         Some(ref val) if val.eq(&String::from("close")) => response.can_keep_alive(false),
@@ -306,7 +339,7 @@ fn serve_connection(
     response.validate_and_update();
 
     // done, send response back
-    outbox.send((id, response)).unwrap_or_default();
+    response
 }
 
 fn parse_request_sync(source: &str, request: &mut Box<Request>) -> RouteHandler {
@@ -549,8 +582,8 @@ fn parse_scheme(scheme: String) -> HashMap<String, Vec<String>> {
     scheme_result
 }
 
-fn build_err_response(err_status: u16) -> Response {
-    let mut resp = Response::new();
+fn build_err_response(err_status: u16) -> Box<Response> {
+    let mut resp = Box::new(Response::new());
 
     resp.status(err_status);
     if err_status == 0 {
@@ -578,7 +611,7 @@ fn map_err_code(err: StreamException) -> u16 {
 
 #[inline]
 pub(crate) fn send_err_resp(mut stream: Stream, err_code: u16) {
-    stream.write_back(Box::new(build_err_response(err_code)));
+    stream.write_back(build_err_response(err_code));
 }
 
 mod async_handler {
@@ -619,7 +652,7 @@ mod async_handler {
                     InfoLevel::Error,
                 );
 
-                return write_to_stream(stream, Box::new(build_err_response(status)));
+                return write_to_stream(stream, build_err_response(status));
             },
             Ok(cb) => cb,
         };
