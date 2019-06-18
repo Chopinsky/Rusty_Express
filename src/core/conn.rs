@@ -1,6 +1,7 @@
 #![allow(clippy::borrowed_box)]
 #![allow(dead_code)]
 
+use std::collections::BTreeMap;
 use std::io::{prelude::*, BufWriter, ErrorKind};
 use std::mem;
 use std::net::{Shutdown, SocketAddr};
@@ -15,7 +16,7 @@ use crate::core::http::{
 use crate::core::router::{Route, RouteSeeker, REST, RouteHandler};
 use crate::core::stream::Stream;
 use crate::support::{
-    common::flush_buffer, common::write_to_buff, common::MapUpdates, debug, debug::InfoLevel,
+    common::write_to_buff, common::MapUpdates, debug, debug::InfoLevel,
     shared_pool, TaskType,
 };
 
@@ -36,6 +37,8 @@ enum StreamException {
     AccessDenied,
     ServiceUnavailable,
 }
+
+struct RespSeqBundle(usize, Box<Response>);
 
 pub(crate) trait StreamHandler {
     fn process(self, is_tls: bool);
@@ -58,8 +61,8 @@ impl StreamHandler for Stream {
             };
 
         // pipeline-1: keep listening to the reader stream
-        let (sender, receiver) = channel::bounded(8);
-        shared_pool::run(move || reader_stream.recv_request(sender), TaskType::StreamLoader);
+        let (sender, receiver) = channel::bounded(6);
+        shared_pool::run(move || reader_stream.recv_requests(sender), TaskType::StreamLoader);
 
         // pipeline-2: once receiving a request, parse and serve, then send the response back to be written back
         let (resp_tx, resp_rx) = channel::bounded(8);
@@ -67,11 +70,7 @@ impl StreamHandler for Stream {
         shared_pool::run(move || handle_requests(receiver, resp_tx, addr.ok(), is_tls), TaskType::Parser);
 
         // pipeline-end: receive the response, write them back
-        while let Ok((id, resp)) = resp_rx.recv_timeout(Duration::from_secs(16)) {
-            //TODO: check if the responses are in order, otherwise, push into a queue until its turn
-            //      if id == 0, meaning an internal error happened, return immediately
-            self.write_back(resp);
-        }
+        self.send_responses(resp_rx);
 
         // shut down the stream after we're done
         if let Err(err) = self.shutdown(Shutdown::Both) {
@@ -87,12 +86,13 @@ impl StreamHandler for Stream {
 }
 
 trait PipelineWorker {
-    fn recv_request(&mut self, chan: Sender<Result<String, StreamException>>);
-    fn write_back(&mut self, response: Box<Response>);
+    fn recv_requests(&mut self, chan: Sender<Result<String, StreamException>>);
+    fn send_responses(&mut self, chan: Receiver<RespSeqBundle>);
+    fn write_back(&mut self, response: Box<Response>) -> u8;
 }
 
 impl PipelineWorker for Stream {
-    fn recv_request(&mut self, chan: Sender<Result<String, StreamException>>) {
+    fn recv_requests(&mut self, chan: Sender<Result<String, StreamException>>) {
         let mut buffer = [0u8; 512];
         let mut raw_req = String::with_capacity(512);
 
@@ -162,7 +162,59 @@ impl PipelineWorker for Stream {
         self.shutdown(Shutdown::Read).unwrap_or_default();
     }
 
-    fn write_back(&mut self, response: Box<Response>) {
+    fn send_responses(&mut self, chan: Receiver<RespSeqBundle>) {
+        // pipeline-end: receive the response, write them back
+        let mut curr_id = 1;
+        let mut temp_store: BTreeMap<usize, Box<Response>> = BTreeMap::new();
+
+        // Get the response set in correct order
+        while let Ok(store) = chan.recv_timeout(Duration::from_secs(8)) {
+            if store.0 == 0 || store.0 == curr_id {
+                // send the response and increment the id count
+                if self.write_back(store.1) != 0 {
+                    return;
+                }
+
+                if store.0 == curr_id {
+                    curr_id += 1;
+
+                    // now pop the delayed and stored responses
+                    while let Some(resp) = temp_store.remove(&curr_id) {
+                        if self.write_back(resp) != 0 {
+                            return;
+                        }
+
+                        curr_id += 1;
+                    }
+                }
+            } else {
+                temp_store.insert(store.0, store.1);
+            }
+        }
+
+        // if there're remainder requests to be sent, send them now.
+        if !temp_store.is_empty() {
+            for (id, resp) in temp_store.into_iter() {
+                while id > curr_id {
+                    if self.write_back(
+                        build_err_response(map_err_code(StreamException::EmptyRequest))
+                    ) != 0 {
+                        return;
+                    }
+
+                    curr_id += 1;
+                }
+
+                if self.write_back(resp) != 0 {
+                    return;
+                }
+
+                curr_id += 1;
+            }
+        }
+    }
+
+    fn write_back(&mut self, response: Box<Response>) -> u8 {
         let mut writer = BufWriter::new(self);
 
         // Serialize the header to the stream
@@ -173,8 +225,7 @@ impl PipelineWorker for Stream {
 
         // If header only, we're done
         if response.is_header_only() {
-            flush_buffer(&mut writer);
-            return;
+            return if writer.flush().is_ok() { 0 } else { 1 };
         }
 
         // write the body to the stream
@@ -185,16 +236,18 @@ impl PipelineWorker for Stream {
         let mut retry: u8 = 0;
         while retry < FLUSH_RETRY {
             retry += 1;
-            if flush_buffer(&mut writer) == 0 {
-                break;
+            if writer.flush().is_ok() {
+                return 0;
             }
         }
+
+        return 1;
     }
 }
 
 fn handle_requests(
     inbox: Receiver<Result<String, StreamException>>,
-    outbox: Sender<(usize, Box<Response>)>,
+    outbox: Sender<RespSeqBundle>,
     peer_addr: Option<SocketAddr>,
     is_tls: bool,
 )
@@ -205,15 +258,6 @@ fn handle_requests(
     for req in inbox {
         match req {
             Ok(source) => {
-                //TODO: not so simple... need to parse the request to know if it could contain a body
-                //      using `Content-Length` or `boundary(? future...)` header to determine
-
-                //TODO: plan -> call split(`\r\n\r\n`) on raw, then parse, and determine if it contains
-                //      a body, if so, split off at kth-bytes using split_off(k) on the trunk, attach the
-                //      first half as the body of the last request, send it, and parse the remainder.
-                //      Otherwise, just parse the remainder and set the flags (if no more body to
-                //      append, just send); skip empty chunk.
-
                 match serve_connection(source, req_id, &outbox, peer_addr, is_tls) {
                     Ok(id) => req_id = id,
                     Err(_) => return,
@@ -224,7 +268,7 @@ fn handle_requests(
                     // if only a read stream heart-beat, meaning we're still waiting for new requests
                     // to come, just continue with the listener.
                     outbox.send(
-                        (0, build_err_response(map_err_code(err)))
+                        RespSeqBundle(0, build_err_response(map_err_code(err)))
                     ).unwrap_or_default();
                 }
 
@@ -237,16 +281,14 @@ fn handle_requests(
 fn serve_connection(
     source: String,
     base_id: usize,
-    outbox: &Arc<Sender<(usize, Box<Response>)>>,
+    outbox: &Arc<Sender<RespSeqBundle>>,
     peer_addr: Option<SocketAddr>,
     is_tls: bool
 ) -> Result<usize, ErrorKind>
 {
     // prepare the request source string to be parsed
     let mut next_id = base_id;
-    let trimmed = source.trim_end_matches(|c| c == '\r' || c == '\n' || c == '\u{0}');
-
-    if trimmed.is_empty() {
+    if source.is_empty() {
         return send_err(next_id, outbox,StreamException::EmptyRequest);
     }
 
@@ -257,28 +299,27 @@ fn serve_connection(
     let mut body_size: usize = 0;
 
     // header-body or header-header separation is built with an empty line, or "\r\n\r\n".
-    for raw_req in trimmed.split("\r\n\r\n") {
+    for raw_req in source.split("\r\n\r\n") {
         // if parsing the body from the next trunk, append the body then start processing the request
         // otherwise, just continue with parsing the new request.
         let next: &str =
-            if body_size > 0 && callback.is_some() {
+            (if body_size > 0 && callback.is_some() {
                 // append the body and finishing off handing over the last request.
                 let (body, remainder): (&str, &str) = raw_req.split_at(body_size);
                 request.set_body(body.to_owned());
 
                 process_request(next_id, &mut request, &mut callback, outbox, is_tls);
-                next_id += 1;
-
                 if to_close {
                     return Err(ErrorKind::ConnectionAborted);
                 }
 
                 // send the remainder work to finish parsing and processing
+                next_id += 1;
                 remainder
             } else {
                 // pick the new request to work with.
                 raw_req
-            };
+            }).trim_matches(|c| c == '\r' || c == '\n' || c == '\u{0}');
 
         if next.is_empty() {
             // reset and continue
@@ -317,6 +358,10 @@ fn serve_connection(
         // processing now.
         if body_size == 0 {
             process_request(next_id, &mut request, &mut callback, outbox, is_tls);
+            if to_close {
+                return Err(ErrorKind::ConnectionAborted);
+            }
+
             next_id += 1;
         }
 
@@ -328,11 +373,11 @@ fn serve_connection(
 }
 
 fn send_err(
-    base_id: usize, outbox: &Arc<Sender<(usize, Box<Response>)>>, err: StreamException,
+    base_id: usize, outbox: &Arc<Sender<RespSeqBundle>>, err: StreamException,
 ) -> Result<usize, ErrorKind>
 {
     if outbox.send(
-        (base_id, build_err_response(map_err_code(err)))
+        RespSeqBundle(base_id, build_err_response(map_err_code(err)))
     ).is_err() {
         return Err(ErrorKind::ConnectionAborted);
     }
@@ -344,7 +389,7 @@ fn process_request(
     next_id: usize,
     request: &mut Box<Request>,
     callback: &mut RouteHandler,
-    outbox: &Arc<Sender<(usize, Box<Response>)>>,
+    outbox: &Arc<Sender<RespSeqBundle>>,
     is_tls: bool,
 )
 {
@@ -354,7 +399,7 @@ fn process_request(
 
     shared_pool::run(move || {
         outbox_clone.send(
-            (next_id, build_request(r, c, is_tls))
+            RespSeqBundle(next_id, build_request(r, c, is_tls))
         ).unwrap_or_default();
     }, TaskType::Request);
 }
@@ -682,7 +727,7 @@ mod async_handler {
     use crate::hashbrown::HashMap;
 
     pub(crate) fn handle_connection(mut stream: Stream) -> ExecCode {
-        let (callback, request) = match recv_request(&mut stream) {
+        let (callback, request) = match recv_requests(&mut stream) {
             Err(err) => {
                 let status = map_err_code(err);
                 if status == 0 {
@@ -779,7 +824,7 @@ mod async_handler {
         stream_shutdown(writer.get_mut())
     }
 
-    fn recv_request(stream: &mut Stream) -> Result<(RouteHandler, Box<Request>), StreamException> {
+    fn recv_requests(stream: &mut Stream) -> Result<(RouteHandler, Box<Request>), StreamException> {
         let raw = read_content(stream)?;
         let trimmed = raw.trim_matches(|c| c == '\r' || c == '\n' || c == '\u{0}');
 
