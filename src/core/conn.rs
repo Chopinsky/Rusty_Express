@@ -241,7 +241,7 @@ impl PipelineWorker for Stream {
             }
         }
 
-        return 1;
+        1
     }
 }
 

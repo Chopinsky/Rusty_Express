@@ -1,7 +1,7 @@
 use std::io::{BufWriter, Write};
 
 use crate::core::stream::Stream;
-use crate::debug::{self, InfoLevel};
+use crate::support::debug::{self, InfoLevel};
 use crate::hashbrown::HashMap;
 
 pub trait MapUpdates<T> {
@@ -105,7 +105,9 @@ pub fn json_stringify(contents: &HashMap<String, String>) -> String {
                 is_first = false;
             }
 
-            res.push_str(&[field, ":", content].join(""));
+            res.push_str(field);
+            res.push_str(":");
+            res.push_str(content);
         }
     }
 
@@ -129,7 +131,9 @@ pub fn json_flat_stringify(contents: &HashMap<String, Vec<String>>) -> String {
                 is_first = false;
             }
 
-            res.push_str(&[field, ":", &json_format_content(content.as_slice())].join(""));
+            res.push_str(&field);
+            res.push_str(":");
+            res.push_str(&json_format_content(content.as_slice()));
         }
     }
 

@@ -13,7 +13,7 @@ use std::time::Duration;
 
 use crate::channel::{self, SendError};
 use crate::chrono::{DateTime, Utc};
-use crate::debug;
+use crate::support::debug;
 use crate::parking_lot::{Once, ONCE_INIT, Mutex, RwLock};
 
 lazy_static! {
