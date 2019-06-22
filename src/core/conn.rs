@@ -337,10 +337,8 @@ fn serve_connection(
         }
 
         // check server authorization on certain path
-        if let Some(auth) = Route::get_auth_func() {
-            if !auth(&request, &request.uri) {
-                return send_err(next_id, outbox, StreamException::AccessDenied);
-            }
+        if !Route::auth_req(&request, &request.uri) {
+            return send_err(next_id, outbox, StreamException::AccessDenied);
         }
 
         // setup peer address

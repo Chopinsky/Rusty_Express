@@ -16,7 +16,10 @@ use crate::support::RouteTrie;
 use parking_lot::RwLock;
 use regex::Regex;
 
-static mut ROUTER: Option<RwLock<Route>> = None; // RwLock::new(Route::new());
+//TODO: impl route caching ...
+
+static mut ROUTER: Option<RwLock<Route>> = None;
+static mut ROUTE_CACHE: Option<HashMap<(REST, String), RouteHandler>> = None;
 
 #[derive(PartialEq, Eq, Hash, Clone)]
 pub enum REST {
@@ -376,7 +379,10 @@ pub struct Route {
 
 impl Route {
     pub(crate) fn init() {
-        unsafe { ROUTER.replace(RwLock::new(Route::new())); }
+        unsafe {
+            ROUTER.replace(RwLock::new(Route::new()));
+            ROUTE_CACHE.replace(HashMap::new());
+        }
     }
 
     pub fn new() -> Self {
@@ -391,6 +397,13 @@ impl Route {
     pub fn set_auth_func(auth_func: Option<AuthFunc>) {
         let mut route = Route::router_ref().write();
         route.auth_func = auth_func;
+    }
+
+    pub fn auth_req(request: &Box<Request>, uri: &String) -> bool {
+        match Route::router_ref().read().auth_func {
+            Some(auth_fn) => auth_fn(request, uri),
+            None => true,
+        }
     }
 
     pub fn use_router(another: Route) -> Result<(), String> {
