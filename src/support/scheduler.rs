@@ -1,20 +1,21 @@
 #![allow(dead_code)]
 
-use std::sync::{atomic::AtomicBool, atomic::Ordering};
+use std::sync::{atomic::AtomicBool, atomic::AtomicUsize, atomic::Ordering};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, SystemTime};
 
 use crate::channel::{self, Receiver, SendTimeoutError, Sender};
 use crate::support::debug::{self, InfoLevel};
 use parking_lot::{Once, OnceState, ONCE_INIT};
 
 const CHAN_SIZE: usize = 512;
-const POOL_CAP: usize = 65535;
+const POOL_CAP: usize = 1024;
 const POOL_INC_STEP: usize = 4;
 const TIMEOUT: Duration = Duration::from_millis(200);
 const YIELD_DURATION: Duration = Duration::from_millis(64);
 
 static IS_CLOSING: AtomicBool = AtomicBool::new(false);
+static SOFT_POOL_CAP: AtomicUsize = AtomicUsize::new(POOL_CAP);
 
 trait FnBox {
     fn call_box(self: Box<Self>);
@@ -38,6 +39,10 @@ pub struct ThreadPool {
     sender: Sender<Message>,
     receiver: Receiver<Message>,
     auto_expansion: bool,
+    pressure_status: (
+        Option<Duration>,   // -> if we should drop the request after certain period
+        Option<SystemTime>, // -> all workers are busy since this system time
+    ),
 }
 
 impl ThreadPool {
@@ -60,18 +65,32 @@ impl ThreadPool {
             sender,
             receiver,
             auto_expansion: false,
+            pressure_status: (None, None),
         }
     }
 
-    pub(crate) fn toggle_auto_expansion(&mut self, on: bool) {
+    pub(crate) fn toggle_auto_expansion(&mut self, on: bool, cap: Option<usize>) {
         self.auto_expansion = on;
+        if let Some(c) = cap {
+            SOFT_POOL_CAP.store(c, Ordering::Release);
+        }
     }
 
-    pub(crate) fn execute<F>(&mut self, f: F)
+    pub(crate) fn is_under_pressure(&self) -> bool {
+        if let Some(threshold) = self.pressure_status.0 {
+            if let Some(since) = self.pressure_status.1 {
+                return since.elapsed().unwrap_or_default() > threshold
+            }
+        }
+
+        false
+    }
+    
+    pub(crate) fn execute<F>(&mut self, f: F) -> u8
     where
         F: FnOnce() + Send + 'static,
     {
-        self.dispatch(Message::NewJob(Box::new(f)), 0);
+        self.dispatch(Message::NewJob(Box::new(f)), 0)
     }
 
     pub(crate) fn close(&mut self) {
@@ -94,13 +113,24 @@ impl ThreadPool {
         }
     }
 
-    fn dispatch(&mut self, message: Message, retry: u8) {
+    fn dispatch(&mut self, message: Message, retry: u8) -> u8 {
         match self
             .sender
-            .send_timeout(message, Duration::from_millis(8))
+            .send_timeout(message, Duration::from_millis(2))
         {
+            Ok(()) => {
+                // if we care about under-pressure dropping, then reset the timer
+                if self.pressure_status.0.is_some() {
+                    self.pressure_status.1 = None;
+                }
+            },
             Err(SendTimeoutError::Timeout(msg)) => {
                 debug::print("Unable to distribute the job: execution timed out, all workers are busy for too long", InfoLevel::Error);
+
+                // set the busy_since timer
+                if self.pressure_status.0.is_some() && self.pressure_status.1.is_none() {
+                    self.pressure_status.1 = Some(SystemTime::now());
+                }
 
                 if retry < 4 {
                     if self.auto_expansion && self.workers.len() + POOL_INC_STEP < POOL_CAP {
@@ -116,17 +146,20 @@ impl ThreadPool {
                         InfoLevel::Error,
                     );
 
-                    self.dispatch(msg, retry + 1);
+                    return self.dispatch(msg, retry + 1);
                 }
-            }
+            },
             Err(SendTimeoutError::Disconnected(_)) => {
                 debug::print(
                     "Unable to distribute the job: workers have been dropped: {}",
                     InfoLevel::Error,
                 );
-            }
-            _ => {}
+
+                return 1;
+            },
         };
+
+        0
     }
 }
 

@@ -145,7 +145,7 @@ impl HttpServer {
         let pool_size = self.config.get_pool_size();
 
         let mut workers_pool = Self::setup_worker_pools(pool_size);
-        workers_pool.toggle_auto_expansion(true);
+        workers_pool.toggle_auto_expansion(true, None);
 
         // notify the server launcher that we're ready to serve incoming streams
         if let Some(sender) = cb_sig.take() {
@@ -161,7 +161,7 @@ impl HttpServer {
         }
 
         for stream in listener.incoming() {
-            if let Some(message) = self.state.courier_fetch() {
+            if let Some(message) = self.state.fetch_update() {
                 match message {
                     ControlMessage::Terminate => {
                         if let Ok(s) = stream {
@@ -174,15 +174,7 @@ impl HttpServer {
                         self.session_cleanup_config();
                     }
                     ControlMessage::HotLoadRouter(r) => {
-                        Route::use_router(r).unwrap_or_else(|err| {
-                            debug::print(
-                                &format!(
-                                    "An error has taken place when trying to update the router: {}",
-                                    err
-                                )[..],
-                                InfoLevel::Warning,
-                            );
-                        });
+                        Route::use_router_async(r);
                     }
                     ControlMessage::HotLoadConfig(c) => {
                         if c.get_pool_size() != self.config.get_pool_size() {
@@ -222,6 +214,8 @@ impl HttpServer {
     fn handle_stream(&self, stream: TcpStream, workers_pool: &mut ThreadPool, acceptor: Option<Arc<TlsAcceptor>>) {
         let read_timeout = u64::from(self.config.get_read_timeout());
         let write_timeout = u64::from(self.config.get_write_timeout());
+
+        //TODO: if allowing dropping if busy for too long, handle that situation
 
         workers_pool.execute(move || {
             stream.set_timeout(read_timeout, write_timeout);
@@ -310,12 +304,7 @@ pub trait ServerDef {
 
 impl ServerDef for HttpServer {
     fn def_router(&mut self, router: Route) {
-        if let Err(err) = Route::use_router(router) {
-            eprintln!(
-                "An error has taken place when trying to update the router: {}",
-                err
-            );
-        }
+        Route::use_router(router);
     }
 
     fn set_pool_size(&mut self, size: usize) {

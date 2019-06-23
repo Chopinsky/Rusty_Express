@@ -87,7 +87,7 @@ impl ServerStates {
     }
 
     #[inline]
-    pub(crate) fn courier_fetch(&self) -> Option<ControlMessage> {
+    pub(crate) fn fetch_update(&self) -> Option<ControlMessage> {
         match self.courier_channel.1.try_recv() {
             Ok(msg) => Some(msg),
             Err(TryRecvError::Empty) => None,
@@ -96,6 +96,7 @@ impl ServerStates {
                     &format!("Hot load channel disconnected: {:?}", e),
                     InfoLevel::Warning,
                 );
+
                 None
             }
         }

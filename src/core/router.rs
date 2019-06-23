@@ -4,6 +4,7 @@
 use std::fmt;
 use std::fs;
 use std::path::PathBuf;
+use std::thread;
 
 use crate::channel;
 use crate::core::http::{Request, Response, ResponseWriter};
@@ -74,7 +75,7 @@ pub type Callback = fn(&Box<Request>, &mut Box<Response>);
 /// The use of the AuthFunc is totally optional, you can also check authentication within individual
 /// request handlers as well. You can also use the `context` and/or `session` modules to store, or
 /// update persistent information regarding the client requestor.
-pub type AuthFunc = fn(&Box<Request>, &String) -> bool;
+pub type AuthFunc = fn(&Box<Request>, &str) -> bool;
 
 struct RegexRoute {
     regex: Regex,
@@ -399,17 +400,22 @@ impl Route {
         route.auth_func = auth_func;
     }
 
-    pub fn auth_req(request: &Box<Request>, uri: &String) -> bool {
+    pub fn authorize(request: &Box<Request>, uri: &str) -> bool {
         match Route::router_ref().read().auth_func {
             Some(auth_fn) => auth_fn(request, uri),
             None => true,
         }
     }
 
-    pub fn use_router(another: Route) -> Result<(), String> {
+    pub fn use_router(another: Route) {
         let mut route = Route::router_ref().write();
         route.replace_with(another);
-        Ok(())
+    }
+
+    pub fn use_router_async(another: Route) {
+        thread::spawn(|| {
+            Self::use_router(another);
+        });
     }
 
     pub(crate) fn add_route(method: REST, uri: RequestPath, callback: RouteHandler) {
@@ -572,6 +578,8 @@ impl RouteSeeker for Route {
     }
 
     fn seek_sync(method: &REST, uri: &str) -> (RouteHandler, HashMap<String, String>) {
+        //TODO: check cache first
+
         let mut result = RouteHandler(None, None);
         let mut params = HashMap::new();
 
@@ -598,6 +606,8 @@ impl RouteSeeker for Route {
                 }
             }
         }
+
+        //TODO: Caching the request, also maintain the hash-map if it gets too large
 
         (result, params)
     }

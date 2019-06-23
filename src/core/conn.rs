@@ -337,7 +337,7 @@ fn serve_connection(
         }
 
         // check server authorization on certain path
-        if !Route::auth_req(&request, &request.uri) {
+        if !Route::authorize(&request, &request.uri) {
             return send_err(next_id, outbox, StreamException::AccessDenied);
         }
 
