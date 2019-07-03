@@ -89,7 +89,7 @@ impl ServerConfig {
 
     pub fn set_default_header(field: String, value: String, replace: bool) {
         let mut store = METADATA_STORE.write();
-        (*store).header.add(&field[..], value, replace);
+        (*store).header.add(&field[..], value, replace, false);
     }
 
     pub fn set_status_page_generator(status: u16, generator: PageGenerator) {

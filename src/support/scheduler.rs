@@ -1,18 +1,20 @@
 #![allow(dead_code)]
 
-use std::sync::{atomic::AtomicBool, atomic::AtomicUsize, atomic::Ordering};
+use std::sync::{atomic::AtomicBool, atomic::AtomicUsize, atomic::Ordering, Arc};
 use std::thread;
 use std::time::{Duration, SystemTime};
 
 use crate::channel::{self, Receiver, SendTimeoutError, Sender};
 use crate::support::debug::{self, InfoLevel};
-use parking_lot::{Once, OnceState, ONCE_INIT};
+use parking_lot::{Once, OnceState, ONCE_INIT, Mutex};
+use hashbrown::HashSet;
+use crossbeam_channel::RecvTimeoutError;
 
 const CHAN_SIZE: usize = 512;
 const POOL_CAP: usize = 1024;
 const POOL_INC_STEP: usize = 4;
 const TIMEOUT: Duration = Duration::from_millis(200);
-const YIELD_DURATION: Duration = Duration::from_millis(64);
+const YIELD_DURATION: Duration = Duration::from_millis(128);
 
 static IS_CLOSING: AtomicBool = AtomicBool::new(false);
 static SOFT_POOL_CAP: AtomicUsize = AtomicUsize::new(POOL_CAP);
@@ -43,6 +45,7 @@ pub struct ThreadPool {
         Option<Duration>,   // -> if we should drop the request after certain period
         Option<SystemTime>, // -> all workers are busy since this system time
     ),
+    grave: Arc<Mutex<HashSet<usize>>>,
 }
 
 impl ThreadPool {
@@ -57,7 +60,7 @@ impl ThreadPool {
 
         let mut workers = Vec::with_capacity(pool_size);
         (0..pool_size).for_each(|id| {
-            workers.push(Worker::launch(id, receiver.clone(), false));
+            workers.push(Worker::launch(id, receiver.clone(), None));
         });
 
         ThreadPool {
@@ -66,6 +69,7 @@ impl ThreadPool {
             receiver,
             auto_expansion: false,
             pressure_status: (None, None),
+            grave: Arc::new(Mutex::new(HashSet::new())),
         }
     }
 
@@ -133,13 +137,7 @@ impl ThreadPool {
                 }
 
                 if retry < 4 {
-                    if self.auto_expansion && self.workers.len() + POOL_INC_STEP < POOL_CAP {
-                        let start = self.workers.len();
-                        (0..POOL_INC_STEP).for_each(|id| {
-                            self.workers
-                                .push(Worker::launch(start + id, self.receiver.clone(), true));
-                        });
-                    }
+                    self.expand();
 
                     debug::print(
                         &format!("Try again for the {} times...", retry + 1),
@@ -161,6 +159,33 @@ impl ThreadPool {
 
         0
     }
+
+    fn expand(&mut self) {
+        if self.auto_expansion && self.workers.len() + POOL_INC_STEP < POOL_CAP {
+            // clean up died workers
+            {
+                let mut g = self.grave.lock();
+                if g.len() > 0 {
+                    self.workers.retain(|worker| {
+                        !g.contains(&worker.id)
+                    });
+                }
+
+                g.clear();
+            }
+
+            // then expand with new workers
+            let start = self.workers[self.workers.len()-1].id;
+            (0..POOL_INC_STEP).for_each(|id| {
+                self.workers
+                    .push(Worker::launch(
+                        start + id,
+                        self.receiver.clone(),
+                        Some(self.grave.clone()),
+                    ));
+            });
+        }
+    }
 }
 
 impl Drop for ThreadPool {
@@ -179,29 +204,43 @@ struct Worker {
 }
 
 impl Worker {
-    fn launch(id: usize, work_queue: Receiver<Message>, is_extra: bool) -> Worker {
+    fn launch(id: usize, work_queue: Receiver<Message>, grave: Option<Arc<Mutex<HashSet<usize>>>>) -> Worker {
         let thread = thread::spawn(move || {
-            let mut work = None;
+            let mut idle_counter = 0;
+            let mut message: Result<Message, RecvTimeoutError>;
 
             loop {
                 if IS_CLOSING.load(Ordering::Relaxed) {
                     return;
                 }
 
-                if let Ok(message) = work_queue.recv_timeout(YIELD_DURATION) {
+                message = work_queue.recv_timeout(YIELD_DURATION);
+
+                if let Ok(message) = message {
                     match message {
-                        Message::NewJob(job) => work = Some(job),
+                        Message::NewJob(job) => {
+                            // process the work
+                            job.call_box();
+
+                            // give 2 more idle chances on every work processed
+                            if idle_counter > 1 {
+                                idle_counter -= 2;
+                            }
+                        },
                         Message::Terminate => {
                             IS_CLOSING.store(true, Ordering::Release);
                             return;
                         }
                     }
-                } else if is_extra {
-                    return;
-                }
-
-                if let Some(job) = work.take() {
-                    job.call_box();
+                } else if let Some(g) = grave.as_ref() {
+                    if idle_counter < 10 {
+                        // addition of the idle counts, quit after being idle for around 1 sec.
+                        idle_counter += 1;
+                    } else {
+                        // if an expandable worker, kill it.
+                        g.lock().insert(id);
+                        return;
+                    }
                 }
             }
         });

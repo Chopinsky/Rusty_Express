@@ -43,6 +43,12 @@ impl AsyncController {
     }
 }
 
+impl Clone for AsyncController {
+    fn clone(&self) -> Self {
+        AsyncController(self.0.clone(), self.1)
+    }
+}
+
 pub struct ServerStates {
     running: bool,
     courier_channel: (

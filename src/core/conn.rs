@@ -478,8 +478,17 @@ fn parse_start_line_sync(source: &str, req: &mut Box<Request>) -> (RouteHandler,
 
                 req.method = base_method;
             }
-            1 => split_path(info, &mut req.uri, &mut raw_scheme, &mut raw_fragment),
-            2 => req.write_header("HTTP_VERSION", info, true),
+            1 => {
+                // path is at most the length of the source string
+                req.uri.reserve(info.len());
+
+                // parse the path and store the info back
+                parse_path(info, &mut req.uri, &mut raw_scheme, &mut raw_fragment)
+            },
+            2 => {
+                // write the http version back to the header
+                req.write_header("HTTP_VERSION", info, true)
+            },
             _ => {
                 break;
             }
@@ -572,7 +581,7 @@ fn parse_headers(
                     if is_cookie {
                         parse_cookie(info.trim(), cookie);
                     } else if !header_key.is_empty() {
-                        header.add(header_key, info.trim().to_owned(), true);
+                        header.add(header_key, info.trim().to_owned(), true, false);
                     }
                 }
                 _ => break,
@@ -583,19 +592,20 @@ fn parse_headers(
     }
 }
 
-fn split_path(source: &str, path: &mut String, scheme: &mut String, frag: &mut String) {
+fn parse_path(source: &str, path: &mut String, scheme: &mut String, frag: &mut String) {
     let uri = source.trim().trim_end_matches('/');
     if uri.is_empty() {
         path.push('/');
         return;
     }
 
+    // split the uri and parse each part
     let mut uri_parts: Vec<&str> = uri.rsplitn(2, '/').collect();
 
     // parse fragment out
     if let Some(pos) = uri_parts[0].find('#') {
-        let (remains, raw_frag) = uri_parts[0].split_at(pos);
-        uri_parts[0] = remains;
+        let (rest, raw_frag) = uri_parts[0].split_at(pos);
+        uri_parts[0] = rest;
 
         if !raw_frag.is_empty() {
             frag.push_str(raw_frag);
@@ -604,20 +614,33 @@ fn split_path(source: &str, path: &mut String, scheme: &mut String, frag: &mut S
 
     // parse scheme out
     if let Some(pos) = uri_parts[0].find('?') {
-        let (remains, raw_scheme) = uri_parts[0].split_at(pos);
-        uri_parts[0] = remains;
+        // split the scheme parts
+        let (rest, raw_scheme) = uri_parts[0].split_at(pos);
+        uri_parts[0] = rest;
 
-        if uri_parts[1].is_empty() {
-            path.push('/');
-            path.push_str(uri_parts[0]);
-        } else {
+        // push the leading parts if not empty
+        if !uri_parts[1].is_empty() {
+            if !uri_parts[1].starts_with('/') {
+                path.push('/');
+            }
+
             path.push_str(uri_parts[1]);
-            path.push('/');
-            path.push_str(uri_parts[0]);
         };
+
+        // adding the delimiter between the first the rest part
+        path.push('/');
+
+        // now push the remainder of the split string, could be empty, e.g. path: "/?say=hi&to=mom"
+        if uri_parts[0].is_empty() {
+            path.push_str(uri_parts[0]);
+        }
 
         scheme.push_str(raw_scheme.trim());
     } else {
+        if !uri.starts_with('/') {
+            path.push('/');
+        }
+
         let uri_len = uri.len();
         if uri_len > 1 && uri.ends_with('/') {
             path.push_str(&uri[..uri_len - 1]);
@@ -639,9 +662,9 @@ fn parse_cookie(raw: &str, cookie: &mut HashMap<String, String>) {
     for set in raw.trim().split(';') {
         let pair: Vec<&str> = set.trim().splitn(2, '=').collect();
         if pair.len() == 2 {
-            cookie.add(pair[0].trim(), pair[1].trim().to_owned(), false);
+            cookie.add(pair[0].trim(), pair[1].trim().to_owned(), false, true);
         } else if !pair.is_empty() {
-            cookie.add(pair[0].trim(), String::new(), false);
+            cookie.add(pair[0].trim(), String::new(), false, true);
         }
     }
 }
@@ -988,8 +1011,17 @@ mod async_handler {
 
                     req.method = base_method;
                 }
-                1 => split_path(info, &mut req.uri, &mut raw_scheme, &mut raw_fragment),
-                2 => req.write_header("HTTP_VERSION", info, true),
+                1 => {
+                    // path is at most the length of the source string
+                    req.uri.reserve(info.len());
+
+                    // now parse the path info and store the main uri back to the request
+                    parse_path(info, &mut req.uri, &mut raw_scheme, &mut raw_fragment)
+                },
+                2 => {
+                    // write the http version to the header
+                    req.write_header("HTTP_VERSION", info, true)
+                },
                 _ => {
                     break;
                 }

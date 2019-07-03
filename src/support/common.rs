@@ -5,16 +5,21 @@ use crate::support::debug::{self, InfoLevel};
 use crate::hashbrown::HashMap;
 
 pub trait MapUpdates<T> {
-    fn add(&mut self, field: &str, value: T, allow_replace: bool) -> Option<T>;
+    fn add(&mut self, field: &str, value: T, allow_replace: bool, allow_case: bool) -> Option<T>;
 }
 
 impl<T> MapUpdates<T> for HashMap<String, T> {
-    fn add(&mut self, field: &str, value: T, allow_replace: bool) -> Option<T> {
+    fn add(&mut self, field: &str, value: T, allow_replace: bool, allow_case: bool) -> Option<T> {
         if field.is_empty() {
             return None;
         }
 
-        let f = field.to_lowercase();
+        let f = if !allow_case {
+            field.to_lowercase()
+        } else {
+            field.to_owned()
+        };
+
         if allow_replace {
             //new field, insert into the map
             self.insert(f, value)

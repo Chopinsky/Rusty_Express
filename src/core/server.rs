@@ -18,16 +18,19 @@ use native_tls::TlsAcceptor;
 
 //TODO: Impl middlewear
 
+/// The server instance that represents and controls the underlying http-service.
 pub struct HttpServer {
     config: ServerConfig,
     state: ServerStates,
 }
 
 impl HttpServer {
+    /// Create a new server instance using default configurations and server settings.
     pub fn new() -> Self {
         Default::default()
     }
 
+    /// Create a new server instance with supplied configuration and settings.
     pub fn new_with_config(config: ServerConfig) -> Self {
         HttpServer {
             config,
@@ -53,6 +56,30 @@ impl HttpServer {
         self.listen_and_serve(port, None);
     }
 
+    /// `listen_and_serve` will take 2 parameters: 1) the port that the server will be monitoring at,
+    ///  or `127.0.0.1:port`; 2) the callback closure that will take an async-controller as input,
+    /// and run in parallel to the current server instance for async operations.
+    ///
+    /// This function will block until the server is shut down.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// extern crate rusty_express as express;
+    /// use express::prelude::{HttpServer, ServerDef, Router, ControlMessage};
+    /// use std::thread;
+    /// use std::time::Duration;
+    ///
+    /// let mut server = HttpServer::new();
+    /// server.def_router(router);
+    /// server.listen_and_serve(8080, |controller| {
+    ///     // sleep for 1 minute
+    ///     thread::sleep(Duration::from_secs(60));
+    ///
+    ///     // after waking up from the 1 minute sleep, shut down the server.
+    ///     controller.send(ControlMessage::Terminate);
+    /// });
+    /// ```
     pub fn listen_and_serve(
         &mut self,
         port: u16,
@@ -108,6 +135,8 @@ impl HttpServer {
         }
     }
 
+    /// Obtain an `AsyncController`, which can be run in a parallel thread and control or update
+    /// server configurations while it's running. For more details, see the `states` module.
     #[inline]
     #[must_use]
     pub fn get_courier(&self) -> AsyncController {
@@ -115,10 +144,15 @@ impl HttpServer {
     }
 
     #[inline]
+    /// Stop and clear the session auto-cleaning schedules. This API can be useful when no more new
+    /// sessions shall be built and stored in the server, to save server resources.
     pub fn drop_session_auto_clean(&mut self) {
         self.state.drop_session_auto_clean();
     }
 
+    /// Ask the server to reload the configuration settings. Usually used in a separate thread with
+    /// a cloned server instance, where the server state is corrupted and need a reload to restore the
+    /// initial server settings.
     pub fn config_hot_reload(&self) {
         if !self.state.is_running() {
             eprintln!("The function is meant to be used for hot-loading a new server configuration when it's running...");

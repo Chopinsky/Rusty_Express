@@ -103,11 +103,22 @@ struct StaticLocRoute {
     white_list: HashSet<String>,
 }
 
+impl Clone for StaticLocRoute {
+    fn clone(&self) -> Self {
+        StaticLocRoute {
+            location: self.location.clone(),
+            black_list: self.black_list.clone(),
+            white_list: self.white_list.clone(),
+        }
+    }
+}
+
 pub(crate) struct RouteMap {
     explicit: HashMap<String, RouteHandler>,
     explicit_with_params: RouteTrie,
     wildcard: HashMap<String, RegexRoute>,
     static_path: Option<StaticLocRoute>,
+    case_sensitive: bool,
 }
 
 impl RouteMap {
@@ -117,6 +128,7 @@ impl RouteMap {
             explicit_with_params: RouteTrie::initialize(),
             wildcard: HashMap::new(),
             static_path: None,
+            case_sensitive: false,
         }
     }
 
@@ -127,8 +139,8 @@ impl RouteMap {
                     panic!("Request path must have valid contents and start with '/'.");
                 }
 
-                self.explicit.add(req_uri, callback, false);
-            }
+                self.explicit.add(req_uri, callback, false, self.case_sensitive);
+            },
             RequestPath::WildCard(req_uri) => {
                 if req_uri.is_empty() {
                     panic!("Request path must have valid contents.");
@@ -142,23 +154,28 @@ impl RouteMap {
                     self.wildcard
                         .add(req_uri,
                              RegexRoute::new(re, callback),
-                             false
+                             false,
+                            self.case_sensitive
                         );
                 }
-            }
+            },
             RequestPath::ExplicitWithParams(req_uri) => {
                 if !req_uri.contains("/:") && !req_uri.contains(":\\") {
-                    self.explicit.add(req_uri, callback, false);
+                    self.explicit.add(req_uri, callback, false, self.case_sensitive);
                     return;
                 }
 
                 self.explicit_with_params
-                    .add(RouteMap::params_parser(req_uri), callback.0, callback.1);
-            }
+                    .add(
+                        RouteMap::params_parser(req_uri, self.case_sensitive),
+                        callback.0,
+                        callback.1,
+                    );
+            },
         }
     }
 
-    fn params_parser(source_uri: &'static str) -> Vec<Field> {
+    fn params_parser(source_uri: &'static str, allow_case: bool) -> Vec<Field> {
         let mut param_names = HashSet::new();
 
         let mut validation: Option<Regex> = None;
@@ -255,7 +272,13 @@ impl RouteMap {
                     name = &s;
                 }
 
-                Some(Field::new(name.to_owned(), is_param, validation.take()))
+                let field = if !allow_case {
+                    name.to_lowercase()
+                } else {
+                    name.to_owned()
+                };
+
+                Some(Field::new(field, is_param, validation.take()))
             })
             .collect();
 
@@ -367,7 +390,8 @@ impl Clone for RouteMap {
             explicit: self.explicit.clone(),
             explicit_with_params: self.explicit_with_params.clone(),
             wildcard: self.wildcard.clone(),
-            static_path: None,
+            static_path: self.static_path.clone(),
+            case_sensitive: self.case_sensitive,
         }
     }
 }
@@ -779,7 +803,11 @@ mod route_test {
             Field::new(String::from("check"), true, None),
         ];
 
-        let test = RouteMap::params_parser("/root/api/:Tes中t(a=[/]bdc)/this./:check/");
+        let test = RouteMap::params_parser(
+            "/root/api/:Tes中t(a=[/]bdc)/this./:check/",
+            true,
+        );
+
         assert_eq!(test.len(), base.len());
 
         for (base_field, test_field) in base.iter().zip(&test) {

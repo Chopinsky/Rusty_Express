@@ -71,8 +71,12 @@ impl Node {
     }
 
     fn insert(
-        &mut self, mut segments: Vec<Field>, callback: Option<Callback>, location: Option<PathBuf>
-    ) {
+        &mut self,
+        mut segments: Vec<Field>,
+        callback: Option<Callback>,
+        location: Option<PathBuf>,
+    )
+    {
         debug_assert!(callback.is_some() || location.is_some());
 
         let head = match segments.pop() {
@@ -170,7 +174,13 @@ impl RouteTrie {
         self.root.named_children.is_empty() && self.root.params_children.is_empty()
     }
 
-    pub(crate) fn add(&mut self, segments: Vec<Field>, callback: Option<Callback>, location: Option<PathBuf>) {
+    pub(crate) fn add(
+        &mut self,
+        segments: Vec<Field>,
+        callback: Option<Callback>,
+        location: Option<PathBuf>,
+    )
+    {
         self.root.insert(segments, callback, location);
     }
 

@@ -1,5 +1,6 @@
 #![allow(dead_code)]
 
+use std::collections;
 use std::fs::File;
 use std::io::prelude::*;
 use std::io::{BufReader, BufWriter};
@@ -45,6 +46,8 @@ impl Default for KeepAliveStatus {
         KeepAliveStatus::NotSet
     }
 }
+
+//TODO: pub http version?
 
 pub struct Request {
     pub method: REST,
@@ -148,6 +151,17 @@ impl Request {
         self.host.clone()
     }
 
+    #[must_use]
+    pub fn form_data(&self) -> collections::HashMap<String, String> {
+        let mut data = collections::HashMap::new();
+
+        if !self.body.is_empty() {
+            //TODO: parse the form data
+        }
+
+        data
+    }
+
     pub fn json(&self) -> String {
         let mut source = HashMap::new();
 
@@ -242,11 +256,11 @@ pub trait RequestWriter {
 
 impl RequestWriter for Request {
     fn write_header(&mut self, key: &str, val: &str, allow_override: bool) {
-        self.header.add(key, val.to_owned(), allow_override);
+        self.header.add(key, val.to_owned(), allow_override, false);
     }
 
     fn write_scheme(&mut self, key: &str, val: Vec<String>, allow_override: bool) {
-        self.scheme.add(key, val.to_owned(), allow_override);
+        self.scheme.add(key, val.to_owned(), allow_override, false);
     }
 
     fn create_scheme(&mut self, scheme: HashMap<String, Vec<String>>) {
@@ -254,7 +268,7 @@ impl RequestWriter for Request {
     }
 
     fn set_cookie(&mut self, key: &str, val: &str, allow_override: bool) {
-        self.cookie.add(key, val.to_owned(), allow_override);
+        self.cookie.add(key, val.to_owned(), allow_override, true);
     }
 
     fn create_cookie(&mut self, cookie: HashMap<String, String>) {
@@ -584,7 +598,7 @@ impl ResponseWriter for Response {
                 }
             }
             _ => {
-                self.header.add(field, value.to_owned(), allow_replace);
+                self.header.add(field, value.to_owned(), allow_replace, false);
             }
         };
     }
