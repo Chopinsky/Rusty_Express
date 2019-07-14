@@ -1,8 +1,9 @@
 #![allow(dead_code)]
 
 use std::io::{self, prelude::*, Error, ErrorKind};
-use std::net::{TcpStream, Shutdown, SocketAddr};
+use std::net::{Shutdown, SocketAddr, TcpStream};
 use std::time::Duration;
+
 use crate::native_tls::TlsStream;
 
 pub(crate) enum Stream {
@@ -49,10 +50,11 @@ impl Stream {
     // Side effect: TLS stream will be downgraded to TCP stream since the handshake has been done
     pub(crate) fn try_clone(&self) -> io::Result<Stream> {
         match self {
-            Stream::Tcp(tcp) => tcp.try_clone().map(|t| {
-                Stream::Tcp(t)
-            }),
-            _ => Err(Error::new(ErrorKind::InvalidInput, "TLS connection shouldn't be kept long-live")),
+            Stream::Tcp(tcp) => tcp.try_clone().map(Stream::Tcp),
+            _ => Err(Error::new(
+                ErrorKind::InvalidInput,
+                "TLS connection shouldn't be kept long-live",
+            )),
         }
     }
 

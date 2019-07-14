@@ -9,15 +9,16 @@ use std::thread;
 use crate::channel;
 use crate::core::http::{Request, Response, ResponseWriter};
 use crate::hashbrown::{HashMap, HashSet};
-use crate::support::common::MapUpdates;
-use crate::support::debug::{self, InfoLevel};
-use crate::support::Field;
-use crate::support::RouteTrie;
+use crate::parking_lot::RwLock;
+use crate::regex::Regex;
+use crate::support::{
+    common::MapUpdates,
+    debug::{self, InfoLevel},
+    Field, RouteTrie,
+};
 
-use parking_lot::RwLock;
-use regex::Regex;
-
-//TODO: impl route caching ...
+//TODO: impl route caching: 1) only explicit and wildcard will get cached ... especially the wildcard
+//      one. 2) store uri in the "method:path" format.
 
 static mut ROUTER: Option<RwLock<Route>> = None;
 static mut ROUTE_CACHE: Option<HashMap<(REST, String), RouteHandler>> = None;
@@ -139,8 +140,9 @@ impl RouteMap {
                     panic!("Request path must have valid contents and start with '/'.");
                 }
 
-                self.explicit.add(req_uri, callback, false, self.case_sensitive);
-            },
+                self.explicit
+                    .add(req_uri, callback, false, self.case_sensitive);
+            }
             RequestPath::WildCard(req_uri) => {
                 if req_uri.is_empty() {
                     panic!("Request path must have valid contents.");
@@ -151,28 +153,36 @@ impl RouteMap {
                 }
 
                 if let Ok(re) = Regex::new(req_uri) {
-                    self.wildcard
-                        .add(req_uri,
-                             RegexRoute::new(re, callback),
-                             false,
-                            self.case_sensitive
-                        );
+                    self.wildcard.add(
+                        req_uri,
+                        RegexRoute::new(re, callback),
+                        false,
+                        self.case_sensitive,
+                    );
                 }
-            },
+            }
             RequestPath::ExplicitWithParams(req_uri) => {
                 if !req_uri.contains("/:") && !req_uri.contains(":\\") {
-                    self.explicit.add(req_uri, callback, false, self.case_sensitive);
+                    self.explicit
+                        .add(req_uri, callback, false, self.case_sensitive);
                     return;
                 }
 
-                self.explicit_with_params
-                    .add(
-                        RouteMap::params_parser(req_uri, self.case_sensitive),
-                        callback.0,
-                        callback.1,
-                    );
-            },
+                self.explicit_with_params.add(
+                    RouteMap::params_parser(req_uri, self.case_sensitive),
+                    callback.0,
+                    callback.1,
+                );
+            }
         }
+    }
+
+    pub fn case_sensitive(&mut self, allow_case: bool) {
+        self.case_sensitive = allow_case;
+    }
+
+    pub fn is_case_sensitive(&self) -> bool {
+        self.case_sensitive
     }
 
     fn params_parser(source_uri: &'static str, allow_case: bool) -> Vec<Field> {
@@ -333,8 +343,7 @@ impl RouteMap {
         raw_uri: &str,
         file_name: &str,
         params: &mut HashMap<String, String>,
-    ) -> RouteHandler
-    {
+    ) -> RouteHandler {
         let for_file = !file_name.is_empty();
 
         if let Some(callback) = self.explicit.get(uri) {
@@ -354,18 +363,17 @@ impl RouteMap {
                         if res.is_some() {
                             return res;
                         }
-                    },
+                    }
                     Err(_) => {
                         // either not in white-list, or in black-list, quit
                         return RouteHandler::default();
-                    },
+                    }
                 }
             }
         }
 
         if !self.explicit_with_params.is_empty() {
-            let result =
-                search_params_router(&self.explicit_with_params, uri, params);
+            let result = search_params_router(&self.explicit_with_params, uri, params);
 
             if (!for_file && result.0.is_some()) || (for_file && result.1.is_some()) {
                 return RouteHandler::update_handler(result, file_name);
@@ -376,7 +384,7 @@ impl RouteMap {
             let result = search_wildcard_router(&self.wildcard, uri);
 
             if (!for_file && result.0.is_some()) || (for_file && result.1.is_some()) {
-                return RouteHandler::update_handler(result,file_name);
+                return RouteHandler::update_handler(result, file_name);
             }
         }
 
@@ -440,6 +448,28 @@ impl Route {
         thread::spawn(|| {
             Self::use_router(another);
         });
+    }
+
+    pub fn all_case_sensitive(allow_case: bool) {
+        let mut route = Route::router_ref().write();
+        for maps in route.store.values_mut() {
+            maps.case_sensitive(allow_case);
+        }
+    }
+
+    pub fn case_sensitive(method: &REST, allow_case: bool) {
+        if let Some(maps) = Route::router_ref().write().store.get_mut(method) {
+            maps.case_sensitive = allow_case;
+        }
+    }
+
+    pub fn is_case_sensitive(method: &REST) -> bool {
+        Route::router_ref()
+            .read()
+            .store
+            .get(method)
+            .filter(|maps| maps.case_sensitive)
+            .is_some()
     }
 
     pub(crate) fn add_route(method: REST, uri: RequestPath, callback: RouteHandler) {
@@ -512,6 +542,7 @@ pub trait Router {
     fn all(&mut self, uri: RequestPath, callback: Callback) -> &mut Self;
     fn use_static(&mut self, path: PathBuf) -> &mut Self;
     fn use_custom_static(&mut self, uri: RequestPath, path: PathBuf) -> &mut Self;
+    fn case_sensitive(&mut self, allow_case: bool, method: Option<REST>);
 }
 
 impl Router for Route {
@@ -564,7 +595,6 @@ impl Router for Route {
         self.other("*", uri, callback)
     }
 
-
     /// # Example
     ///
     /// ```
@@ -587,6 +617,24 @@ impl Router for Route {
         self.add(REST::GET, uri, RouteHandler(None, Some(path)));
         self
     }
+
+    /// Note: this API only affect routes moving forward, and it will not be applied to routes
+    /// already in the `Router`.
+    fn case_sensitive(&mut self, allow_case: bool, method: Option<REST>) {
+        if method.is_none() {
+            for maps in self.store.values_mut() {
+                maps.case_sensitive = allow_case;
+            }
+
+            return;
+        }
+
+        if let Some(m) = method {
+            if let Some(maps) = self.store.get_mut(&m) {
+                maps.case_sensitive = allow_case
+            }
+        }
+    }
 }
 
 pub(crate) trait RouteSeeker {
@@ -595,7 +643,11 @@ pub(crate) trait RouteSeeker {
 }
 
 impl RouteSeeker for Route {
-    fn seek(method: &REST, uri: &str, tx: channel::Sender<(RouteHandler, HashMap<String, String>)>) {
+    fn seek(
+        method: &REST,
+        uri: &str,
+        tx: channel::Sender<(RouteHandler, HashMap<String, String>)>,
+    ) {
         if let Err(e) = tx.send(Self::seek_sync(method, uri)) {
             debug::print("Unable to find the route handler", InfoLevel::Error);
         }
@@ -652,28 +704,18 @@ fn search_wildcard_router(routes: &HashMap<String, RegexRoute>, uri: &str) -> Ro
 fn search_params_router(
     route_head: &RouteTrie,
     uri: &str,
-    params: &mut HashMap<String, String>
-) -> RouteHandler
-{
-    let raw_segments: Vec<String> = uri
-        .trim_matches('/')
-        .split('/')
-        .map(String::from)
-        .collect();
+    params: &mut HashMap<String, String>,
+) -> RouteHandler {
+    let raw_segments: Vec<String> = uri.trim_matches('/').split('/').map(String::from).collect();
 
     params.reserve(raw_segments.len());
-    let result =
-        RouteTrie::find(route_head, raw_segments.as_slice(), params);
+    let result = RouteTrie::find(route_head, raw_segments.as_slice(), params);
 
     params.shrink_to_fit();
     result
 }
 
-fn search_static_router(
-    path: &StaticLocRoute,
-    raw_uri: &str,
-) -> Result<RouteHandler, ()>
-{
+fn search_static_router(path: &StaticLocRoute, raw_uri: &str) -> Result<RouteHandler, ()> {
     // check if static path can be met
     let mut normalized_uri = path.location.clone();
     normalized_uri.push(raw_uri.trim_start_matches(|x| x == '.' || x == '/'));
@@ -693,8 +735,8 @@ fn search_static_router(
                 } else {
                     String::new()
                 }
-            },
-            _ => String::new()
+            }
+            _ => String::new(),
         };
 
         let file = match normalized_uri.file_name() {
@@ -704,8 +746,8 @@ fn search_static_router(
                 } else {
                     String::new()
                 }
-            },
-            _ => String::new()
+            }
+            _ => String::new(),
         };
 
         if !path.white_list.is_empty()
@@ -717,12 +759,12 @@ fn search_static_router(
 
         if !path.black_list.is_empty()
             && ((!ext.is_empty() && path.black_list.contains(&ext))
-            || (!file.is_empty() && path.black_list.contains(&file)))
+                || (!file.is_empty() && path.black_list.contains(&file)))
         {
             return Err(());
         }
 
-        return Ok(RouteHandler(None, Some(normalized_uri)))
+        return Ok(RouteHandler(None, Some(normalized_uri)));
     }
 
     Ok(RouteHandler::default())
@@ -803,10 +845,7 @@ mod route_test {
             Field::new(String::from("check"), true, None),
         ];
 
-        let test = RouteMap::params_parser(
-            "/root/api/:Tes中t(a=[/]bdc)/this./:check/",
-            true,
-        );
+        let test = RouteMap::params_parser("/root/api/:Tes中t(a=[/]bdc)/this./:check/", true);
 
         assert_eq!(test.len(), base.len());
 

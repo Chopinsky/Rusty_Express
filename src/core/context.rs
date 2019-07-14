@@ -2,7 +2,7 @@
 #![allow(clippy::borrowed_box)]
 
 use crate::core::http::{Request, Response};
-use parking_lot::RwLock;
+use crate::parking_lot::RwLock;
 
 const ERR_STR: &str = "The context has not been initialized...";
 static mut CONTEXT: Option<RwLock<Box<ServerContextProvider>>> = None;
@@ -23,7 +23,9 @@ pub fn set_context(context: Box<ServerContextProvider>) {
         return;
     }
 
-    unsafe { CONTEXT = Some(RwLock::new(context)); }
+    unsafe {
+        CONTEXT = Some(RwLock::new(context));
+    }
 }
 
 /// Update the context content. This will invoke the `RwLock` to gain the exclusive access
@@ -32,11 +34,7 @@ pub fn set_context(context: Box<ServerContextProvider>) {
 /// stream.
 ///
 /// For examples, see [`https://github.com/Chopinsky/Rusty_Express/blob/master/examples/use_router.rs`]
-pub fn update_context(
-    req: &Box<Request>,
-    resp: &mut Box<Response>
-) -> Result<(), &'static str>
-{
+pub fn update_context(req: &Box<Request>, resp: &mut Box<Response>) -> Result<(), &'static str> {
     if let Some(ctx) = unsafe { CONTEXT.as_mut() } {
         let mut ctx = ctx.write();
         return ctx.update(req, resp);
@@ -54,8 +52,7 @@ pub fn update_context(
 pub fn process_with_context(
     req: &Box<Request>,
     resp: &mut Box<Response>,
-) -> Result<(), &'static str>
-{
+) -> Result<(), &'static str> {
     if let Some(ctx) = unsafe { CONTEXT.as_ref() } {
         let ctx = ctx.read();
         return ctx.process(req, resp);

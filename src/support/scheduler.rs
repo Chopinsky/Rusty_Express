@@ -4,15 +4,15 @@ use std::sync::{atomic::AtomicBool, atomic::AtomicUsize, atomic::Ordering, Arc};
 use std::thread;
 use std::time::{Duration, SystemTime};
 
-use crate::channel::{self, Receiver, SendTimeoutError, Sender};
+use crate::channel::{self, Receiver, RecvTimeoutError, SendTimeoutError, Sender};
+use crate::hashbrown::HashSet;
+use crate::parking_lot::{Mutex, Once, OnceState, ONCE_INIT};
 use crate::support::debug::{self, InfoLevel};
-use parking_lot::{Once, OnceState, ONCE_INIT, Mutex};
-use hashbrown::HashSet;
-use crossbeam_channel::RecvTimeoutError;
 
 const CHAN_SIZE: usize = 512;
-const POOL_CAP: usize = 1024;
+const POOL_CAP: usize = 512;
 const POOL_INC_STEP: usize = 4;
+const RETRY_LIMIT: u8 = 64;
 const TIMEOUT: Duration = Duration::from_millis(200);
 const YIELD_DURATION: Duration = Duration::from_millis(128);
 
@@ -31,9 +31,16 @@ impl<F: FnOnce()> FnBox for F {
 }
 
 type Job = Box<FnBox + Send + 'static>;
+
 enum Message {
     NewJob(Job),
     Terminate,
+}
+
+#[derive(Eq, PartialEq)]
+pub(crate) enum TimeoutPolicy {
+    Drop,
+    Run,
 }
 
 pub struct ThreadPool {
@@ -46,6 +53,7 @@ pub struct ThreadPool {
         Option<SystemTime>, // -> all workers are busy since this system time
     ),
     grave: Arc<Mutex<HashSet<usize>>>,
+    timeout_policy: TimeoutPolicy,
 }
 
 impl ThreadPool {
@@ -70,6 +78,7 @@ impl ThreadPool {
             auto_expansion: false,
             pressure_status: (None, None),
             grave: Arc::new(Mutex::new(HashSet::new())),
+            timeout_policy: TimeoutPolicy::Drop,
         }
     }
 
@@ -80,16 +89,20 @@ impl ThreadPool {
         }
     }
 
+    pub(crate) fn set_timeout_policy(&mut self, policy: TimeoutPolicy) {
+        self.timeout_policy = policy;
+    }
+
     pub(crate) fn is_under_pressure(&self) -> bool {
         if let Some(threshold) = self.pressure_status.0 {
             if let Some(since) = self.pressure_status.1 {
-                return since.elapsed().unwrap_or_default() > threshold
+                return since.elapsed().unwrap_or_default() > threshold;
             }
         }
 
         false
     }
-    
+
     pub(crate) fn execute<F>(&mut self, f: F) -> u8
     where
         F: FnOnce() + Send + 'static,
@@ -117,45 +130,60 @@ impl ThreadPool {
         }
     }
 
-    fn dispatch(&mut self, message: Message, retry: u8) -> u8 {
-        match self
-            .sender
-            .send_timeout(message, Duration::from_millis(2))
-        {
-            Ok(()) => {
-                // if we care about under-pressure dropping, then reset the timer
-                if self.pressure_status.0.is_some() {
-                    self.pressure_status.1 = None;
+    fn dispatch(&mut self, message: Message, mut retry: u8) -> u8 {
+        let mut retry_message = message;
+
+        while retry < RETRY_LIMIT {
+            match self
+                .sender
+                .send_timeout(retry_message, Duration::from_millis(1))
+            {
+                Ok(()) => {
+                    // if we care about under-pressure dropping, then reset the timer
+                    if self.pressure_status.0.is_some() {
+                        self.pressure_status.1 = None;
+                    }
+
+                    return 0;
                 }
-            },
-            Err(SendTimeoutError::Timeout(msg)) => {
-                debug::print("Unable to distribute the job: execution timed out, all workers are busy for too long", InfoLevel::Error);
-
-                // set the busy_since timer
-                if self.pressure_status.0.is_some() && self.pressure_status.1.is_none() {
-                    self.pressure_status.1 = Some(SystemTime::now());
-                }
-
-                if retry < 4 {
-                    self.expand();
-
+                Err(SendTimeoutError::Timeout(msg)) => {
                     debug::print(
-                        &format!("Try again for the {} times...", retry + 1),
+                            "Unable to distribute the job: execution timed out, all workers are busy for too long",
+                            InfoLevel::Warning
+                        );
+
+                    // set the busy_since timer
+                    if self.pressure_status.0.is_some() && self.pressure_status.1.is_none() {
+                        self.pressure_status.1 = Some(SystemTime::now());
+                    }
+
+                    // slow expansion -- only expands once, since many contentious threads may
+                    // try to do the same and exhaust system resources.
+                    if retry % RETRY_LIMIT / 2 == 0 {
+                        self.expand();
+                    }
+
+                    retry_message = msg;
+                    retry += 1;
+                }
+                Err(SendTimeoutError::Disconnected(_)) => {
+                    debug::print(
+                        "Unable to distribute the job: workers have been dropped: {}",
                         InfoLevel::Error,
                     );
 
-                    return self.dispatch(msg, retry + 1);
+                    return 1;
                 }
-            },
-            Err(SendTimeoutError::Disconnected(_)) => {
-                debug::print(
-                    "Unable to distribute the job: workers have been dropped: {}",
-                    InfoLevel::Error,
-                );
+            };
+        }
 
+        // timeout after waiting at least 64ms without being able to send the message
+        if self.timeout_policy == TimeoutPolicy::Run {
+            if let Message::NewJob(job) = retry_message {
+                job.call_box();
                 return 1;
-            },
-        };
+            }
+        }
 
         0
     }
@@ -166,23 +194,20 @@ impl ThreadPool {
             {
                 let mut g = self.grave.lock();
                 if g.len() > 0 {
-                    self.workers.retain(|worker| {
-                        !g.contains(&worker.id)
-                    });
+                    self.workers.retain(|worker| !g.contains(&worker.id));
                 }
 
                 g.clear();
             }
 
             // then expand with new workers
-            let start = self.workers[self.workers.len()-1].id;
+            let start = self.workers[self.workers.len() - 1].id;
             (0..POOL_INC_STEP).for_each(|id| {
-                self.workers
-                    .push(Worker::launch(
-                        start + id,
-                        self.receiver.clone(),
-                        Some(self.grave.clone()),
-                    ));
+                self.workers.push(Worker::launch(
+                    start + id,
+                    self.receiver.clone(),
+                    Some(self.grave.clone()),
+                ));
             });
         }
     }
@@ -204,7 +229,11 @@ struct Worker {
 }
 
 impl Worker {
-    fn launch(id: usize, work_queue: Receiver<Message>, grave: Option<Arc<Mutex<HashSet<usize>>>>) -> Worker {
+    fn launch(
+        id: usize,
+        work_queue: Receiver<Message>,
+        grave: Option<Arc<Mutex<HashSet<usize>>>>,
+    ) -> Worker {
         let thread = thread::spawn(move || {
             let mut idle_counter = 0;
             let mut message: Result<Message, RecvTimeoutError>;
@@ -226,7 +255,7 @@ impl Worker {
                             if idle_counter > 1 {
                                 idle_counter -= 2;
                             }
-                        },
+                        }
                         Message::Terminate => {
                             IS_CLOSING.store(true, Ordering::Release);
                             return;
@@ -285,7 +314,8 @@ static mut POOL: Option<Pool> = None;
 
 pub(crate) fn initialize_with(sizes: Vec<usize>) {
     assert_eq!(
-        ONCE.state(), OnceState::New,
+        ONCE.state(),
+        OnceState::New,
         ">>> Only 1 instance of the server is allowed per process ... <<<"
     );
 

@@ -1,20 +1,20 @@
 #![allow(dead_code)]
 
 use std::env;
+use std::fmt;
 use std::fs;
 use std::fs::File;
-use std::fmt;
+use std::io::Write;
 use std::net::SocketAddr;
 use std::path::PathBuf;
-use std::io::Write;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
 use std::time::Duration;
 
 use crate::channel::{self, SendError};
 use crate::chrono::{DateTime, Utc};
+use crate::parking_lot::{Mutex, Once, RwLock, ONCE_INIT};
 use crate::support::debug;
-use crate::parking_lot::{Once, ONCE_INIT, Mutex, RwLock};
 
 lazy_static! {
     static ref TEMP_STORE: Mutex<Vec<LogInfo>> = Mutex::new(Vec::new());
@@ -55,15 +55,14 @@ pub struct LogInfo {
 impl fmt::Display for LogInfo {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self.client {
-            Some(addr) =>
-                write!(
-                    f,
-                    "[{}] @ {} (from client {}): {}",
-                    self.level,
-                    self.time.to_string(),
-                    addr.to_string(),
-                    self.message
-                ),
+            Some(addr) => write!(
+                f,
+                "[{}] @ {} (from client {}): {}",
+                self.level,
+                self.time.to_string(),
+                addr.to_string(),
+                self.message
+            ),
             None => write!(
                 f,
                 "[{}] @ {}: {}",
@@ -92,12 +91,8 @@ struct DefaultLogWriter {}
 impl DefaultLogWriter {
     fn get_log_file(config: &LoggerConfig) -> Result<File, String> {
         match config.log_folder_path {
-            Some(ref location) if location.is_dir() => {
-                create_dump_file(config.get_id(), location)
-            },
-            _ => {
-                create_dump_file(config.get_id(), &PathBuf::from(DEFAULT_LOCATION))
-            },
+            Some(ref location) if location.is_dir() => create_dump_file(config.get_id(), location),
+            _ => create_dump_file(config.get_id(), &PathBuf::from(DEFAULT_LOCATION)),
         }
     }
 }
@@ -115,9 +110,7 @@ impl LogWriter for DefaultLogWriter {
             let mut content: String = String::new();
 
             for (count, info) in log_store.iter().enumerate() {
-                content.push_str(
-                    &format_content(&info.level, &info.message, info.time)
-                );
+                content.push_str(&format_content(&info.level, &info.message, info.time));
 
                 if count % 10 == 0 {
                     write_to_file(&mut file, &content);
@@ -171,19 +164,18 @@ impl LoggerConfig {
     pub fn set_log_folder_path(&mut self, path: &str) {
         let mut path_buff = PathBuf::new();
 
-        let location: Option<PathBuf> =
-            if path.is_empty() {
-                match env::var_os("LOG_FOLDER_PATH") {
-                    Some(p) => {
-                        path_buff.push(p);
-                        Some(path_buff)
-                    },
-                    None => None,
+        let location: Option<PathBuf> = if path.is_empty() {
+            match env::var_os("LOG_FOLDER_PATH") {
+                Some(p) => {
+                    path_buff.push(p);
+                    Some(path_buff)
                 }
-            } else {
-                path_buff.push(path);
-                Some(path_buff)
-            };
+                None => None,
+            }
+        } else {
+            path_buff.push(path);
+            Some(path_buff)
+        };
 
         if let Some(loc) = location {
             if loc.as_path().is_dir() {
@@ -212,7 +204,7 @@ pub fn log(message: &str, level: InfoLevel, client: Option<SocketAddr>) -> Resul
                 return Err(format!("Failed to log the message: {}", msg.message));
             }
 
-            return Ok(())
+            return Ok(());
         }
     }
 
@@ -220,14 +212,16 @@ pub fn log(message: &str, level: InfoLevel, client: Option<SocketAddr>) -> Resul
 }
 
 pub fn set_log_writer<T: LogWriter + 'static>(writer: T) {
-    unsafe { LOG_WRITER = Some(Box::new(writer)); }
+    unsafe {
+        LOG_WRITER = Some(Box::new(writer));
+    }
 }
 
 pub(crate) fn start(
     period: Option<u64>,
     log_folder_path: Option<&str>,
-    meta_info_provider: Option<fn(bool) -> String>)
-{
+    meta_info_provider: Option<fn(bool) -> String>,
+) {
     {
         let mut config = CONFIG.write();
 
@@ -268,10 +262,7 @@ pub(crate) fn shutdown() {
     unsafe {
         if let Some(ref tx) = SENDER.take() {
             if let Err(SendError(msg)) = tx.send(final_msg) {
-                debug::print(
-                    "Failed to log the final message",
-                    debug::InfoLevel::Warning
-                );
+                debug::print("Failed to log the final message", debug::InfoLevel::Warning);
             }
         }
     }
@@ -284,7 +275,9 @@ fn initialize() {
     ONCE.call_once(|| {
         let (tx, rx): (channel::Sender<LogInfo>, channel::Receiver<LogInfo>) = channel::bounded(16);
 
-        unsafe { SENDER = Some(tx); }
+        unsafe {
+            SENDER = Some(tx);
+        }
 
         let mut config = CONFIG.write();
 
@@ -293,7 +286,8 @@ fn initialize() {
 
             println!(
                 "The logger has started, it will refresh log to folder {:?} every {} seconds",
-                path.to_str().unwrap(), refresh
+                path.to_str().unwrap(),
+                refresh
             );
 
             start_refresh((*config).refresh_period);
@@ -314,14 +308,12 @@ fn start_refresh(period: Duration) {
             stop_refresh();
         }
 
-        REFRESH_HANDLER = Some(thread::spawn(move ||
-            loop {
-                thread::sleep(period);
-                thread::spawn(|| {
-                    dump_log();
-                });
-            }
-        ));
+        REFRESH_HANDLER = Some(thread::spawn(move || loop {
+            thread::sleep(period);
+            thread::spawn(|| {
+                dump_log();
+            });
+        }));
     }
 }
 
@@ -364,11 +356,14 @@ fn dump_log() {
                 write_to_file(&mut file, &meta_func(false));
             }
 
-            write_to_file(&mut file, &format_content(
-                &InfoLevel::Info,
-                "A dumping process is already in progress, skipping this scheduled dump.",
-                Utc::now()
-            ));
+            write_to_file(
+                &mut file,
+                &format_content(
+                    &InfoLevel::Info,
+                    "A dumping process is already in progress, skipping this scheduled dump.",
+                    Utc::now(),
+                ),
+            );
         }
 
         return;
@@ -385,13 +380,13 @@ fn dump_log() {
                 *DUMPING_RUNNING.get_mut() = true;
 
                 match writer.dump(store) {
-                    Ok(_) => {},
+                    Ok(_) => {}
                     Err(vec) => {
                         let mut res = TEMP_STORE.lock();
 
                         // can't write the result, put them back.
                         (*res).extend(vec);
-                    },
+                    }
                 }
 
                 *DUMPING_RUNNING.get_mut() = false;
@@ -407,7 +402,15 @@ fn write_to_file(file: &mut File, content: &str) {
 }
 
 fn format_content(level: &InfoLevel, message: &str, timestamp: DateTime<Utc>) -> String {
-    ["\r\n[", &level.to_string(), "] @ ", &timestamp.to_rfc3339(), ": ", message].join("")
+    [
+        "\r\n[",
+        &level.to_string(),
+        "] @ ",
+        &timestamp.to_rfc3339(),
+        ": ",
+        message,
+    ]
+    .join("")
 }
 
 fn create_dump_file(id: String, loc: &PathBuf) -> Result<File, String> {
@@ -417,12 +420,11 @@ fn create_dump_file(id: String, loc: &PathBuf) -> Result<File, String> {
         }
     }
 
-    let base =
-        if id.is_empty() {
-            [&Utc::now().to_string(), ".txt"].join("")
-        } else {
-            [&id, "-", &Utc::now().to_string(), ".txt"].join("")
-        };
+    let base = if id.is_empty() {
+        [&Utc::now().to_string(), ".txt"].join("")
+    } else {
+        [&id, "-", &Utc::now().to_string(), ".txt"].join("")
+    };
 
     let mut path = loc.to_owned();
     path.push(base);

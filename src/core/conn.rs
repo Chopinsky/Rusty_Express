@@ -13,14 +13,13 @@ use crate::core::config::ConnMetadata;
 use crate::core::http::{
     Request, RequestWriter, Response, ResponseManager, ResponseStates, ResponseWriter,
 };
-use crate::core::router::{Route, RouteSeeker, REST, RouteHandler};
+use crate::core::router::{Route, RouteHandler, RouteSeeker, REST};
 use crate::core::stream::Stream;
 use crate::support::{
-    common::write_to_buff, common::MapUpdates, debug, debug::InfoLevel,
-    shared_pool, TaskType,
+    common::write_to_buff, common::MapUpdates, debug, debug::InfoLevel, shared_pool, TaskType,
 };
 
-use crate::channel::{self, Sender, Receiver};
+use crate::channel::{self, Receiver, Sender};
 use crate::hashbrown::HashMap;
 
 static HEADER_END: [u8; 2] = [13, 10];
@@ -47,27 +46,32 @@ pub(crate) trait StreamHandler {
 impl StreamHandler for Stream {
     fn process(mut self, is_tls: bool) {
         // split the stream such that we can read while writing latest responses
-        let mut reader_stream =
-            match self.try_clone() {
-                Ok(stream) => {
-                    // get the stream clone for async-reader
-                    stream
-                },
-                Err(_) => {
-                    // failed to clone(?) and now try the old-fashion way to serve
-                    async_handler::handle_connection(self);
-                    return;
-                },
-            };
+        let mut reader_stream = match self.try_clone() {
+            Ok(stream) => {
+                // get the stream clone for async-reader
+                stream
+            }
+            Err(_) => {
+                // failed to clone(?) and now try the old-fashion way to serve
+                async_handler::handle_connection(self);
+                return;
+            }
+        };
 
         // pipeline-1: keep listening to the reader stream
         let (sender, receiver) = channel::bounded(6);
-        shared_pool::run(move || reader_stream.recv_requests(sender), TaskType::StreamLoader);
+        shared_pool::run(
+            move || reader_stream.recv_requests(sender),
+            TaskType::StreamLoader,
+        );
 
         // pipeline-2: once receiving a request, parse and serve, then send the response back to be written back
         let (resp_tx, resp_rx) = channel::bounded(8);
         let addr = self.peer_addr();
-        shared_pool::run(move || handle_requests(receiver, resp_tx, addr.ok(), is_tls), TaskType::Parser);
+        shared_pool::run(
+            move || handle_requests(receiver, resp_tx, addr.ok(), is_tls),
+            TaskType::Parser,
+        );
 
         // pipeline-end: receive the response, write them back
         self.send_responses(resp_rx);
@@ -107,7 +111,8 @@ impl PipelineWorker for Stream {
                             chan.send(Ok(raw_req.clone())).unwrap_or_default();
                         } else {
                             // send a heart-beat
-                            chan.send(Err(StreamException::HeartBeat)).unwrap_or_default();
+                            chan.send(Err(StreamException::HeartBeat))
+                                .unwrap_or_default();
                         };
 
                         // reader shall close because keep-alive header is not `keep-alive` or `close`
@@ -137,10 +142,11 @@ impl PipelineWorker for Stream {
                     } else {
                         // failed at string conversion, quit reader stream
                         debug::print("Failed to parse the request stream", InfoLevel::Warning);
-                        chan.send(Err(StreamException::ReadStreamFailure)).unwrap_or_default();
+                        chan.send(Err(StreamException::ReadStreamFailure))
+                            .unwrap_or_default();
                         break;
                     }
-                },
+                }
                 Err(e) => {
                     // handle read errors. If timeout, meaning we've waited long enough for more requests
                     // but none are received, close the stream now.
@@ -150,11 +156,12 @@ impl PipelineWorker for Stream {
                             InfoLevel::Warning,
                         );
 
-                        chan.send(Err(StreamException::ReadStreamFailure)).unwrap_or_default();
+                        chan.send(Err(StreamException::ReadStreamFailure))
+                            .unwrap_or_default();
                     }
 
                     break;
-                },
+                }
             };
         }
 
@@ -196,9 +203,10 @@ impl PipelineWorker for Stream {
         if !temp_store.is_empty() {
             for (id, resp) in temp_store.into_iter() {
                 while id > curr_id {
-                    if self.write_back(
-                        build_err_response(map_err_code(StreamException::EmptyRequest))
-                    ) != 0 {
+                    if self.write_back(build_err_response(map_err_code(
+                        StreamException::EmptyRequest,
+                    ))) != 0
+                    {
                         return;
                     }
 
@@ -250,8 +258,7 @@ fn handle_requests(
     outbox: Sender<RespSeqBundle>,
     peer_addr: Option<SocketAddr>,
     is_tls: bool,
-)
-{
+) {
     let mut req_id = 1;
     let outbox = Arc::new(outbox);
 
@@ -262,18 +269,18 @@ fn handle_requests(
                     Ok(id) => req_id = id,
                     Err(_) => return,
                 };
-            },
+            }
             Err(err) => {
                 if err != StreamException::HeartBeat {
                     // if only a read stream heart-beat, meaning we're still waiting for new requests
                     // to come, just continue with the listener.
-                    outbox.send(
-                        RespSeqBundle(0, build_err_response(map_err_code(err)))
-                    ).unwrap_or_default();
+                    outbox
+                        .send(RespSeqBundle(0, build_err_response(map_err_code(err))))
+                        .unwrap_or_default();
                 }
 
                 return;
-            },
+            }
         }
     }
 }
@@ -283,13 +290,12 @@ fn serve_connection(
     base_id: usize,
     outbox: &Arc<Sender<RespSeqBundle>>,
     peer_addr: Option<SocketAddr>,
-    is_tls: bool
-) -> Result<usize, ErrorKind>
-{
+    is_tls: bool,
+) -> Result<usize, ErrorKind> {
     // prepare the request source string to be parsed
     let mut next_id = base_id;
     if source.is_empty() {
-        return send_err(next_id, outbox,StreamException::EmptyRequest);
+        return send_err(next_id, outbox, StreamException::EmptyRequest);
     }
 
     // now parse the request and find the proper request handler
@@ -302,24 +308,24 @@ fn serve_connection(
     for raw_req in source.split("\r\n\r\n") {
         // if parsing the body from the next trunk, append the body then start processing the request
         // otherwise, just continue with parsing the new request.
-        let next: &str =
-            (if body_size > 0 && callback.is_some() {
-                // append the body and finishing off handing over the last request.
-                let (body, remainder): (&str, &str) = raw_req.split_at(body_size);
-                request.set_body(body.to_owned());
+        let next: &str = (if body_size > 0 && callback.is_some() {
+            // append the body and finishing off handing over the last request.
+            let (body, remainder): (&str, &str) = raw_req.split_at(body_size);
+            request.set_body(body.to_owned());
 
-                process_request(next_id, &mut request, &mut callback, outbox, is_tls);
-                if to_close {
-                    return Err(ErrorKind::ConnectionAborted);
-                }
+            process_request(next_id, &mut request, &mut callback, outbox, is_tls);
+            if to_close {
+                return Err(ErrorKind::ConnectionAborted);
+            }
 
-                // send the remainder work to finish parsing and processing
-                next_id += 1;
-                remainder
-            } else {
-                // pick the new request to work with.
-                raw_req
-            }).trim_matches(|c| c == '\r' || c == '\n' || c == '\u{0}');
+            // send the remainder work to finish parsing and processing
+            next_id += 1;
+            remainder
+        } else {
+            // pick the new request to work with.
+            raw_req
+        })
+        .trim_matches(|c| c == '\r' || c == '\n' || c == '\u{0}');
 
         if next.is_empty() {
             // reset and continue
@@ -371,12 +377,17 @@ fn serve_connection(
 }
 
 fn send_err(
-    base_id: usize, outbox: &Arc<Sender<RespSeqBundle>>, err: StreamException,
-) -> Result<usize, ErrorKind>
-{
-    if outbox.send(
-        RespSeqBundle(base_id, build_err_response(map_err_code(err)))
-    ).is_err() {
+    base_id: usize,
+    outbox: &Arc<Sender<RespSeqBundle>>,
+    err: StreamException,
+) -> Result<usize, ErrorKind> {
+    if outbox
+        .send(RespSeqBundle(
+            base_id,
+            build_err_response(map_err_code(err)),
+        ))
+        .is_err()
+    {
         return Err(ErrorKind::ConnectionAborted);
     }
 
@@ -389,23 +400,22 @@ fn process_request(
     callback: &mut RouteHandler,
     outbox: &Arc<Sender<RespSeqBundle>>,
     is_tls: bool,
-)
-{
+) {
     let r = mem::replace(request, Box::new(Request::new()));
     let c = mem::replace(callback, RouteHandler::default());
     let outbox_clone = Arc::clone(outbox);
 
-    shared_pool::run(move || {
-        outbox_clone.send(
-            RespSeqBundle(next_id, build_request(r, c, is_tls))
-        ).unwrap_or_default();
-    }, TaskType::Request);
+    shared_pool::run(
+        move || {
+            outbox_clone
+                .send(RespSeqBundle(next_id, build_request(r, c, is_tls)))
+                .unwrap_or_default();
+        },
+        TaskType::Request,
+    );
 }
 
-fn build_request(
-    request: Box<Request>, mut callback: RouteHandler, is_tls: bool,
-) -> Box<Response>
-{
+fn build_request(request: Box<Request>, mut callback: RouteHandler, is_tls: bool) -> Box<Response> {
     ////////////////////////////
     // >>> Build Response <<< /
     ///////////////////////////
@@ -447,7 +457,7 @@ fn parse_request_sync(source: &str, request: &mut Box<Request>) -> RouteHandler 
                 }
 
                 handler = res.0;
-            },
+            }
             1 => parse_remainder_sync(info, request),
             _ => break,
         }
@@ -456,7 +466,10 @@ fn parse_request_sync(source: &str, request: &mut Box<Request>) -> RouteHandler 
     handler
 }
 
-fn parse_start_line_sync(source: &str, req: &mut Box<Request>) -> (RouteHandler, HashMap<String, String>) {
+fn parse_start_line_sync(
+    source: &str,
+    req: &mut Box<Request>,
+) -> (RouteHandler, HashMap<String, String>) {
     let mut raw_scheme = String::new();
     let mut raw_fragment = String::new();
 
@@ -473,7 +486,7 @@ fn parse_start_line_sync(source: &str, req: &mut Box<Request>) -> (RouteHandler,
                     "POST" => REST::POST,
                     "DELETE" => REST::DELETE,
                     "OPTIONS" => REST::OPTIONS,
-                    _ => REST::OTHER(info.to_uppercase())
+                    _ => REST::OTHER(info.to_uppercase()),
                 };
 
                 req.method = base_method;
@@ -484,11 +497,11 @@ fn parse_start_line_sync(source: &str, req: &mut Box<Request>) -> (RouteHandler,
 
                 // parse the path and store the info back
                 parse_path(info, &mut req.uri, &mut raw_scheme, &mut raw_fragment)
-            },
+            }
             2 => {
                 // write the http version back to the header
                 req.write_header("HTTP_VERSION", info, true)
-            },
+            }
             _ => {
                 break;
             }
@@ -531,13 +544,7 @@ fn parse_remainder_sync(info: &str, req: &mut Box<Request>) {
             continue;
         }
 
-        parse_headers(
-            line,
-            is_body,
-            &mut header,
-            &mut cookie,
-            &mut body,
-        );
+        parse_headers(line, is_body, &mut header, &mut cookie, &mut body);
     }
 
     req.set_headers(header);
@@ -565,8 +572,7 @@ fn parse_headers(
     header: &mut HashMap<String, String>,
     cookie: &mut HashMap<String, String>,
     body: &mut String,
-)
-{
+) {
     if !is_body {
         let mut header_key: &str = "";
         let mut is_cookie = false;
@@ -728,20 +734,20 @@ pub(crate) fn send_err_resp(mut stream: Stream, err_code: u16) {
 }
 
 mod async_handler {
-    use std::io::{prelude::*, BufWriter};
+    use super::*;
+    use std::io::BufWriter;
     use std::net::Shutdown;
     use std::str;
     use std::time::Duration;
-    use super::*;
 
-    use crate::core::http::{
-        Request, RequestWriter, Response, ResponseManager, ResponseStates, ResponseWriter,
+    use crate::core::{
+        http::{Request, RequestWriter, Response, ResponseManager, ResponseStates, ResponseWriter},
+        router::{Route, RouteHandler, RouteSeeker, REST},
+        stream::Stream,
     };
-    use crate::core::router::{Route, RouteSeeker, REST, RouteHandler};
-    use crate::core::stream::Stream;
+
     use crate::support::{
-        common::flush_buffer, common::write_to_buff, debug, debug::InfoLevel,
-        shared_pool, TaskType,
+        common::flush_buffer, common::write_to_buff, debug, debug::InfoLevel, shared_pool, TaskType,
     };
 
     use crate::channel;
@@ -766,7 +772,7 @@ mod async_handler {
                 );
 
                 return write_to_stream(stream, build_err_response(status));
-            },
+            }
             Ok(cb) => cb,
         };
 
@@ -779,8 +785,7 @@ mod async_handler {
         request: Box<Request>,
         mut callback: RouteHandler,
         is_tls: bool,
-    ) -> ExecCode
-    {
+    ) -> ExecCode {
         let mut response = initialize_response(is_tls);
         match request.header("connection") {
             Some(ref val) if val.eq(&String::from("close")) => response.can_keep_alive(false),
@@ -802,7 +807,7 @@ mod async_handler {
 
     fn write_to_stream(mut stream: Stream, mut response: Box<Response>) -> ExecCode {
         let s_clone = if response.to_keep_alive() {
-            match  stream.try_clone() {
+            match stream.try_clone() {
                 Ok(s) => Some(s),
                 _ => None,
             }
@@ -857,7 +862,7 @@ mod async_handler {
         let result = parse_request(trimmed, &mut request);
 
         if result.is_none() {
-            return Err(StreamException::ServiceUnavailable)
+            return Err(StreamException::ServiceUnavailable);
         }
 
         if let Ok(client) = stream.peer_addr() {
@@ -889,7 +894,8 @@ mod async_handler {
                         if len < 512 {
                             // trim end if we're at the end of the request stream
                             raw_req.push_str(
-                                req_slice.trim_end_matches(|c| c == '\r' || c == '\n' || c == '\u{0}')
+                                req_slice
+                                    .trim_end_matches(|c| c == '\r' || c == '\n' || c == '\u{0}'),
                             );
 
                             return Ok(raw_req);
@@ -901,7 +907,7 @@ mod async_handler {
                         debug::print("Failed to parse the request stream", InfoLevel::Warning);
                         return Err(StreamException::ReadStreamFailure);
                     }
-                },
+                }
                 Err(e) => {
                     debug::print(
                         &format!("Reading stream disconnected -- {}", e),
@@ -909,7 +915,7 @@ mod async_handler {
                     );
 
                     return Err(StreamException::ReadStreamFailure);
-                },
+                }
             };
         }
     }
@@ -937,31 +943,28 @@ mod async_handler {
                     let mut cookie: HashMap<String, String> = HashMap::new();
                     let mut body: String = String::with_capacity(1024);
 
-                    shared_pool::run(move || {
-                        let mut is_body = false;
-                        for line in remainder.lines() {
-                            if line.is_empty() && !is_body {
-                                // meeting the empty line dividing header and body
-                                is_body = true;
-                                continue;
+                    shared_pool::run(
+                        move || {
+                            let mut is_body = false;
+                            for line in remainder.lines() {
+                                if line.is_empty() && !is_body {
+                                    // meeting the empty line dividing header and body
+                                    is_body = true;
+                                    continue;
+                                }
+
+                                parse_headers(line, is_body, &mut header, &mut cookie, &mut body);
                             }
 
-                            parse_headers(
-                                line,
-                                is_body,
-                                &mut header,
-                                &mut cookie,
-                                &mut body,
-                            );
-                        }
-
-                        if tx_remainder.send((header, cookie, body)).is_err() {
-                            debug::print(
-                                "Unable to construct the remainder of the request.",
-                                InfoLevel::Error,
-                            );
-                        }
-                    }, TaskType::Request);
+                            if tx_remainder.send((header, cookie, body)).is_err() {
+                                debug::print(
+                                    "Unable to construct the remainder of the request.",
+                                    InfoLevel::Error,
+                                );
+                            }
+                        },
+                        TaskType::Request,
+                    );
 
                     remainder_chan = Some(rx_remainder)
                 }
@@ -1006,7 +1009,7 @@ mod async_handler {
                         "POST" => REST::POST,
                         "DELETE" => REST::DELETE,
                         "OPTIONS" => REST::OPTIONS,
-                        _ => REST::OTHER(info.to_uppercase())
+                        _ => REST::OTHER(info.to_uppercase()),
                     };
 
                     req.method = base_method;
@@ -1017,11 +1020,11 @@ mod async_handler {
 
                     // now parse the path info and store the main uri back to the request
                     parse_path(info, &mut req.uri, &mut raw_scheme, &mut raw_fragment)
-                },
+                }
                 2 => {
                     // write the http version to the header
                     req.write_header("HTTP_VERSION", info, true)
-                },
+                }
                 _ => {
                     break;
                 }

@@ -2,8 +2,7 @@
 
 use std::collections;
 use std::fs::File;
-use std::io::prelude::*;
-use std::io::{BufReader, BufWriter};
+use std::io::{prelude::*, BufReader, BufWriter};
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::str;
@@ -12,13 +11,15 @@ use std::thread;
 use std::time::Duration;
 
 use crate::channel;
-use crate::core::config::{ConnMetadata, EngineContext, ServerConfig, ViewEngineParser};
-use crate::core::cookie::*;
-use crate::core::router::REST;
-use crate::core::stream::Stream;
+use crate::chrono::prelude::*;
+use crate::core::{
+    config::{ConnMetadata, EngineContext, ServerConfig, ViewEngineParser},
+    cookie::*,
+    router::REST,
+    stream::Stream,
+};
+use crate::hashbrown::{hash_map::Iter, HashMap};
 use crate::support::{common::*, debug, debug::InfoLevel, shared_pool, TaskType};
-use chrono::prelude::*;
-use hashbrown::{hash_map::Iter, HashMap};
 
 static FOUR_OH_FOUR: &'static str = include_str!("../default/404.html");
 static FOUR_OH_ONE: &'static str = include_str!("../default/401.html");
@@ -28,7 +29,10 @@ static VERSION: &'static str = env!("CARGO_PKG_VERSION");
 static RESP_TIMEOUT: Duration = Duration::from_millis(64);
 static LONG_CONN_TIMEOUT: Duration = Duration::from_secs(8);
 
-type BodyChan = (Option<Arc<channel::Sender<(String, u16)>>>, Option<channel::Receiver<(String, u16)>>);
+type BodyChan = (
+    Option<Arc<channel::Sender<(String, u16)>>>,
+    Option<channel::Receiver<(String, u16)>>,
+);
 type NotifyChan = Option<(channel::Sender<String>, channel::Receiver<String>)>;
 
 //TODO: internal registered cache?
@@ -366,11 +370,7 @@ impl Response {
         let mut header = write_header_status(self.status, self.has_contents());
 
         // other header field-value pairs
-        write_headers(
-            &self.header,
-            &mut header,
-            self.to_keep_alive(),
-        );
+        write_headers(&self.header, &mut header, self.to_keep_alive());
 
         if !self.content_type.is_empty() {
             header.reserve_exact(16 + self.content_type.len());
@@ -591,14 +591,15 @@ impl ResponseWriter for Response {
                 match &value.to_lowercase()[..] {
                     "keep-alive" if self.keep_alive == KeepAliveStatus::NotSet => {
                         self.keep_alive = KeepAliveStatus::KeepAlive
-                    },
+                    }
                     "tls" => self.keep_alive = KeepAliveStatus::TlsConn,
                     "forbidden" => self.keep_alive = KeepAliveStatus::Forbidden,
-                    _ => { /* Otherwise, don't update the keep_alive field */ },
+                    _ => { /* Otherwise, don't update the keep_alive field */ }
                 }
             }
             _ => {
-                self.header.add(field, value.to_owned(), allow_replace, false);
+                self.header
+                    .add(field, value.to_owned(), allow_replace, false);
             }
         };
     }
@@ -785,11 +786,17 @@ impl ResponseWriter for Response {
     }
 
     fn keep_alive(&mut self, to_keep: bool) {
-        if self.keep_alive == KeepAliveStatus::TlsConn || self.keep_alive == KeepAliveStatus::Forbidden {
+        if self.keep_alive == KeepAliveStatus::TlsConn
+            || self.keep_alive == KeepAliveStatus::Forbidden
+        {
             return;
         }
 
-        self.keep_alive = if to_keep { KeepAliveStatus::KeepAlive } else { KeepAliveStatus::NotSet };
+        self.keep_alive = if to_keep {
+            KeepAliveStatus::KeepAlive
+        } else {
+            KeepAliveStatus::NotSet
+        };
     }
 
     fn set_content_type(&mut self, content_type: &str) {
@@ -1035,50 +1042,56 @@ fn open_file(file_path: &PathBuf, buf: &mut String) -> u16 {
 }
 
 fn open_file_async(file_path: PathBuf, tx: Arc<channel::Sender<(String, u16)>>) {
-    shared_pool::run(move || {
-        assert!(file_path.is_file());
+    shared_pool::run(
+        move || {
+            assert!(file_path.is_file());
 
-        // try open the file
-        if let Ok(file) = File::open(file_path) {
-            let mut buf_reader = BufReader::new(file);
-            let mut buf = [0u8; 512];
+            // try open the file
+            if let Ok(file) = File::open(file_path) {
+                let mut buf_reader = BufReader::new(file);
+                let mut buf = [0u8; 512];
 
-            loop {
-                match buf_reader.read(&mut buf) {
-                    Ok(len) => {
-                        if let Ok(content) = str::from_utf8(&buf[..len]) {
-                            if let Err(e) = tx.send((content.to_owned(), 200)) {
-                                debug::print(
-                                    &format!("Unable to write the file to the stream: {}", e),
-                                    InfoLevel::Warning,
-                                );
+                loop {
+                    match buf_reader.read(&mut buf) {
+                        Ok(len) => {
+                            if let Ok(content) = str::from_utf8(&buf[..len]) {
+                                if let Err(e) = tx.send((content.to_owned(), 200)) {
+                                    debug::print(
+                                        &format!("Unable to write the file to the stream: {}", e),
+                                        InfoLevel::Warning,
+                                    );
+                                    break;
+                                }
+                            } else {
+                                if let Err(e) = tx.send((String::new(), 500)) {
+                                    debug::print(
+                                        &format!("Unable to write the file to the stream: {}", e),
+                                        InfoLevel::Warning,
+                                    );
+                                }
+
                                 break;
                             }
-                        } else {
-                            if let Err(e) = tx.send((String::new(), 500)) {
-                                debug::print(
-                                    &format!("Unable to write the file to the stream: {}", e),
-                                    InfoLevel::Warning,
-                                );
+
+                            if len < 512 {
+                                break;
                             }
-
+                        }
+                        Err(e) => {
+                            debug::print(
+                                &format!("Unable to read file: {}", e),
+                                InfoLevel::Warning,
+                            );
                             break;
                         }
-
-                        if len < 512 {
-                            break;
-                        }
-                    },
-                    Err(e) => {
-                        debug::print(&format!("Unable to read file: {}", e), InfoLevel::Warning);
-                        break;
-                    },
+                    }
                 }
+            } else {
+                debug::print("Unable to open requested file for path", InfoLevel::Warning);
             }
-        } else {
-            debug::print("Unable to open requested file for path", InfoLevel::Warning);
-        }
-    }, TaskType::Response);
+        },
+        TaskType::Response,
+    );
 }
 
 fn get_status(status: u16) -> String {

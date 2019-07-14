@@ -4,17 +4,21 @@ use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
-use crate::core::config::{ServerConfig, ViewEngine, ViewEngineDefinition};
-use crate::core::conn::*;
-use crate::core::router::*;
-use crate::core::states::*;
-use crate::core::stream::*;
-use crate::support::debug::{self, InfoLevel};
-use crate::support::session::*;
-use crate::support::{shared_pool, ThreadPool};
 use crate::channel;
-use hashbrown::HashMap;
-use native_tls::TlsAcceptor;
+use crate::core::{
+    config::{ServerConfig, ViewEngine, ViewEngineDefinition},
+    conn::*,
+    router::*,
+    states::*,
+    stream::*,
+};
+use crate::hashbrown::HashMap;
+use crate::native_tls::TlsAcceptor;
+use crate::support::{
+    debug::{self, InfoLevel},
+    session::*,
+    shared_pool, ThreadPool, TimeoutPolicy,
+};
 
 //TODO: Impl middlewear
 
@@ -80,12 +84,7 @@ impl HttpServer {
     ///     controller.send(ControlMessage::Terminate);
     /// });
     /// ```
-    pub fn listen_and_serve(
-        &mut self,
-        port: u16,
-        callback: Option<fn(AsyncController)>,
-    )
-    {
+    pub fn listen_and_serve(&mut self, port: u16, callback: Option<fn(AsyncController)>) {
         // initialize the debug service, which setup the debug level based on the environment variable
         debug::initialize();
 
@@ -99,21 +98,20 @@ impl HttpServer {
         });
 
         // obtain the control message courier service and start the callback
-        let (control_handler, controller_tx) =
-            if let Some(cb) = callback {
-                let sender = self.state.get_courier_sender();
-                let (tx, rx) = channel::bounded(1);
+        let (control_handler, controller_tx) = if let Some(cb) = callback {
+            let sender = self.state.get_courier_sender();
+            let (tx, rx) = channel::bounded(1);
 
-                let handler = thread::spawn(move || {
-                    // wait for server to launch before it's ready to take control messages.
-                    let _ = rx.recv();
-                    cb(sender);
-                });
+            let handler = thread::spawn(move || {
+                // wait for server to launch before it's ready to take control messages.
+                let _ = rx.recv();
+                cb(sender);
+            });
 
-                (Some(handler), Some(tx))
-            } else {
-                (None, None)
-            };
+            (Some(handler), Some(tx))
+        } else {
+            (None, None)
+        };
 
         // launch the service, now this will block until the server is shutdown
         println!("Listening for connections on port {}", port);
@@ -180,6 +178,7 @@ impl HttpServer {
 
         let mut workers_pool = Self::setup_worker_pools(pool_size);
         workers_pool.toggle_auto_expansion(true, None);
+        workers_pool.set_timeout_policy(TimeoutPolicy::Run);
 
         // notify the server launcher that we're ready to serve incoming streams
         if let Some(sender) = cb_sig.take() {
@@ -230,7 +229,7 @@ impl HttpServer {
             match stream {
                 Ok(s) => {
                     self.handle_stream(s, &mut workers_pool, acceptor.clone());
-                },
+                }
                 Err(e) => debug::print(
                     &format!("Failed to receive the upcoming stream: {}", e)[..],
                     InfoLevel::Warning,
@@ -245,11 +244,14 @@ impl HttpServer {
         self.state.toggle_running_state(false);
     }
 
-    fn handle_stream(&self, stream: TcpStream, workers_pool: &mut ThreadPool, acceptor: Option<Arc<TlsAcceptor>>) {
+    fn handle_stream(
+        &self,
+        stream: TcpStream,
+        workers_pool: &mut ThreadPool,
+        acceptor: Option<Arc<TlsAcceptor>>,
+    ) {
         let read_timeout = u64::from(self.config.get_read_timeout());
         let write_timeout = u64::from(self.config.get_write_timeout());
-
-        //TODO: if allowing dropping if busy for too long, handle that situation
 
         workers_pool.execute(move || {
             stream.set_timeout(read_timeout, write_timeout);
@@ -258,13 +260,13 @@ impl HttpServer {
                 match a.accept(stream) {
                     Ok(s) => {
                         Stream::Tls(Box::new(s)).process(true);
-                    },
+                    }
                     Err(e) => debug::print(
                         &format!("Failed to receive the upcoming stream: {:?}", e)[..],
                         InfoLevel::Error,
                     ),
                 };
-            } else{
+            } else {
                 Stream::Tcp(stream).process(false);
             }
         });
@@ -337,21 +339,28 @@ pub trait ServerDef {
 }
 
 impl ServerDef for HttpServer {
+    /// Replace the default server router with the pre-built one. This is a wrapper over
+    /// `Route::use_router`, which will achieve same goal.
     fn def_router(&mut self, router: Route) {
         Route::use_router(router);
     }
 
+    /// Set the pool size. Note that this API is only functional before launching the server. After
+    /// the server has started and been running, `set_pool_size` will be no-op.
     fn set_pool_size(&mut self, size: usize) {
         if self.state.is_running() {
             eprintln!(
                 "Change size of the thread pool is not supported while the server is running"
             );
+
             return;
         }
 
         self.config.set_pool_size(size);
     }
 
+    /// Set the read timeout for the handler. If no more incoming data stream are detected on the
+    /// socket, the read stream will be closed.
     fn set_read_timeout(&mut self, timeout: u16) {
         self.config.set_read_timeout(timeout);
 
@@ -360,6 +369,8 @@ impl ServerDef for HttpServer {
         }
     }
 
+    /// Set the write timeout for the handler. If no more outgoing data stream are detected on the
+    /// socket, the write stream will be closed.
     fn set_write_timeout(&mut self, timeout: u16) {
         self.config.set_write_timeout(timeout);
 
@@ -368,14 +379,21 @@ impl ServerDef for HttpServer {
         }
     }
 
+    /// Define headers and their contents that shall go along with every http response. This will
+    /// remove any existing default headers and corresponding contents.
     fn def_default_response_header(&mut self, header: HashMap<String, String>) {
         ServerConfig::use_default_header(header);
     }
 
+    /// Set or update default headers and their contents that shall go along with every http response.
+    /// If a default header with same name exists, the new contents will replace the existing one.
     fn set_default_response_header(&mut self, field: String, value: String) {
         ServerConfig::set_default_header(field, value, true);
     }
 
+    /// If using the `session` feature, this API will automatically purge stale session stores, such
+    /// that we can reclaim resources that's no longer in use.
+    #[cfg(feature = "session")]
     fn enable_session_auto_clean(&mut self, auto_clean_period: Duration) {
         self.config.set_session_auto_clean_period(auto_clean_period);
 
@@ -384,6 +402,8 @@ impl ServerDef for HttpServer {
         }
     }
 
+    /// If using the `session` feature, this API will turn off the periodic session store clean up
+    #[cfg(feature = "session")]
     fn disable_session_auto_clean(&mut self) {
         self.config.clear_session_auto_clean();
 
@@ -425,8 +445,10 @@ impl Router for HttpServer {
     }
 
     fn other(&mut self, method: &str, uri: RequestPath, callback: Callback) -> &mut Self {
-        Route::add_route(REST::OTHER(
-            method.to_uppercase()), uri, RouteHandler::new(Some(callback), None)
+        Route::add_route(
+            REST::OTHER(method.to_uppercase()),
+            uri,
+            RouteHandler::new(Some(callback), None),
         );
 
         self
@@ -458,6 +480,17 @@ impl Router for HttpServer {
     fn use_custom_static(&mut self, uri: RequestPath, path: PathBuf) -> &mut Self {
         Route::add_static(REST::GET, Some(uri), path);
         self
+    }
+
+    fn case_sensitive(&mut self, allow_case: bool, method: Option<REST>) {
+        if method.is_none() {
+            Route::all_case_sensitive(allow_case);
+            return;
+        }
+
+        if let Some(m) = method {
+            Route::case_sensitive(&m, allow_case);
+        }
     }
 }
 

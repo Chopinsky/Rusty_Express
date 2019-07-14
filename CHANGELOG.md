@@ -2,6 +2,8 @@
 ## 0.4.3
 - This version starts to support use of TLS connections.
 - Fixing bugs in the router when using the static path.
+- Now router also allow callers to define case sensitive routes. The default behavior
+remains the same, that we will treat all routing path as lower cased.  
 - The server-launching callback function will take a struct wrapper for the control
 message sender, the `AsyncController`. 
 

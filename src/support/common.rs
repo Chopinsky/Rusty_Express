@@ -1,8 +1,8 @@
 use std::io::{BufWriter, Write};
 
 use crate::core::stream::Stream;
-use crate::support::debug::{self, InfoLevel};
 use crate::hashbrown::HashMap;
+use crate::support::debug::{self, InfoLevel};
 
 pub trait MapUpdates<T> {
     fn add(&mut self, field: &str, value: T, allow_replace: bool, allow_case: bool) -> Option<T>;

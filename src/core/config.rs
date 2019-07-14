@@ -1,18 +1,19 @@
 #![allow(dead_code)]
 
-use crate::hashbrown::HashMap;
-use crate::num_cpus;
-use crate::support::common::*;
-use parking_lot::RwLock;
 use std::cmp;
 use std::time::Duration;
 
+use crate::hashbrown::HashMap;
+use crate::num_cpus;
+use crate::parking_lot::RwLock;
+use crate::support::common::*;
+
 //TODO: load config from file, e.g. config.toml?
 
-lazy_static!(
+lazy_static! {
     static ref VIEW_ENGINES: RwLock<HashMap<String, Box<ViewEngine>>> = RwLock::new(HashMap::new());
     static ref METADATA_STORE: RwLock<ConnMetadata> = RwLock::new(ConnMetadata::new());
-);
+}
 
 pub struct ServerConfig {
     pool_size: usize,
@@ -103,7 +104,7 @@ impl ServerConfig {
 impl Default for ServerConfig {
     fn default() -> Self {
         ServerConfig {
-            pool_size: cmp::max(4*num_cpus::get(), 8),
+            pool_size: cmp::max(4 * num_cpus::get(), 8),
             read_timeout: 512,
             write_timeout: 0,
             use_session_autoclean: false,

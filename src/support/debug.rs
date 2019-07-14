@@ -1,6 +1,7 @@
 use std::env;
-use parking_lot::{Once, ONCE_INIT};
-use chrono::prelude::{DateTime, Utc};
+
+use crate::chrono::prelude::{DateTime, Utc};
+use crate::parking_lot::{Once, ONCE_INIT};
 
 static ONCE: Once = ONCE_INIT;
 static mut DEBUG_LEVEL: InfoLevel = InfoLevel::Silent;

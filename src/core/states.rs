@@ -1,13 +1,14 @@
 #![allow(dead_code)]
 
+use std::net::{Shutdown, SocketAddr, TcpStream};
 use std::thread::JoinHandle;
-use std::net::{SocketAddr, TcpStream, Shutdown};
 
-use super::config::ServerConfig;
-use super::router::Route;
-use crate::channel::{self, TryRecvError, SendError};
-use crate::support::debug::{self, InfoLevel};
-use crate::support::session::*;
+use crate::channel::{self, SendError, TryRecvError};
+use crate::core::{config::ServerConfig, router::Route};
+use crate::support::{
+    debug::{self, InfoLevel},
+    session::*,
+};
 
 pub enum ControlMessage {
     Terminate,
@@ -33,10 +34,10 @@ impl AsyncController {
                 if let Ok(client) = TcpStream::connect(self.1) {
                     let _ = client.shutdown(Shutdown::Both);
                 }
-            },
+            }
             other_msg => {
                 self.0.send(other_msg)?;
-            },
+            }
         };
 
         Ok(())
@@ -88,7 +89,10 @@ impl ServerStates {
         AsyncController::new(self.courier_channel.0.clone(), self.socket_addr)
     }
 
-    pub(crate) fn courier_deliver(&self, msg: ControlMessage) -> Result<(), channel::SendError<ControlMessage>> {
+    pub(crate) fn courier_deliver(
+        &self,
+        msg: ControlMessage,
+    ) -> Result<(), channel::SendError<ControlMessage>> {
         self.courier_channel.0.send(msg)
     }
 

@@ -39,12 +39,12 @@ pub mod prelude {
         EngineContext, PageGenerator, ServerConfig, ViewEngine, ViewEngineDefinition,
     };
 
-    pub use crate::core::server::{HttpServer, ServerDef};
     pub use crate::core::context as ServerContext;
     pub use crate::core::context::ContextProvider;
     pub use crate::core::cookie::*;
     pub use crate::core::http::{Request, RequestWriter, Response, ResponseStates, ResponseWriter};
     pub use crate::core::router::{RequestPath, Route, Router, REST};
+    pub use crate::core::server::{HttpServer, ServerDef};
     pub use crate::core::states::{AsyncController, ControlMessage};
 
     #[cfg(feature = "session")]

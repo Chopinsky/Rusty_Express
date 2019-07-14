@@ -1,9 +1,10 @@
 #![allow(dead_code)]
 
+use std::path::PathBuf;
+
 use crate::core::router::{Callback, RouteHandler};
 use crate::hashbrown::HashMap;
 use crate::regex::Regex;
-use std::path::PathBuf;
 
 #[derive(Debug)]
 pub(crate) struct Field {
@@ -75,8 +76,7 @@ impl Node {
         mut segments: Vec<Field>,
         callback: Option<Callback>,
         location: Option<PathBuf>,
-    )
-    {
+    ) {
         debug_assert!(callback.is_some() || location.is_some());
 
         let head = match segments.pop() {
@@ -124,14 +124,16 @@ impl Node {
     }
 
     fn build_new_child(
-        field: Field, segments: Vec<Field>, callback: Option<Callback>, loc: Option<PathBuf>
-    ) -> Node
-    {
+        field: Field,
+        segments: Vec<Field>,
+        callback: Option<Callback>,
+        loc: Option<PathBuf>,
+    ) -> Node {
         match segments.len() {
             0 => {
                 // leaf node
                 Node::new(field, callback, loc)
-            },
+            }
             _ => {
                 // branch node
                 let mut node = Node::new(field, None, None);
@@ -161,11 +163,7 @@ pub(crate) struct RouteTrie {
 impl RouteTrie {
     pub(crate) fn initialize() -> Self {
         RouteTrie {
-            root: Node::new(
-                Field::new(String::from("/"), false, None),
-                None,
-                None
-            ),
+            root: Node::new(Field::new(String::from("/"), false, None), None, None),
         }
     }
 
@@ -179,8 +177,7 @@ impl RouteTrie {
         segments: Vec<Field>,
         callback: Option<Callback>,
         location: Option<PathBuf>,
-    )
-    {
+    ) {
         self.root.insert(segments, callback, location);
     }
 
@@ -188,8 +185,7 @@ impl RouteTrie {
         route_head: &RouteTrie,
         segments: &[String],
         params: &mut HashMap<String, String>,
-    ) -> RouteHandler
-    {
+    ) -> RouteHandler {
         RouteTrie::recursive_find(&route_head.root, segments, params)
     }
 
@@ -197,8 +193,7 @@ impl RouteTrie {
         root: &Node,
         segments: &[String],
         params: &mut HashMap<String, String>,
-    ) -> RouteHandler
-    {
+    ) -> RouteHandler {
         if segments.is_empty() {
             return RouteHandler::default();
         }
@@ -225,15 +220,16 @@ impl RouteTrie {
                 }
             }
 
-            let result =
-                if is_tail {
-                    RouteHandler::new(param_node.callback, param_node.location.clone())
-                } else {
-                    RouteTrie::recursive_find(param_node, &segments[1..], params)
-                };
+            let result = if is_tail {
+                RouteHandler::new(param_node.callback, param_node.location.clone())
+            } else {
+                RouteTrie::recursive_find(param_node, &segments[1..], params)
+            };
 
             if result.is_some() {
-                params.entry(param_node.field.name.clone()).or_insert(head.to_owned());
+                params
+                    .entry(param_node.field.name.clone())
+                    .or_insert(head.to_owned());
                 return result;
             }
         }
