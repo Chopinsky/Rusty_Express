@@ -6,6 +6,13 @@
 remains the same, that we will treat all routing path as lower cased.  
 - The server-launching callback function will take a struct wrapper for the control
 message sender, the `AsyncController`. 
+- Now you can also specify the maximum length of the request we shall take per
+request. This can be a handy tool to prevent client sending arbitrary large payload
+and exhaust the server resources. For example, you can call `config.set_read_limit(512)` 
+, or `server.config().set_read_limit(512)`, to constraint a request read size to `512 Byte`.
+If a request exceeds this size limit (which includes headers), we will return a `403 Access
+ Denied` error. If setting the limit to `0`, or leaving it as default, we will keep reading 
+the request until reaching the end.      
 
 # 2019-04
 ## 0.4.2

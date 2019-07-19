@@ -7,6 +7,7 @@ use crate::hashbrown::HashMap;
 use crate::num_cpus;
 use crate::parking_lot::RwLock;
 use crate::support::common::*;
+use std::ops::Div;
 
 //TODO: load config from file, e.g. config.toml?
 
@@ -19,6 +20,7 @@ pub struct ServerConfig {
     pool_size: usize,
     read_timeout: u16,
     write_timeout: u16,
+    read_limit: usize,
     use_session_autoclean: bool,
     session_auto_clean_period: Option<Duration>,
 }
@@ -57,6 +59,21 @@ impl ServerConfig {
     #[inline]
     pub fn set_write_timeout(&mut self, timeout: u16) {
         self.write_timeout = timeout;
+    }
+
+    /// The size of each request in bytes. If a request arrives with a larger size, we will drop the
+    /// request with an "Access Denied" message. If setting to 0, we will not enforce the size limit
+    /// check and we will keep reading the request until read-timeout, which is default to 512ms,
+    /// but can be changed with teh `set_read_timeout` function.
+    #[inline]
+    pub fn set_read_limit(&mut self, limit: usize) {
+        self.read_limit = limit;
+    }
+
+    /// Get the read limit size in bytes.
+    #[inline]
+    pub fn get_read_limit(&self) -> usize {
+        self.read_limit
     }
 
     #[inline]
@@ -99,6 +116,14 @@ impl ServerConfig {
             (*store).status_page_generators.insert(status, generator);
         }
     }
+
+    pub(crate) fn load_server_params(&self) -> (u64, u64, usize) {
+        (
+            u64::from(self.get_read_timeout()),
+            u64::from(self.get_write_timeout()),
+            self.get_read_limit().div(512),
+        )
+    }
 }
 
 impl Default for ServerConfig {
@@ -107,6 +132,7 @@ impl Default for ServerConfig {
             pool_size: cmp::max(4 * num_cpus::get(), 8),
             read_timeout: 512,
             write_timeout: 0,
+            read_limit: 0,
             use_session_autoclean: false,
             session_auto_clean_period: Some(Duration::from_secs(3600)),
         }
@@ -118,7 +144,7 @@ impl Default for ServerConfig {
 /// type of html-template. The 1st parameter represents the raw template content in string format,
 /// while the 2nd parameter represents the rendering context -- the information required to render
 /// the template into customisable webpage.
-pub type ViewEngine = fn(&mut String, Box<EngineContext + Send + Sync>) -> u16;
+pub type ViewEngine = fn(&mut String, Box<dyn EngineContext + Send + Sync>) -> u16;
 
 /// In order to streamline the way to supply rendering context information to the underlying template
 /// engines, the `EngineContext` trait is required to be implemented by the `ViewEngine` framework's

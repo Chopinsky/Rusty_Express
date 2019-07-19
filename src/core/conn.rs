@@ -40,11 +40,11 @@ enum StreamException {
 struct RespSeqBundle(usize, Box<Response>);
 
 pub(crate) trait StreamHandler {
-    fn process(self, is_tls: bool);
+    fn process(self, is_tls: bool, req_limit: usize);
 }
 
 impl StreamHandler for Stream {
-    fn process(mut self, is_tls: bool) {
+    fn process(mut self, is_tls: bool, req_limit: usize) {
         // split the stream such that we can read while writing latest responses
         let mut reader_stream = match self.try_clone() {
             Ok(stream) => {
@@ -61,7 +61,7 @@ impl StreamHandler for Stream {
         // pipeline-1: keep listening to the reader stream
         let (sender, receiver) = channel::bounded(6);
         shared_pool::run(
-            move || reader_stream.recv_requests(sender),
+            move || reader_stream.recv_requests(sender, req_limit),
             TaskType::StreamLoader,
         );
 
@@ -90,15 +90,17 @@ impl StreamHandler for Stream {
 }
 
 trait PipelineWorker {
-    fn recv_requests(&mut self, chan: Sender<Result<String, StreamException>>);
+    fn recv_requests(&mut self, chan: Sender<Result<Vec<u8>, StreamException>>, req_limit: usize);
     fn send_responses(&mut self, chan: Receiver<RespSeqBundle>);
     fn write_back(&mut self, response: Box<Response>) -> u8;
 }
 
 impl PipelineWorker for Stream {
-    fn recv_requests(&mut self, chan: Sender<Result<String, StreamException>>) {
+    /// req_limit is the number of 512B that we can receive before timeout for the request
+    fn recv_requests(&mut self, chan: Sender<Result<Vec<u8>, StreamException>>, req_limit: usize) {
         let mut buffer = [0u8; 512];
-        let mut raw_req = String::with_capacity(512);
+        let mut raw_req = Vec::with_capacity(512);
+        let mut total = 0usize;
 
         loop {
             // read will block until there're data to read; if not, then we're good to quit
@@ -108,7 +110,7 @@ impl PipelineWorker for Stream {
                     if len == 0 {
                         if !raw_req.is_empty() {
                             // if we have no more incoming stream, sending it to parser and wrap up
-                            chan.send(Ok(raw_req.clone())).unwrap_or_default();
+                            chan.send(Ok(raw_req)).unwrap_or_default();
                         } else {
                             // send a heart-beat
                             chan.send(Err(StreamException::HeartBeat))
@@ -120,10 +122,20 @@ impl PipelineWorker for Stream {
                     }
 
                     // if there are request data to read, convert bytes to string
-                    if let Ok(content) = str::from_utf8(&buffer[..len]) {
-                        if len < 512 {
-                            // trim end if we're at the end of the request stream
-                            raw_req.push_str(content);
+                    if len < 512 {
+                        if raw_req.is_empty() {
+                            // if we don't have any previous request contents to append to, just
+                            // send the whole package now.
+                            if chan.send(Ok(Vec::from(&mut buffer[..len]))).is_err() {
+                                break;
+                            }
+                        } else {
+                            // expand the capacity always, since we're almost certainly run out of space
+                            // if entering here
+                            raw_req.reserve(512);
+
+                            // append to previous content
+                            raw_req.extend_from_slice(&buffer);
 
                             // done with this request, sending it to parser; if the channel is closed,
                             // meaning the stream is closed, we quit as well.
@@ -131,20 +143,23 @@ impl PipelineWorker for Stream {
                                 break;
                             }
 
-                            // reset the buffer-states
-                            raw_req.clear();
-                        } else {
-                            // if there are more to read, don't trim and continue reading. Don't trim
-                            // since the end of the `content` maybe the line breaker between head and
-                            // body and we don't want to lose that info
-                            raw_req.push_str(content);
+                            // reset the buffer
+                            reset_content(&mut raw_req);
                         }
                     } else {
-                        // failed at string conversion, quit reader stream
-                        debug::print("Failed to parse the request stream", InfoLevel::Warning);
-                        chan.send(Err(StreamException::ReadStreamFailure))
-                            .unwrap_or_default();
-                        break;
+                        // if there are more to read, don't trim and continue reading. Don't trim
+                        // since the end of the `content` maybe the line breaker between head and
+                        // body and we don't want to lose that info
+                        raw_req.extend_from_slice(&buffer);
+                        total += 1;
+
+                        // the total request size has reached 512KB, we break, such that an attach
+                        // for an overwhelmingly long request can be dropped properly.
+                        if req_limit > 0 && total > req_limit {
+                            // send the content for processing and break
+                            chan.send(Err(StreamException::AccessDenied)).unwrap_or_default();
+                            break;
+                        }
                     }
                 }
                 Err(e) => {
@@ -254,7 +269,7 @@ impl PipelineWorker for Stream {
 }
 
 fn handle_requests(
-    inbox: Receiver<Result<String, StreamException>>,
+    inbox: Receiver<Result<Vec<u8>, StreamException>>,
     outbox: Sender<RespSeqBundle>,
     peer_addr: Option<SocketAddr>,
     is_tls: bool,
@@ -265,10 +280,19 @@ fn handle_requests(
     for req in inbox {
         match req {
             Ok(source) => {
-                match serve_connection(source, req_id, &outbox, peer_addr, is_tls) {
-                    Ok(id) => req_id = id,
-                    Err(_) => return,
-                };
+                let content= str::from_utf8(source.as_slice()).unwrap_or_default();
+
+                if !content.is_empty() {
+                    match serve_connection(content, req_id, &outbox, peer_addr, is_tls) {
+                        Ok(id) => req_id = id,
+                        Err(_) => return,
+                    };
+                } else {
+                    let err = StreamException::ReadStreamFailure;
+                    outbox
+                        .send(RespSeqBundle(0, build_err_response(map_err_code(err))))
+                        .unwrap_or_default();
+                }
             }
             Err(err) => {
                 if err != StreamException::HeartBeat {
@@ -286,7 +310,7 @@ fn handle_requests(
 }
 
 fn serve_connection(
-    source: String,
+    source: &str,
     base_id: usize,
     outbox: &Arc<Sender<RespSeqBundle>>,
     peer_addr: Option<SocketAddr>,
@@ -394,6 +418,10 @@ fn send_err(
     Ok(base_id + 1)
 }
 
+fn reset_content(src: &mut Vec<u8>) {
+    unsafe { src.set_len(0); }
+}
+
 fn process_request(
     next_id: usize,
     request: &mut Box<Request>,
@@ -408,18 +436,14 @@ fn process_request(
     shared_pool::run(
         move || {
             outbox_clone
-                .send(RespSeqBundle(next_id, build_request(r, c, is_tls)))
+                .send(RespSeqBundle(next_id, build_response(r, c, is_tls)))
                 .unwrap_or_default();
         },
         TaskType::Request,
     );
 }
 
-fn build_request(request: Box<Request>, mut callback: RouteHandler, is_tls: bool) -> Box<Response> {
-    ////////////////////////////
-    // >>> Build Response <<< /
-    ///////////////////////////
-
+fn build_response(request: Box<Request>, mut callback: RouteHandler, is_tls: bool) -> Box<Response> {
     // generating the response and setup stuff
     let mut response = initialize_response(is_tls);
     match request.header("connection") {
@@ -720,6 +744,8 @@ fn build_err_response(err_status: u16) -> Box<Response> {
 }
 
 fn map_err_code(err: StreamException) -> u16 {
+    //TODO: need more error code, e.g. illegal request, etc.
+
     match err {
         StreamException::EmptyRequest => 400,
         StreamException::AccessDenied => 401,

@@ -148,6 +148,12 @@ impl HttpServer {
         self.state.drop_session_auto_clean();
     }
 
+    /// Obtain a reference to the server config, such that we can make updates **before** launching
+    /// the server but without creating the config struct and pass it in on building the server.
+    pub fn config(&mut self) -> &mut ServerConfig {
+        &mut self.config
+    }
+
     /// Ask the server to reload the configuration settings. Usually used in a separate thread with
     /// a cloned server instance, where the server state is corrupted and need a reload to restore the
     /// initial server settings.
@@ -168,15 +174,18 @@ impl HttpServer {
 
     fn launch_with(&mut self, listener: &TcpListener, mut cb_sig: Option<channel::Sender<()>>) {
         // if using the session module and allow auto clean up, launch the service now.
-        self.session_cleanup_config();
+        if cfg!(feature = "session") {
+            self.session_cleanup_config();
+        }
+
         self.state.toggle_running_state(true);
 
         //TODO: impl TLS setup ... then sanitize the info ... impl SSL config?
 
         let acceptor: Option<Arc<TlsAcceptor>> = None;
-        let pool_size = self.config.get_pool_size();
+        let (mut read_timeout, mut write_timeout, mut req_limit) = self.config.load_server_params();
 
-        let mut workers_pool = Self::setup_worker_pools(pool_size);
+        let mut workers_pool = self.setup_worker_pools();
         workers_pool.toggle_auto_expansion(true, None);
         workers_pool.set_timeout_policy(TimeoutPolicy::Run);
 
@@ -204,12 +213,15 @@ impl HttpServer {
                         break;
                     }
                     ControlMessage::HotReloadConfig => {
-                        self.session_cleanup_config();
+                        if cfg!(feature = "session") {
+                            self.session_cleanup_config();
+                        }
                     }
                     ControlMessage::HotLoadRouter(r) => {
                         Route::use_router_async(r);
                     }
                     ControlMessage::HotLoadConfig(c) => {
+                        // check pool size param
                         if c.get_pool_size() != self.config.get_pool_size() {
                             debug::print(
                                 "Change size of the thread pool is not supported while the server is running",
@@ -217,8 +229,18 @@ impl HttpServer {
                             );
                         }
 
+                        // load the bulk params and decompose
+                        let params = c.load_server_params();
+                        read_timeout = params.0;
+                        write_timeout = params.1;
+                        req_limit = params.2;
+
+                        // update the config and reset the session clean effort
                         self.config = c;
-                        self.session_cleanup_config();
+
+                        if cfg!(feature = "session") {
+                            self.session_cleanup_config();
+                        }
                     }
                     ControlMessage::Custom(content) => {
                         println!("The message: {} is not yet supported.", content)
@@ -228,7 +250,20 @@ impl HttpServer {
 
             match stream {
                 Ok(s) => {
-                    self.handle_stream(s, &mut workers_pool, acceptor.clone());
+                    // set the timeout for this connection
+                    if read_timeout > 0 || write_timeout > 0 {
+                        s.set_timeout(read_timeout, write_timeout);
+                    }
+
+                    // process the connection
+                    self.handle_stream(
+                        s,
+                        &mut workers_pool,
+                        acceptor.clone(),
+                        read_timeout,
+                        write_timeout,
+                        req_limit,
+                    );
                 }
                 Err(e) => debug::print(
                     &format!("Failed to receive the upcoming stream: {}", e)[..],
@@ -249,17 +284,16 @@ impl HttpServer {
         stream: TcpStream,
         workers_pool: &mut ThreadPool,
         acceptor: Option<Arc<TlsAcceptor>>,
+        read_timeout: u64,
+        write_timeout: u64,
+        req_limit: usize,
     ) {
-        let read_timeout = u64::from(self.config.get_read_timeout());
-        let write_timeout = u64::from(self.config.get_write_timeout());
-
         workers_pool.execute(move || {
-            stream.set_timeout(read_timeout, write_timeout);
             if let Some(a) = acceptor {
                 // handshake and encrypt
                 match a.accept(stream) {
                     Ok(s) => {
-                        Stream::Tls(Box::new(s)).process(true);
+                        Stream::Tls(Box::new(s)).process(true, req_limit);
                     }
                     Err(e) => debug::print(
                         &format!("Failed to receive the upcoming stream: {:?}", e)[..],
@@ -267,21 +301,25 @@ impl HttpServer {
                     ),
                 };
             } else {
-                Stream::Tcp(stream).process(false);
+                Stream::Tcp(stream).process(false, req_limit);
             }
         });
     }
 
+    #[cfg(feature = "session")]
     fn session_cleanup_config(&mut self) {
-        if self.config.get_session_auto_clean() && !ExchangeConfig::auto_clean_is_running() {
-            if let Some(duration) = self.config.get_session_auto_clean_period() {
-                self.state
-                    .set_session_handler(ExchangeConfig::auto_clean_start(duration));
-            }
+        if !self.config.get_session_auto_clean() || ExchangeConfig::auto_clean_is_running() {
+            return;
+        }
+
+        if let Some(duration) = self.config.get_session_auto_clean_period() {
+            self.state
+                .set_session_handler(ExchangeConfig::auto_clean_start(duration));
         }
     }
 
-    fn setup_worker_pools(size: usize) -> ThreadPool {
+    fn setup_worker_pools(&self) -> ThreadPool {
+        let size = self.config.get_pool_size();
         shared_pool::initialize_with(vec![size]);
         ThreadPool::new(size)
     }
