@@ -1,4 +1,5 @@
 use std::io::{BufWriter, Write};
+use std::sync::atomic;
 
 use crate::core::stream::Stream;
 use crate::hashbrown::HashMap;
@@ -92,6 +93,13 @@ pub(crate) fn flush_buffer(buffer: &mut BufWriter<&mut Stream>) -> u8 {
     }
 
     0
+}
+
+#[inline(always)]
+pub(crate) fn cpu_relax(count: usize) {
+    for _ in 0..(1 << count) {
+        atomic::spin_loop_hint()
+    }
 }
 
 pub fn json_stringify(contents: &HashMap<String, String>) -> String {

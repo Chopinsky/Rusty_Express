@@ -4,13 +4,14 @@
 use std::fmt;
 use std::fs;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::thread;
 
 use crate::channel;
 use crate::core::http::{Request, Response, ResponseWriter};
 use crate::hashbrown::{HashMap, HashSet};
-use crate::parking_lot::RwLock;
 use crate::regex::Regex;
+use crate::support::common::cpu_relax;
 use crate::support::{
     common::MapUpdates,
     debug::{self, InfoLevel},
@@ -20,7 +21,7 @@ use crate::support::{
 //TODO: impl route caching: 1) only explicit and wildcard will get cached ... especially the wildcard
 //      one. 2) store uri in the "method:path" format.
 
-static mut ROUTER: Option<RwLock<Route>> = None;
+static mut ROUTER: Option<(Route, AtomicUsize)> = None;
 static mut ROUTE_CACHE: Option<HashMap<(REST, String), RouteHandler>> = None;
 
 #[derive(PartialEq, Eq, Hash, Clone)]
@@ -413,7 +414,7 @@ pub struct Route {
 impl Route {
     pub(crate) fn init() {
         unsafe {
-            ROUTER.replace(RwLock::new(Route::new()));
+            ROUTER.replace((Route::new(), AtomicUsize::new(1)));
             ROUTE_CACHE.replace(HashMap::new());
         }
     }
@@ -423,25 +424,22 @@ impl Route {
     }
 
     pub fn get_auth_func() -> Option<AuthFunc> {
-        let route = Route::router_ref().read();
-        route.auth_func
+        Route::read().with(|r| r.auth_func)
     }
 
     pub fn set_auth_func(auth_func: Option<AuthFunc>) {
-        let mut route = Route::router_ref().write();
-        route.auth_func = auth_func;
+        Route::write().with(|r| r.auth_func = auth_func);
     }
 
     pub fn authorize(request: &Box<Request>, uri: &str) -> bool {
-        match Route::router_ref().read().auth_func {
+        Route::read().with(|r| match r.auth_func {
             Some(auth_fn) => auth_fn(request, uri),
             None => true,
-        }
+        })
     }
 
     pub fn use_router(another: Route) {
-        let mut route = Route::router_ref().write();
-        route.replace_with(another);
+        Route::write().with(|r| r.replace_with(another));
     }
 
     pub fn use_router_async(another: Route) {
@@ -451,38 +449,39 @@ impl Route {
     }
 
     pub fn all_case_sensitive(allow_case: bool) {
-        let mut route = Route::router_ref().write();
-        for maps in route.store.values_mut() {
-            maps.case_sensitive(allow_case);
-        }
+        Route::write().with(|r| {
+            for maps in r.store.values_mut() {
+                maps.case_sensitive(allow_case);
+            }
+        });
     }
 
     pub fn case_sensitive(method: &REST, allow_case: bool) {
-        if let Some(maps) = Route::router_ref().write().store.get_mut(method) {
-            maps.case_sensitive = allow_case;
-        }
+        Route::write().with(|r| {
+            if let Some(maps) = r.store.get_mut(method) {
+                maps.case_sensitive = allow_case;
+            }
+        });
     }
 
     pub fn is_case_sensitive(method: &REST) -> bool {
-        Route::router_ref()
-            .read()
-            .store
-            .get(method)
-            .filter(|maps| maps.case_sensitive)
-            .is_some()
+        Route::read().with(|r| {
+            r.store
+                .get(method)
+                .filter(|maps| maps.case_sensitive)
+                .is_some()
+        })
     }
 
     pub(crate) fn add_route(method: REST, uri: RequestPath, callback: RouteHandler) {
-        let mut route = Route::router_ref().write();
-        route.add(method, uri, callback);
+        Route::write().with(|r| r.add(method, uri, callback));
     }
 
     pub(crate) fn add_static(method: REST, uri: Option<RequestPath>, path: PathBuf) {
-        let mut route = Route::router_ref().write();
-        match uri {
-            Some(u) => route.add(method, u, RouteHandler(None, Some(path))),
-            None => route.set_static(method, path),
-        }
+        Route::write().with(|r| match uri {
+            Some(u) => r.add(method, u, RouteHandler(None, Some(path))),
+            None => r.set_static(method, path),
+        });
     }
 
     fn add(&mut self, method: REST, uri: RequestPath, callback: RouteHandler) {
@@ -526,57 +525,61 @@ impl Route {
         self.auth_func = another.auth_func.take();
     }
 
-    fn router_ref() -> &'static RwLock<Route> {
-        unsafe { ROUTER.as_ref().unwrap() }
+    fn read() -> RouteGuard<'static> {
+        RouteGuard::checkout(true)
+    }
+
+    fn write() -> RouteGuard<'static> {
+        RouteGuard::checkout(false)
     }
 }
 
 pub trait Router {
-    fn get(&mut self, uri: RequestPath, callback: Callback) -> &mut Self;
-    fn patch(&mut self, uri: RequestPath, callback: Callback) -> &mut Self;
-    fn post(&mut self, uri: RequestPath, callback: Callback) -> &mut Self;
-    fn put(&mut self, uri: RequestPath, callback: Callback) -> &mut Self;
-    fn delete(&mut self, uri: RequestPath, callback: Callback) -> &mut Self;
-    fn options(&mut self, uri: RequestPath, callback: Callback) -> &mut Self;
-    fn other(&mut self, method: &str, uri: RequestPath, callback: Callback) -> &mut Self;
-    fn all(&mut self, uri: RequestPath, callback: Callback) -> &mut Self;
-    fn use_static(&mut self, path: PathBuf) -> &mut Self;
-    fn use_custom_static(&mut self, uri: RequestPath, path: PathBuf) -> &mut Self;
+    fn get(&mut self, uri: RequestPath, callback: Callback) -> &mut dyn Router;
+    fn patch(&mut self, uri: RequestPath, callback: Callback) -> &mut dyn Router;
+    fn post(&mut self, uri: RequestPath, callback: Callback) -> &mut dyn Router;
+    fn put(&mut self, uri: RequestPath, callback: Callback) -> &mut dyn Router;
+    fn delete(&mut self, uri: RequestPath, callback: Callback) -> &mut dyn Router;
+    fn options(&mut self, uri: RequestPath, callback: Callback) -> &mut dyn Router;
+    fn other(&mut self, method: &str, uri: RequestPath, callback: Callback) -> &mut dyn Router;
+    fn all(&mut self, uri: RequestPath, callback: Callback) -> &mut dyn Router;
+    fn use_static(&mut self, path: PathBuf) -> &mut dyn Router;
+    fn use_custom_static(&mut self, uri: RequestPath, path: PathBuf) -> &mut dyn Router;
     fn case_sensitive(&mut self, allow_case: bool, method: Option<REST>);
 }
 
 impl Router for Route {
-    fn get(&mut self, uri: RequestPath, callback: Callback) -> &mut Self {
+    fn get(&mut self, uri: RequestPath, callback: Callback) -> &mut dyn Router {
         self.add(REST::GET, uri, RouteHandler(Some(callback), None));
         self
     }
 
-    fn patch(&mut self, uri: RequestPath, callback: Callback) -> &mut Self {
+    fn patch(&mut self, uri: RequestPath, callback: Callback) -> &mut dyn Router {
         self.add(REST::PATCH, uri, RouteHandler(Some(callback), None));
         self
     }
 
-    fn post(&mut self, uri: RequestPath, callback: Callback) -> &mut Self {
+    fn post(&mut self, uri: RequestPath, callback: Callback) -> &mut dyn Router {
         self.add(REST::POST, uri, RouteHandler(Some(callback), None));
         self
     }
 
-    fn put(&mut self, uri: RequestPath, callback: Callback) -> &mut Self {
+    fn put(&mut self, uri: RequestPath, callback: Callback) -> &mut dyn Router {
         self.add(REST::PUT, uri, RouteHandler(Some(callback), None));
         self
     }
 
-    fn delete(&mut self, uri: RequestPath, callback: Callback) -> &mut Self {
+    fn delete(&mut self, uri: RequestPath, callback: Callback) -> &mut dyn Router {
         self.add(REST::DELETE, uri, RouteHandler(Some(callback), None));
         self
     }
 
-    fn options(&mut self, uri: RequestPath, callback: Callback) -> &mut Self {
+    fn options(&mut self, uri: RequestPath, callback: Callback) -> &mut dyn Router {
         self.add(REST::OPTIONS, uri, RouteHandler(Some(callback), None));
         self
     }
 
-    fn other(&mut self, method: &str, uri: RequestPath, callback: Callback) -> &mut Self {
+    fn other(&mut self, method: &str, uri: RequestPath, callback: Callback) -> &mut dyn Router {
         if method.is_empty() {
             panic!("Must provide a valid method!");
         }
@@ -591,7 +594,7 @@ impl Router for Route {
     /// is used in this framework as a safe fallback, which means that if a different callback
     /// has been defined for the same uri but under a explicitly defined request method (e.g. get,
     /// post, etc.), it will be matched and invoked instead of the "match all" callback functions.
-    fn all(&mut self, uri: RequestPath, callback: Callback) -> &mut Self {
+    fn all(&mut self, uri: RequestPath, callback: Callback) -> &mut dyn Router {
         self.other("*", uri, callback)
     }
 
@@ -608,12 +611,12 @@ impl Router for Route {
     ///    server.use_static(PathBuf::from(r".\static"));
     /// }
     /// ```
-    fn use_static(&mut self, path: PathBuf) -> &mut Self {
+    fn use_static(&mut self, path: PathBuf) -> &mut dyn Router {
         self.set_static(REST::GET, path);
         self
     }
 
-    fn use_custom_static(&mut self, uri: RequestPath, path: PathBuf) -> &mut Self {
+    fn use_custom_static(&mut self, uri: RequestPath, path: PathBuf) -> &mut dyn Router {
         self.add(REST::GET, uri, RouteHandler(None, Some(path)));
         self
     }
@@ -656,36 +659,34 @@ impl RouteSeeker for Route {
     fn seek_sync(method: &REST, uri: &str) -> (RouteHandler, HashMap<String, String>) {
         //TODO: check cache first
 
-        let mut result = RouteHandler(None, None);
-        let mut params = HashMap::new();
-
         // keep the route_store in limited scope so we can release the read lock ASAP
-        {
-            let route_store = Route::router_ref().read();
+        Route::read().with(|r| {
+            let mut result = RouteHandler(None, None);
+            let mut params = HashMap::new();
 
             // get from the method
-            if let Some(routes) = route_store.store.get(method) {
+            if let Some(routes) = r.store.get(method) {
                 result = routes.seek_path(uri, &mut params);
             }
 
             // if a header only request, fallback to search with REST::GET
             if result.is_none() && method == &REST::OTHER(String::from("HEADER")) {
-                if let Some(routes) = route_store.store.get(&REST::GET) {
+                if let Some(routes) = r.store.get(&REST::GET) {
                     result = routes.seek_path(uri, &mut params);
                 }
             }
 
             // otherwise, try the all-match routes
             if result.is_none() {
-                if let Some(all_routes) = route_store.store.get(&REST::OTHER(String::from("*"))) {
+                if let Some(all_routes) = r.store.get(&REST::OTHER(String::from("*"))) {
                     result = all_routes.seek_path(uri, &mut params);
                 }
             }
-        }
+
+            (result, params)
+        })
 
         //TODO: Caching the request, also maintain the hash-map if it gets too large
-
-        (result, params)
     }
 }
 
@@ -702,14 +703,14 @@ fn search_wildcard_router(routes: &HashMap<String, RegexRoute>, uri: &str) -> Ro
 }
 
 fn search_params_router(
-    route_head: &RouteTrie,
+    head: &RouteTrie,
     uri: &str,
     params: &mut HashMap<String, String>,
 ) -> RouteHandler {
     let raw_segments: Vec<String> = uri.trim_matches('/').split('/').map(String::from).collect();
 
     params.reserve(raw_segments.len());
-    let result = RouteTrie::find(route_head, raw_segments.as_slice(), params);
+    let result = RouteTrie::find(head, raw_segments.as_slice(), params);
 
     params.shrink_to_fit();
     result
@@ -829,6 +830,69 @@ impl Clone for RouteHandler {
     }
 }
 
+/// The router guard struct, holding: 1) (mutable) reference to the underlying route; 2) The reader
+/// counter reference; 3) if guarding a read access, or not.
+#[doc(hidden)]
+struct RouteGuard<'a>(&'a mut Route, &'a AtomicUsize, bool);
+
+impl<'a> RouteGuard<'a> {
+    fn checkout(is_read: bool) -> Self {
+        // prepare the base reference
+        let r = unsafe { ROUTER.as_mut().unwrap() };
+
+        if is_read {
+            // initial guess, doesn't really matter if we have to compete for the lock
+            let mut curr = r.1.load(Ordering::Relaxed);
+
+            // waiting for the write lock to release
+            while let Err(old) =
+                r.1.compare_exchange(curr, curr + 1, Ordering::Acquire, Ordering::Relaxed)
+            {
+                let count = if old < 1 {
+                    // a writer holds the lock, wait till it releases it
+                    curr = 1;
+                    16
+                } else {
+                    // otherwise we're in readers mode, try to grab the lock before it goes away to
+                    // a contentious writer.
+                    curr = old;
+                    4
+                };
+
+                // take a break: if a writer has the lock, wait longer to check again.
+                cpu_relax(count);
+            }
+        } else {
+            // keep checking until all readers have released and no other writer is holding the lock
+            while r
+                .1
+                .compare_exchange(1, 0, Ordering::SeqCst, Ordering::Relaxed)
+                .is_err()
+            {
+                cpu_relax(8);
+            }
+        }
+
+        RouteGuard(&mut r.0, &r.1, is_read)
+    }
+
+    fn with<T, F: FnOnce(&mut Route) -> T>(&mut self, f: F) -> T {
+        f(self.0)
+    }
+}
+
+impl<'a> Drop for RouteGuard<'a> {
+    fn drop(&mut self) {
+        if self.2 {
+            // this is a reader guard
+            self.1.fetch_sub(1, Ordering::Release);
+        } else {
+            // this is a writer guard
+            self.1.store(1, Ordering::SeqCst);
+        }
+    }
+}
+
 #[cfg(test)]
 mod route_test {
     use super::{Field, RouteMap};
@@ -838,19 +902,21 @@ mod route_test {
     fn params_parser_test_one() {
         let regex = Regex::new("a=[/]bdc").unwrap();
         let base = vec![
-            Field::new(String::from("root"), false, None),
-            Field::new(String::from("api"), false, None),
-            Field::new(String::from("Tes中t"), true, Some(regex)),
-            Field::new(String::from("this."), false, None),
             Field::new(String::from("check"), true, None),
+            Field::new(String::from("this."), false, None),
+            Field::new(String::from("Tes中t"), true, Some(regex)),
+            Field::new(String::from("api"), false, None),
+            Field::new(String::from("root"), false, None),
         ];
 
         let test = RouteMap::params_parser("/root/api/:Tes中t(a=[/]bdc)/this./:check/", true);
 
         assert_eq!(test.len(), base.len());
 
+        let mut num = 0;
         for (base_field, test_field) in base.iter().zip(&test) {
-            assert_eq!(base_field, test_field);
+            assert_eq!(base_field, test_field, "Failed at test case: {}", num);
+            num += 1;
         }
     }
 }

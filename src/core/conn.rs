@@ -132,19 +132,18 @@ impl PipelineWorker for Stream {
                         } else {
                             // expand the capacity always, since we're almost certainly run out of space
                             // if entering here
-                            raw_req.reserve(512);
+                            if raw_req.capacity() - raw_req.len() < 512 {
+                                raw_req.reserve(512);
+                            }
 
                             // append to previous content
                             raw_req.extend_from_slice(&buffer);
 
                             // done with this request, sending it to parser; if the channel is closed,
                             // meaning the stream is closed, we quit as well.
-                            if chan.send(Ok(raw_req.clone())).is_err() {
+                            if chan.send(Ok(raw_req.split_off(0))).is_err() {
                                 break;
                             }
-
-                            // reset the buffer
-                            reset_content(&mut raw_req);
                         }
                     } else {
                         // if there are more to read, don't trim and continue reading. Don't trim
@@ -157,7 +156,8 @@ impl PipelineWorker for Stream {
                         // for an overwhelmingly long request can be dropped properly.
                         if req_limit > 0 && total > req_limit {
                             // send the content for processing and break
-                            chan.send(Err(StreamException::AccessDenied)).unwrap_or_default();
+                            chan.send(Err(StreamException::AccessDenied))
+                                .unwrap_or_default();
                             break;
                         }
                     }
@@ -280,7 +280,7 @@ fn handle_requests(
     for req in inbox {
         match req {
             Ok(source) => {
-                let content= str::from_utf8(source.as_slice()).unwrap_or_default();
+                let content = str::from_utf8(source.as_slice()).unwrap_or_default();
 
                 if !content.is_empty() {
                     match serve_connection(content, req_id, &outbox, peer_addr, is_tls) {
@@ -418,10 +418,6 @@ fn send_err(
     Ok(base_id + 1)
 }
 
-fn reset_content(src: &mut Vec<u8>) {
-    unsafe { src.set_len(0); }
-}
-
 fn process_request(
     next_id: usize,
     request: &mut Box<Request>,
@@ -443,7 +439,11 @@ fn process_request(
     );
 }
 
-fn build_response(request: Box<Request>, mut callback: RouteHandler, is_tls: bool) -> Box<Response> {
+fn build_response(
+    request: Box<Request>,
+    mut callback: RouteHandler,
+    is_tls: bool,
+) -> Box<Response> {
     // generating the response and setup stuff
     let mut response = initialize_response(is_tls);
     match request.header("connection") {
