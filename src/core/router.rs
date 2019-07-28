@@ -49,6 +49,10 @@ impl fmt::Display for REST {
     }
 }
 
+impl Default for REST {
+    fn default() -> REST { REST::GET }
+}
+
 #[derive(PartialEq, Eq, Hash, Clone, Copy)]
 pub enum RequestPath {
     Explicit(&'static str),
@@ -308,34 +312,41 @@ impl RouteMap {
         }
 
         /*
-            Exact uri match failed, now try parsing the file name if it contains one.
-        */
+         * Exact uri match failed, now try parsing the file name if it contains one.
+         */
         if !params.is_empty() {
             params.clear();
         }
 
-        let mut actual_uri = "/";
+        let mut actual_uri = String::with_capacity(raw_uri.len());
         let mut file_name = "";
 
-        raw_uri.rsplitn(2, '/').enumerate().for_each(|(i, x)| {
-            if i == 0 && x.contains('.') {
-                file_name = x;
-                return;
+        for part in raw_uri.split('/') {
+            if part.is_empty() || part == ".." || part == "." {
+                continue;
             }
 
-            if file_name.is_empty() {
-                actual_uri = raw_uri;
-            } else if !x.is_empty() {
-                actual_uri = x;
+            if !part.starts_with('.') && !part.ends_with('.') && part.contains('.') {
+                file_name = part;
+                continue;
             }
-        });
+
+            file_name = "";
+
+            actual_uri.push('/');
+            actual_uri.push_str(part);
+        }
 
         // uri doesn't contain a file name, actual_uri === raw_uri, done (and route not found).
         if file_name.is_empty() {
             return RouteHandler::default();
         }
 
-        self.search(actual_uri, raw_uri, file_name, params)
+        if actual_uri.is_empty() {
+            actual_uri.push_str(raw_uri);
+        }
+
+        self.search(&actual_uri, raw_uri, file_name, params)
     }
 
     fn search(
@@ -795,6 +806,7 @@ impl RouteHandler {
         }
 
         if let Some(path) = self.1.take() {
+
             resp.send_file_from_path_async(path);
         }
     }
@@ -836,11 +848,11 @@ impl Clone for RouteHandler {
 struct RouteGuard<'a>(&'a mut Route, &'a AtomicUsize, bool);
 
 impl<'a> RouteGuard<'a> {
-    fn checkout(is_read: bool) -> Self {
+    fn checkout(is_reader: bool) -> Self {
         // prepare the base reference
         let r = unsafe { ROUTER.as_mut().unwrap() };
 
-        if is_read {
+        if is_reader {
             // initial guess, doesn't really matter if we have to compete for the lock
             let mut curr = r.1.load(Ordering::Relaxed);
 
@@ -873,7 +885,7 @@ impl<'a> RouteGuard<'a> {
             }
         }
 
-        RouteGuard(&mut r.0, &r.1, is_read)
+        RouteGuard(&mut r.0, &r.1, is_reader)
     }
 
     fn with<T, F: FnOnce(&mut Route) -> T>(&mut self, f: F) -> T {

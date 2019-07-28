@@ -6,7 +6,6 @@ use std::io::{prelude::*, BufWriter, ErrorKind};
 use std::mem;
 use std::net::{Shutdown, SocketAddr};
 use std::str;
-use std::sync::Arc;
 use std::time::Duration;
 
 use crate::core::config::ConnMetadata;
@@ -16,14 +15,13 @@ use crate::core::http::{
 use crate::core::router::{Route, RouteHandler, RouteSeeker, REST};
 use crate::core::stream::Stream;
 use crate::support::{
-    common::write_to_buff, common::MapUpdates, debug, debug::InfoLevel, shared_pool, TaskType,
+    common::{MapUpdates, VecExt}, debug, debug::InfoLevel, shared_pool, TaskType,
 };
 
 use crate::channel::{self, Receiver, Sender};
 use crate::hashbrown::HashMap;
 
-static HEADER_END: [u8; 2] = [13, 10];
-static FLUSH_RETRY: u8 = 4;
+const BUFFER_SIZE: usize = 512;
 
 type ExecCode = u8;
 type BaseLine = Option<Receiver<(RouteHandler, HashMap<String, String>)>>;
@@ -92,74 +90,73 @@ impl StreamHandler for Stream {
 trait PipelineWorker {
     fn recv_requests(&mut self, chan: Sender<Result<Vec<u8>, StreamException>>, req_limit: usize);
     fn send_responses(&mut self, chan: Receiver<RespSeqBundle>);
-    fn write_back(&mut self, response: Box<Response>) -> u8;
+    fn sink(&mut self, response: Box<Response>) -> u8;
 }
 
 impl PipelineWorker for Stream {
     /// req_limit is the number of 512B that we can receive before timeout for the request
     fn recv_requests(&mut self, chan: Sender<Result<Vec<u8>, StreamException>>, req_limit: usize) {
-        let mut buffer = [0u8; 512];
-        let mut raw_req = Vec::with_capacity(512);
+        let mut buffer = [0u8; BUFFER_SIZE];
         let mut total = 0usize;
+        let mut raw_req = Vec::new();
 
         loop {
             // read will block until there're data to read; if not, then we're good to quit
             match self.read(&mut buffer) {
-                Ok(len) => {
+                Ok(empty) if empty == 0 => {
                     // if no more request data left to read
-                    if len == 0 {
-                        if !raw_req.is_empty() {
-                            // if we have no more incoming stream, sending it to parser and wrap up
-                            chan.send(Ok(raw_req)).unwrap_or_default();
-                        } else {
-                            // send a heart-beat
-                            chan.send(Err(StreamException::HeartBeat))
-                                .unwrap_or_default();
-                        };
+                    if !raw_req.is_empty() {
+                        // if we have no more incoming stream, sending it to parser and wrap up
+                        chan.send(Ok(raw_req))
+                            .unwrap_or_default();
+                    } else {
+                        // send a heart-beat
+                        chan.send(Err(StreamException::HeartBeat))
+                            .unwrap_or_default();
+                    };
 
-                        // reader shall close because keep-alive header is not `keep-alive` or `close`
+                    // reader shall close because keep-alive header is not `keep-alive` or `close`
+                    break;
+                }
+                Ok(full) if full == BUFFER_SIZE => {
+                    // if there are more to read, don't trim and continue reading. Don't trim
+                    // since the end of the `content` maybe the line breaker between head and
+                    // body and we don't want to lose that info
+                    raw_req.reserve(BUFFER_SIZE);
+                    raw_req.extend_from_slice(&buffer);
+
+                    // the total request size has reached 512KB, we break, such that an attach
+                    // for an overwhelmingly long request can be dropped properly.
+                    total += 1;
+
+                    if req_limit > 0 && total > req_limit {
+                        // send the content for processing and break
+                        chan.send(Err(StreamException::AccessDenied))
+                            .unwrap_or_default();
+
                         break;
                     }
-
+                }
+                Ok(len) => {
                     // if there are request data to read, convert bytes to string
-                    if len < 512 {
-                        if raw_req.is_empty() {
-                            // if we don't have any previous request contents to append to, just
-                            // send the whole package now.
-                            if chan.send(Ok(Vec::from(&mut buffer[..len]))).is_err() {
-                                break;
-                            }
-                        } else {
-                            // expand the capacity always, since we're almost certainly run out of space
-                            // if entering here
-                            if raw_req.capacity() - raw_req.len() < 512 {
-                                raw_req.reserve(512);
-                            }
-
-                            // append to previous content
-                            raw_req.extend_from_slice(&buffer);
-
-                            // done with this request, sending it to parser; if the channel is closed,
-                            // meaning the stream is closed, we quit as well.
-                            if chan.send(Ok(raw_req.split_off(0))).is_err() {
-                                break;
-                            }
-                        }
+                    let request = if raw_req.is_empty() {
+                        // if we don't have any previous request contents to append to, just
+                        // send the whole package now.
+                        Vec::from(&mut buffer[..len])
                     } else {
-                        // if there are more to read, don't trim and continue reading. Don't trim
-                        // since the end of the `content` maybe the line breaker between head and
-                        // body and we don't want to lose that info
-                        raw_req.extend_from_slice(&buffer);
-                        total += 1;
+                        // expand the capacity always, since we're almost certainly run out of space
+                        // if entering here, we're at the end of this request loop, prepare to swap
+                        // the content out, send it, and continue listening with fresh buffer.
+                        raw_req.reserve(len);
+                        raw_req.extend_from_slice(&buffer[..len]);
 
-                        // the total request size has reached 512KB, we break, such that an attach
-                        // for an overwhelmingly long request can be dropped properly.
-                        if req_limit > 0 && total > req_limit {
-                            // send the content for processing and break
-                            chan.send(Err(StreamException::AccessDenied))
-                                .unwrap_or_default();
-                            break;
-                        }
+                        // done with this request, sending it to parser; if the channel is closed,
+                        // meaning the stream is closed, we quit as well.
+                        raw_req.swap_reset()
+                    };
+
+                    if chan.send(Ok(request)).is_err() {
+                        break;
                     }
                 }
                 Err(e) => {
@@ -193,7 +190,7 @@ impl PipelineWorker for Stream {
         while let Ok(store) = chan.recv_timeout(Duration::from_secs(8)) {
             if store.0 == 0 || store.0 == curr_id {
                 // send the response and increment the id count
-                if self.write_back(store.1) != 0 {
+                if self.sink(store.1) != 0 {
                     return;
                 }
 
@@ -202,7 +199,7 @@ impl PipelineWorker for Stream {
 
                     // now pop the delayed and stored responses
                     while let Some(resp) = temp_store.remove(&curr_id) {
-                        if self.write_back(resp) != 0 {
+                        if self.sink(resp) != 0 {
                             return;
                         }
 
@@ -218,7 +215,7 @@ impl PipelineWorker for Stream {
         if !temp_store.is_empty() {
             for (id, resp) in temp_store.into_iter() {
                 while id > curr_id {
-                    if self.write_back(build_err_response(map_err_code(
+                    if self.sink(build_err_response(map_err_code(
                         StreamException::EmptyRequest,
                     ))) != 0
                     {
@@ -228,7 +225,7 @@ impl PipelineWorker for Stream {
                     curr_id += 1;
                 }
 
-                if self.write_back(resp) != 0 {
+                if self.sink(resp) != 0 {
                     return;
                 }
 
@@ -237,34 +234,25 @@ impl PipelineWorker for Stream {
         }
     }
 
-    fn write_back(&mut self, response: Box<Response>) -> u8 {
+    fn sink(&mut self, mut response: Box<Response>) -> u8 {
         let mut writer = BufWriter::new(self);
 
         // Serialize the header to the stream
-        response.write_header(&mut writer);
-
-        // Blank line to indicate the end of the response header
-        write_to_buff(&mut writer, &HEADER_END);
+        if !response.write_header(&mut writer) {
+            return 1;
+        }
 
         // If header only, we're done
         if response.is_header_only() {
-            return if writer.flush().is_ok() { 0 } else { 1 };
+            return 0;
         }
 
         // write the body to the stream
-        response.write_body(&mut writer);
-
-        // flush the buffer and shutdown the connection: we're done; no need for explicit shutdown
-        // the stream as it's dropped automatically on out-of-the-scope.
-        let mut retry: u8 = 0;
-        while retry < FLUSH_RETRY {
-            retry += 1;
-            if writer.flush().is_ok() {
-                return 0;
-            }
+        if !response.write_body(&mut writer) {
+            return 1;
         }
 
-        1
+        0
     }
 }
 
@@ -275,7 +263,6 @@ fn handle_requests(
     is_tls: bool,
 ) {
     let mut req_id = 1;
-    let outbox = Arc::new(outbox);
 
     for req in inbox {
         match req {
@@ -283,7 +270,8 @@ fn handle_requests(
                 let content = str::from_utf8(source.as_slice()).unwrap_or_default();
 
                 if !content.is_empty() {
-                    match serve_connection(content, req_id, &outbox, peer_addr, is_tls) {
+                    let clone_box = outbox.clone();
+                    match serve_connection(content, req_id, clone_box, peer_addr, is_tls) {
                         Ok(id) => req_id = id,
                         Err(_) => return,
                     };
@@ -312,7 +300,7 @@ fn handle_requests(
 fn serve_connection(
     source: &str,
     base_id: usize,
-    outbox: &Arc<Sender<RespSeqBundle>>,
+    outbox: Sender<RespSeqBundle>,
     peer_addr: Option<SocketAddr>,
     is_tls: bool,
 ) -> Result<usize, ErrorKind> {
@@ -337,7 +325,10 @@ fn serve_connection(
             let (body, remainder): (&str, &str) = raw_req.split_at(body_size);
             request.set_body(body.to_owned());
 
-            process_request(next_id, &mut request, &mut callback, outbox, is_tls);
+            // generate the request
+            process_request(next_id, &mut request, &mut callback, &outbox, is_tls);
+
+            // to we shall close the connection, we're done
             if to_close {
                 return Err(ErrorKind::ConnectionAborted);
             }
@@ -385,7 +376,7 @@ fn serve_connection(
         // if no body's attached with this request, we're done parsing and send the request for
         // processing now.
         if body_size == 0 {
-            process_request(next_id, &mut request, &mut callback, outbox, is_tls);
+            process_request(next_id, &mut request, &mut callback, &outbox, is_tls);
             if to_close {
                 return Err(ErrorKind::ConnectionAborted);
             }
@@ -402,7 +393,7 @@ fn serve_connection(
 
 fn send_err(
     base_id: usize,
-    outbox: &Arc<Sender<RespSeqBundle>>,
+    outbox: Sender<RespSeqBundle>,
     err: StreamException,
 ) -> Result<usize, ErrorKind> {
     if outbox
@@ -422,16 +413,16 @@ fn process_request(
     next_id: usize,
     request: &mut Box<Request>,
     callback: &mut RouteHandler,
-    outbox: &Arc<Sender<RespSeqBundle>>,
+    outbox: &Sender<RespSeqBundle>,
     is_tls: bool,
 ) {
     let r = mem::replace(request, Box::new(Request::new()));
     let c = mem::replace(callback, RouteHandler::default());
-    let outbox_clone = Arc::clone(outbox);
+    let clone_box = outbox.clone();
 
     shared_pool::run(
         move || {
-            outbox_clone
+            clone_box
                 .send(RespSeqBundle(next_id, build_response(r, c, is_tls)))
                 .unwrap_or_default();
         },
@@ -756,7 +747,7 @@ fn map_err_code(err: StreamException) -> u16 {
 
 #[inline]
 pub(crate) fn send_err_resp(mut stream: Stream, err_code: u16) {
-    stream.write_back(build_err_response(err_code));
+    stream.sink(build_err_response(err_code));
 }
 
 mod async_handler {
@@ -773,7 +764,7 @@ mod async_handler {
     };
 
     use crate::support::{
-        common::flush_buffer, common::write_to_buff, debug, debug::InfoLevel, shared_pool, TaskType,
+        debug, debug::InfoLevel, shared_pool, TaskType,
     };
 
     use crate::channel;
@@ -846,12 +837,9 @@ mod async_handler {
         // Serialize the header to the stream
         response.write_header(&mut writer);
 
-        // Blank line to indicate the end of the response header
-        write_to_buff(&mut writer, &HEADER_END);
-
         // If header only, we're done
         if response.is_header_only() {
-            return flush_buffer(&mut writer);
+            return 0;
         }
 
         if let Some(s) = s_clone {
@@ -860,16 +848,6 @@ mod async_handler {
         } else {
             // else, write the body to the stream
             response.write_body(&mut writer);
-
-            // flush the buffer and shutdown the connection: we're done; no need for explicit shutdown
-            // the stream as it's dropped automatically on out-of-the-scope.
-            let mut retry: u8 = 0;
-            while retry < FLUSH_RETRY {
-                retry += 1;
-                if flush_buffer(&mut writer) == 0 {
-                    break;
-                }
-            }
         }
 
         // regardless of buffer being flushed, close the stream now.

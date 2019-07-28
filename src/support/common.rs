@@ -1,4 +1,5 @@
 use std::io::{BufWriter, Write};
+use std::ptr;
 use std::sync::atomic;
 
 use crate::core::stream::Stream;
@@ -10,18 +11,18 @@ pub trait MapUpdates<T> {
 }
 
 impl<T> MapUpdates<T> for HashMap<String, T> {
-    fn add(&mut self, field: &str, value: T, allow_replace: bool, allow_case: bool) -> Option<T> {
-        if field.is_empty() {
+    fn add(&mut self, key: &str, value: T, enable_replace: bool, normalize_key: bool) -> Option<T> {
+        if key.is_empty() {
             return None;
         }
 
-        let f = if !allow_case {
-            field.to_lowercase()
+        let f = if !normalize_key {
+            key.to_lowercase()
         } else {
-            field.to_owned()
+            key.to_owned()
         };
 
-        if allow_replace {
+        if enable_replace {
             //new field, insert into the map
             self.insert(f, value)
         } else {
@@ -32,19 +33,35 @@ impl<T> MapUpdates<T> for HashMap<String, T> {
     }
 }
 
-pub trait VecExtension {
-    fn flat(&self) -> String;
+pub trait VecExt<T> {
+    fn swap_reset(&mut self) -> Vec<T>;
+    fn swap_reserve(&mut self, cap: usize) -> Vec<T>;
 }
 
-impl VecExtension for Vec<String> {
-    fn flat(&self) -> String {
-        let mut result = String::new();
+impl<T> VecExt<T> for Vec<T> {
+    /// Swapping the `Vec<T>` pointer out so it can be used elsewhere, without moving the ownership
+    /// of self. The implementation effectively exchange the ownership of the underlying vector, such
+    /// that we don't have to move the ownership of the container variable.
+    fn swap_reset(&mut self) -> Vec<T> {
+        // create the new vector to hold new content
+        let mut next = Vec::new();
 
-        for content in self.iter() {
-            result.push_str(content);
-        }
+        // swap the content of the `Vec<T>` struct instead of its underlying vec data
+        swap_vec_ptr(self, &mut next);
 
-        result
+        // now `next` holds the content originally pointed to by `self`
+        next
+    }
+
+    fn swap_reserve(&mut self, cap: usize) -> Vec<T> {
+        // create the new vector with a predetermined capacity to hold new content
+        let mut next = Vec::with_capacity(cap);
+
+        // swap the content of the `Vec<T>` struct instead of its underlying vec data
+        swap_vec_ptr(self, &mut next);
+
+        // now `next` holds the content originally pointed to by `self`
+        next
     }
 }
 
@@ -63,13 +80,21 @@ impl LineBreakUtil for String {
     }
 }
 
+impl LineBreakUtil for Vec<u8> {
+    fn append_line_break(&mut self) {
+        if self.capacity() - self.len() < 2 {
+            self.reserve(2);
+        }
+
+        self.push(13);
+        self.push(10);
+    }
+}
+
 pub(crate) fn write_to_buff(buffer: &mut BufWriter<&mut Stream>, content: &[u8]) {
-    if let Err(err) = buffer.write(content) {
+    if buffer.write(content).is_err() {
         debug::print(
-            &format!(
-                "An error has taken place when writing the response header to the stream: {}",
-                err
-            ),
+            "An error has taken place when writing the response header to the stream",
             InfoLevel::Warning,
         );
     }
@@ -173,5 +198,35 @@ fn json_format_content(content: &[String]) -> String {
             base.push(']');
             base
         }
+    }
+}
+
+fn swap_vec_ptr<T>(src: &mut Vec<T>, tgt: &mut Vec<T>) {
+    // obtain the raw pointers
+    let p: *mut Vec<T> = src;
+    let pn: *mut Vec<T> = tgt;
+
+    // swap the pointers: this is essentially the impl from ptr::swap_nonoverlapping for struct
+    // size smaller than 32. Since Vec<T> has a constant size of 24, we don't need to check the
+    // mem size again and again as it's a known branch to execute.
+    unsafe {
+        let temp = ptr::read(p);
+        ptr::copy_nonoverlapping(pn, p, 1);
+        ptr::write(pn, temp);
+    }
+}
+
+#[cfg(test)]
+mod route_test {
+    use super::VecExt;
+
+    #[test]
+    fn vec_swap_reset() {
+        let mut src = vec![1, 2, 3, 4, 5];
+        let tgt = src.swap_reset();
+        src.extend_from_slice(&[2, 3, 4, 5, 6]);
+
+        assert_eq!(src, vec![2, 3, 4, 5, 6]);
+        assert_eq!(tgt, vec![1, 2, 3, 4, 5]);
     }
 }

@@ -199,26 +199,34 @@ impl ViewEngineDefinition for ServerConfig {
 pub trait ViewEngineParser {
     fn template_parser<T: EngineContext + Send + Sync + 'static>(
         extension: &str,
-        content: &mut String,
+        source: Vec<u8>,
         context: Box<T>,
-    ) -> u16;
+    ) -> (u16, Vec<u8>);
 }
 
 impl ViewEngineParser for ServerConfig {
     fn template_parser<T: EngineContext + Send + Sync + 'static>(
         extension: &str,
-        content: &mut String,
+        source: Vec<u8>,
         context: Box<T>,
-    ) -> u16 {
+    ) -> (u16, Vec<u8>) {
         if extension.is_empty() {
-            return 0;
+            return (0, Vec::new());
         }
 
-        let template_engines = VIEW_ENGINES.read();
-        if let Some(engine) = template_engines.get(extension) {
-            return engine(content, context);
-        } else {
-            return 404;
+        match String::from_utf8(source) {
+            Ok(mut s) => {
+                let template_engines = VIEW_ENGINES.read();
+                if let Some(engine) = template_engines.get(extension) {
+                    let code = engine(&mut s, context);
+                    return (code, Vec::from(s.as_bytes()));
+                }
+
+                (404, Vec::new())
+            }
+            Err(err) => {
+                (404, Vec::new())
+            }
         }
     }
 }

@@ -3,6 +3,7 @@
 use std::collections;
 use std::fs::File;
 use std::io::{prelude::*, BufReader, BufWriter};
+use std::mem;
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::str;
@@ -21,13 +22,14 @@ use crate::core::{
 use crate::hashbrown::{hash_map::Iter, HashMap};
 use crate::support::{common::*, debug, debug::InfoLevel, shared_pool, TaskType};
 
-static FOUR_OH_FOUR: &'static str = include_str!("../default/404.html");
-static FOUR_OH_ONE: &'static str = include_str!("../default/401.html");
-static FIVE_HUNDRED: &'static str = include_str!("../default/500.html");
-static VERSION: &'static str = env!("CARGO_PKG_VERSION");
+const FOUR_OH_FOUR: &str = include_str!("../default/404.html");
+const FOUR_OH_ONE: &str = include_str!("../default/401.html");
+const FIVE_HUNDRED: &str = include_str!("../default/500.html");
+const VERSION: &str = env!("CARGO_PKG_VERSION");
 
-static RESP_TIMEOUT: Duration = Duration::from_millis(64);
-static LONG_CONN_TIMEOUT: Duration = Duration::from_secs(8);
+const RESP_TIMEOUT: Duration = Duration::from_millis(64);
+const LONG_CONN_TIMEOUT: Duration = Duration::from_secs(8);
+const HEADER_END: [u8; 2] = [13, 10];
 
 type BodyChan = (
     Option<Arc<channel::Sender<(String, u16)>>>,
@@ -53,16 +55,17 @@ impl Default for KeepAliveStatus {
 
 //TODO: pub http version?
 
+#[derive(Default)]
 pub struct Request {
     pub method: REST,
     pub uri: String,
+    params: HashMap<String, String>,
+    scheme: HashMap<String, Vec<String>>,
     header: HashMap<String, String>,
     cookie: HashMap<String, String>,
-    body: String,
-    scheme: HashMap<String, Vec<String>>,
     fragment: String,
-    params: HashMap<String, String>,
     host: String,
+    body: String,
     client_info: Option<SocketAddr>,
 }
 
@@ -227,23 +230,6 @@ impl Request {
     }
 }
 
-impl Default for Request {
-    fn default() -> Self {
-        Request {
-            method: REST::GET,
-            uri: String::new(),
-            header: HashMap::new(),
-            cookie: HashMap::new(),
-            body: String::new(),
-            scheme: HashMap::new(),
-            fragment: String::new(),
-            params: HashMap::new(),
-            host: String::new(),
-            client_info: None,
-        }
-    }
-}
-
 pub trait RequestWriter {
     fn write_header(&mut self, key: &str, val: &str, allow_override: bool);
     fn write_scheme(&mut self, key: &str, val: Vec<String>, allow_override: bool);
@@ -314,11 +300,11 @@ pub struct Response {
     keep_alive: KeepAliveStatus,
     content_type: String,
     content_length: Option<String>,
-    cookie: Arc<HashMap<String, Cookie>>,
     header: HashMap<String, String>,
+    cookie: HashMap<String, Cookie>,
     header_only: bool,
     redirect: String,
-    body: String,
+    body: Vec<u8>,
     body_chan: BodyChan,
     notifier: NotifyChan,
     subscriber: NotifyChan,
@@ -349,13 +335,16 @@ impl Response {
         }
     }
 
-    fn resp_header(&self) -> String {
+    fn write_resp_header(&mut self, buffer: &mut BufWriter<&mut Stream>) {
+        //TODO: write to the stream immediately, don't wait for forming the String
+
         // Get cookie parser to its own thread
-        let receiver: Option<channel::Receiver<String>> = if self.cookie.is_empty() {
+        let receiver: Option<channel::Receiver<Vec<u8>>> = if self.cookie.is_empty() {
             None
         } else {
             let (tx, rx) = channel::unbounded();
-            let cookie = Arc::clone(&self.cookie);
+            let cookie =
+                mem::replace(&mut self.cookie, HashMap::new());
 
             shared_pool::run(
                 move || {
@@ -367,34 +356,40 @@ impl Response {
             Some(rx)
         };
 
+        // get the initial header line
         let mut header = write_header_status(self.status, self.has_contents());
 
         // other header field-value pairs
         write_headers(&self.header, &mut header, self.to_keep_alive());
 
+        // write to the buffer first
+        buffer.write(&header.swap_reset()).unwrap_or_default();
+
+        // write the remainder headers
         if !self.content_type.is_empty() {
-            header.reserve_exact(16 + self.content_type.len());
-            header.push_str("Content-Type: ");
-            header.push_str(&self.content_type);
+            header.reserve(16 + self.content_type.len());
+            header.extend_from_slice(b"Content-Type: ");
+            header.extend_from_slice(self.content_type.as_bytes());
             header.append_line_break();
         }
 
         if let Some(length) = self.content_length.as_ref() {
             // explicit content length is set, use it here
-            header.reserve_exact(18 + length.len());
-            header.push_str("Content-Length: ");
-            header.push_str(&length);
+            header.reserve(18 + length.len());
+            header.extend_from_slice(b"Content-Length: ");
+            header.extend_from_slice(length.as_bytes());
             header.append_line_break();
         } else {
             // Only generate content length header attribute if not using async and no content-length set explicitly
             if self.is_header_only() || self.body.is_empty() {
-                header.reserve_exact(19);
-                header.push_str("Content-Length: 0\r\n");
+                header.reserve(19);
+                header.extend_from_slice(b"Content-Length: 0\r\n");
             } else {
                 let size = self.body.len().to_string();
-                header.reserve_exact(18 + size.len());
-                header.push_str("Content-Length: ");
-                header.push_str(&size);
+
+                header.reserve(18 + size.len());
+                header.extend_from_slice(b"Content-Length: ");
+                header.extend_from_slice(size.as_bytes());
                 header.append_line_break();
             }
         }
@@ -406,22 +401,22 @@ impl Response {
                 ("close", 5)
             };
 
-            header.reserve_exact(14 + count);
-            header.push_str("Connection: ");
-            header.push_str(connection);
+            header.reserve(14 + count);
+            header.extend_from_slice(b"Connection: ");
+            header.extend_from_slice(connection.as_bytes());
             header.append_line_break();
         }
 
+        // we're pretty much done, write the content to the underlying buffer.
+        buffer.write(&header).unwrap_or_default();
+
         if let Some(rx) = receiver {
             if let Ok(content) = rx.recv_timeout(RESP_TIMEOUT) {
-                if !content.is_empty() {
-                    header.push_str(&content);
+                if !content.is_empty() && buffer.write(&content).is_err() {
+                    debug::print("Failed to send cookie headers", InfoLevel::Warning);
                 }
             }
         }
-
-        // if header only, we're done, write the new line as the EOF
-        header
     }
 
     fn set_ext_mime_header(&mut self, path: &PathBuf) {
@@ -574,7 +569,7 @@ impl ResponseWriter for Response {
                 }
 
                 if let Ok(valid_len) = value.parse::<u64>() {
-                    self.content_length = Some(value.to_owned());
+                    self.content_length = Some(value.to_string());
                 } else {
                     panic!(
                         "Content length must be a valid string from u64, but provided with: {}",
@@ -624,7 +619,8 @@ impl ResponseWriter for Response {
         }
 
         if !content.is_empty() {
-            self.body.push_str(content);
+            self.body.reserve(content.len());
+            self.body.extend_from_slice(content.as_bytes());
         }
     }
 
@@ -663,7 +659,7 @@ impl ResponseWriter for Response {
 
         if status != 200 && status != 0 {
             // if not opening the file correctly, reset the body for error page
-            self.body = String::new();
+            unsafe { self.body.set_len(0); }
         } else if status == 200 && self.content_type.is_empty() {
             // if read the file good and not set the mime yet, set the mime
             self.set_ext_mime_header(&path);
@@ -727,13 +723,15 @@ impl ResponseWriter for Response {
                 return 404;
             }
 
-            let mut content = String::new();
+            let mut content = Vec::new();
             open_file(&path, &mut content);
 
             // Now render the conent with the engine
-            let status = ServerConfig::template_parser(&ext[..], &mut content, context);
+            let (status, final_content) =
+                ServerConfig::template_parser(&ext[..], content, context);
+
             if status == 0 || status == 200 {
-                self.body = content;
+                self.body = final_content;
                 if self.content_type.is_empty() {
                     // if read the file good and not set the mime yet, set the mime
                     self.set_ext_mime_header(&path);
@@ -751,29 +749,23 @@ impl ResponseWriter for Response {
             return;
         }
 
-        if let Some(cookie_set) = Arc::get_mut(&mut self.cookie) {
-            let key = cookie.get_cookie_key();
-            cookie_set.insert(key, cookie);
-        }
+        let key = cookie.get_cookie_key();
+        self.cookie.insert(key, cookie);
     }
 
     fn set_cookies(&mut self, cookies: &[Cookie]) {
-        if let Some(cookie_set) = Arc::get_mut(&mut self.cookie) {
-            for cookie in cookies.iter() {
-                if !cookie.is_valid() {
-                    continue;
-                }
-
-                let key = cookie.get_cookie_key();
-                cookie_set.insert(key, cookie.clone());
+        for cookie in cookies.iter() {
+            if !cookie.is_valid() {
+                continue;
             }
+
+            let key = cookie.get_cookie_key();
+            self.cookie.insert(key, cookie.clone());
         }
     }
 
     fn clear_cookies(&mut self) {
-        if let Some(cookie_set) = Arc::get_mut(&mut self.cookie) {
-            cookie_set.clear();
-        }
+        self.cookie.clear();
     }
 
     #[inline]
@@ -815,8 +807,8 @@ impl ResponseWriter for Response {
 pub(crate) trait ResponseManager {
     fn header_only(&mut self, header_only: bool);
     fn validate_and_update(&mut self);
-    fn write_header(&self, buffer: &mut BufWriter<&mut Stream>);
-    fn write_body(&self, buffer: &mut BufWriter<&mut Stream>);
+    fn write_header(&mut self, buffer: &mut BufWriter<&mut Stream>) -> bool;
+    fn write_body(&self, buffer: &mut BufWriter<&mut Stream>) -> bool;
     fn keep_long_conn(&mut self, clone: Stream, buffer: &mut BufWriter<&mut Stream>);
 }
 
@@ -840,7 +832,10 @@ impl ResponseManager for Response {
                 for received in chan {
                     if received.1 == 200 {
                         // read the content
-                        self.body.push_str(&received.0);
+                        if !received.0.is_empty() {
+                            self.body.reserve(received.0.len());
+                            self.body.extend_from_slice(&received.0.as_bytes());
+                        }
                     } else {
                         // faulty, clear the content
                         self.status = 500;
@@ -860,40 +855,51 @@ impl ResponseManager for Response {
         match self.status {
             0 | 404 => {
                 if let Some(page_generator) = ConnMetadata::get_status_pages(404) {
-                    self.body = page_generator();
+                    self.body = page_generator().into_bytes();
                 } else {
-                    self.body = FOUR_OH_FOUR.to_owned();
+                    self.body = Vec::from(FOUR_OH_FOUR.as_bytes());
                 }
             }
             401 => {
                 if let Some(page_generator) = ConnMetadata::get_status_pages(401) {
-                    self.body = page_generator();
+                    self.body = page_generator().into_bytes();
                 } else {
-                    self.body = FOUR_OH_ONE.to_owned();
+                    self.body = Vec::from(FOUR_OH_ONE.as_bytes());
                 }
             }
             _ => {
                 if let Some(page_generator) = ConnMetadata::get_status_pages(500) {
-                    self.body = page_generator();
+                    self.body = page_generator().into_bytes();
                 } else {
-                    self.body = FIVE_HUNDRED.to_owned();
+                    self.body =  Vec::from(FIVE_HUNDRED.as_bytes());
                 }
             }
         }
     }
 
-    fn write_header(&self, buffer: &mut BufWriter<&mut Stream>) {
-        write_to_buff(buffer, self.resp_header().as_bytes());
+    fn write_header(&mut self, buffer: &mut BufWriter<&mut Stream>) -> bool {
+        // write the headers
+        self.write_resp_header(buffer);
+
+        // write_to_buff(buffer, self.resp_header().as_bytes());
+
+        // Blank line to indicate the end of the response header
+        write_to_buff(buffer, &HEADER_END);
+
+        // flush what we got so far
+        buffer.flush().is_ok()
     }
 
-    fn write_body(&self, buffer: &mut BufWriter<&mut Stream>) {
+    fn write_body(&self, buffer: &mut BufWriter<&mut Stream>) -> bool {
         if self.has_contents() {
             // the content length should have been set in the header, see function resp_header
-            write_to_buff(buffer, self.body.as_bytes());
+            write_to_buff(buffer, &self.body);
         } else {
             // this shouldn't happen, as we should have captured this in the check_and_update call
             stream_default_body(self.status, buffer);
         }
+
+        buffer.flush().is_ok()
     }
 
     fn keep_long_conn(&mut self, stream_clone: Stream, buffer: &mut BufWriter<&mut Stream>) {
@@ -921,8 +927,8 @@ impl ResponseManager for Response {
 
         if let Some(ref notifier) = self.notifier {
             // listen to any replies from the server routes
-            while let Ok(message) = notifier.1.recv_timeout(LONG_CONN_TIMEOUT) {
-                stream_trunk(&message, buffer);
+            while let Ok(mut message) = notifier.1.recv_timeout(LONG_CONN_TIMEOUT) {
+                stream_trunk(unsafe {message.as_mut_vec()}, buffer);
                 if message.is_empty() {
                     // if a 0-length reply, then we're done after the reply and shall break out
                     return;
@@ -972,11 +978,11 @@ fn broadcast_new_communications(sender: channel::Sender<String>, mut stream_clon
     });
 }
 
-fn stream_trunk(content: &str, buffer: &mut BufWriter<&mut Stream>) {
+fn stream_trunk(content: &[u8], buffer: &mut BufWriter<&mut Stream>) {
     // the content length should have been set in the header, see function resp_header
     write_to_buff(buffer, content.len().to_string().as_bytes());
     write_line_break(buffer);
-    write_to_buff(buffer, content.as_bytes());
+    write_to_buff(buffer, content);
     write_line_break(buffer);
     flush_buffer(buffer);
 }
@@ -1021,11 +1027,11 @@ fn get_file_path(path: &str) -> Option<PathBuf> {
     Some(file_path.to_path_buf())
 }
 
-fn open_file(file_path: &PathBuf, buf: &mut String) -> u16 {
+fn open_file(file_path: &PathBuf, buf: &mut Vec<u8>) -> u16 {
     // try open the file
     if let Ok(file) = File::open(file_path) {
         let mut buf_reader = BufReader::new(file);
-        return match buf_reader.read_to_string(buf) {
+        return match buf_reader.read_to_end(buf) {
             Err(e) => {
                 debug::print(&format!("Unable to read file: {}", e), InfoLevel::Warning);
                 500
@@ -1049,23 +1055,24 @@ fn open_file_async(file_path: PathBuf, tx: Arc<channel::Sender<(String, u16)>>) 
             // try open the file
             if let Ok(file) = File::open(file_path) {
                 let mut buf_reader = BufReader::new(file);
-                let mut buf = [0u8; 512];
+                let mut buf = [0u8; 1024];
 
                 loop {
                     match buf_reader.read(&mut buf) {
                         Ok(len) => {
                             if let Ok(content) = str::from_utf8(&buf[..len]) {
-                                if let Err(e) = tx.send((content.to_owned(), 200)) {
+                                if tx.send((String::from(content), 200)).is_err() {
                                     debug::print(
-                                        &format!("Unable to write the file to the stream: {}", e),
+                                        "Unable to write the file to the stream",
                                         InfoLevel::Warning,
                                     );
+
                                     break;
                                 }
                             } else {
-                                if let Err(e) = tx.send((String::new(), 500)) {
+                                if tx.send((String::new(), 500)).is_err() {
                                     debug::print(
-                                        &format!("Unable to write the file to the stream: {}", e),
+                                        "Unable to write the file to the stream",
                                         InfoLevel::Warning,
                                     );
                                 }
@@ -1094,7 +1101,7 @@ fn open_file_async(file_path: PathBuf, tx: Arc<channel::Sender<(String, u16)>>) 
     );
 }
 
-fn get_status(status: u16) -> String {
+fn get_status(status: u16) -> Vec<u8> {
     let status = match status {
         100 => "100 Continue",
         101 => "101 Switching Protocols",
@@ -1144,7 +1151,12 @@ fn get_status(status: u16) -> String {
         _ => "403 Forbidden",
     };
 
-    ["HTTP/1.1 ", status, "\r\n"].join("")
+    let mut result = Vec::with_capacity(9 + status.len() + 2);
+    result.extend_from_slice(b"HTTP/1.1 ");
+    result.extend_from_slice(status.as_bytes());
+    result.append_line_break();
+
+    result
 }
 
 fn default_mime_type_with_ext(ext: &str) -> String {
@@ -1198,7 +1210,7 @@ fn default_mime_type_with_ext(ext: &str) -> String {
     }
 }
 
-fn write_header_status(status: u16, has_contents: bool) -> String {
+fn write_header_status(status: u16, has_contents: bool) -> Vec<u8> {
     match status {
         404 | 500 => get_status(status),
         0 => {
@@ -1216,46 +1228,47 @@ fn write_header_status(status: u16, has_contents: bool) -> String {
     }
 }
 
-fn write_headers(source: &HashMap<String, String>, header: &mut String, keep_alive: bool) {
+fn write_headers(source: &HashMap<String, String>, header: &mut Vec<u8>, keep_alive: bool) {
     header.reserve_exact(24);
-    header.push_str("Server: Rusty-Express/");
-    header.push_str(VERSION);
+    header.extend_from_slice(b"Server: Rusty-Express/");
+    header.extend_from_slice(VERSION.as_bytes());
     header.append_line_break();
 
     if !source.contains_key("date") {
         let dt = Utc::now().format("%a, %e %b %Y %T GMT").to_string();
 
         header.reserve_exact(8);
-        header.push_str("Date: ");
-        header.push_str(&dt);
+        header.extend_from_slice(b"Date: ");
+        header.extend_from_slice(dt.as_bytes());
         header.append_line_break();
     }
 
     let transfer = String::from("transfer-encoding");
     for (field, value) in source.iter() {
         header.reserve_exact(field.len() + value.len() + 4);
-        header.push_str(field);
-        header.push_str(": ");
-        header.push_str(value);
+        header.extend_from_slice(field.as_bytes());
+        header.extend_from_slice(b": ");
+        header.extend_from_slice(value.as_bytes());
 
         if keep_alive && field.eq(&transfer) && !value.contains("chunked") {
             header.reserve_exact(9);
-            header.push_str(", chunked\r\n");
+            header.extend_from_slice(b", chunked\r\n");
         } else {
-            header.push_str("\r\n");
+            header.append_line_break();
         }
     }
 }
 
-fn write_header_cookie(cookie: Arc<HashMap<String, Cookie>>, tx: channel::Sender<String>) {
-    let mut output = String::new();
+fn write_header_cookie(cookie: HashMap<String, Cookie>, tx: channel::Sender<Vec<u8>>) {
+    let mut output = Vec::new();
+
     for (_, cookie) in cookie.iter() {
         if cookie.is_valid() {
             let c = cookie.to_string();
 
             output.reserve_exact(14 + c.len());
-            output.push_str("Set-Cookie: ");
-            output.push_str(&c);
+            output.extend_from_slice(b"Set-Cookie: ");
+            output.extend_from_slice(c.as_bytes());
             output.append_line_break();
         }
     }
