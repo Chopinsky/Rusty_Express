@@ -1,13 +1,17 @@
 #![allow(dead_code)]
 
 use std::cmp;
+use std::fs::File;
+use std::io::Read;
+use std::ops::Div;
+use std::sync::Arc;
 use std::time::Duration;
 
 use crate::hashbrown::HashMap;
 use crate::num_cpus;
 use crate::parking_lot::RwLock;
 use crate::support::common::*;
-use std::ops::Div;
+use native_tls::{Identity, TlsAcceptor};
 
 //TODO: load config from file, e.g. config.toml?
 
@@ -21,6 +25,7 @@ pub struct ServerConfig {
     read_timeout: u16,
     write_timeout: u16,
     read_limit: usize,
+    tls_path: &'static str,
     use_session_autoclean: bool,
     session_auto_clean_period: Option<Duration>,
 }
@@ -87,6 +92,35 @@ impl ServerConfig {
     }
 
     #[inline]
+    pub fn set_tls_path(&mut self, path: &'static str) {
+        self.tls_path = path;
+    }
+
+    #[inline]
+    pub fn tls_path(&self) -> &str {
+        self.tls_path
+    }
+
+    #[inline]
+    pub(crate) fn build_tls_acceptor(&mut self) -> Option<Arc<TlsAcceptor>> {
+        if self.tls_path.is_empty() {
+            return None;
+        }
+
+        // read the identity from the file
+        let mut file = File::open(self.tls_path).unwrap();
+        let mut content = vec![];
+        file.read_to_end(&mut content).unwrap();
+
+        // create the acceptor using the provided identity
+        let identity = Identity::from_pkcs12(&content, "hunter2").unwrap();
+        let acceptor = Arc::new(TlsAcceptor::new(identity).unwrap());
+        self.tls_path = "";
+
+        Some(acceptor)
+    }
+
+    #[inline]
     pub fn clear_session_auto_clean(&mut self) {
         self.session_auto_clean_period = None;
     }
@@ -128,11 +162,14 @@ impl ServerConfig {
 
 impl Default for ServerConfig {
     fn default() -> Self {
+        let path = option_env!("TLS_PATH").unwrap_or("");
+
         ServerConfig {
             pool_size: cmp::max(4 * num_cpus::get(), 8),
             read_timeout: 512,
             write_timeout: 0,
             read_limit: 0,
+            tls_path: path,
             use_session_autoclean: false,
             session_auto_clean_period: Some(Duration::from_secs(3600)),
         }

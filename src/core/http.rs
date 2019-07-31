@@ -7,7 +7,6 @@ use std::mem;
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::str;
-use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
@@ -32,12 +31,12 @@ const LONG_CONN_TIMEOUT: Duration = Duration::from_secs(8);
 const HEADER_END: [u8; 2] = [13, 10];
 
 type BodyChan = (
-    Option<Arc<channel::Sender<(String, u16)>>>,
-    Option<channel::Receiver<(String, u16)>>,
+    Option<channel::Sender<(Vec<u8>, u16)>>,
+    Option<channel::Receiver<(Vec<u8>, u16)>>,
 );
 type NotifyChan = Option<(channel::Sender<String>, channel::Receiver<String>)>;
 
-//TODO: internal registered cache?
+//TODO: pub http version?
 
 #[derive(PartialOrd, PartialEq)]
 enum KeepAliveStatus {
@@ -52,8 +51,6 @@ impl Default for KeepAliveStatus {
         KeepAliveStatus::NotSet
     }
 }
-
-//TODO: pub http version?
 
 #[derive(Default)]
 pub struct Request {
@@ -336,8 +333,6 @@ impl Response {
     }
 
     fn write_resp_header(&mut self, buffer: &mut BufWriter<&mut Stream>) {
-        //TODO: write to the stream immediately, don't wait for forming the String
-
         // Get cookie parser to its own thread
         let receiver: Option<channel::Receiver<Vec<u8>>> = if self.cookie.is_empty() {
             None
@@ -682,8 +677,8 @@ impl ResponseWriter for Response {
 
         // lazy init the tx-rx pair.
         if self.body_chan.0.is_none() {
-            let (tx, rx) = channel::bounded(64);
-            self.body_chan = (Some(Arc::new(tx)), Some(rx));
+            let (tx, rx) = channel::bounded(16);
+            self.body_chan = (Some(tx), Some(rx));
         }
 
         // set header's mime extension field
@@ -691,7 +686,7 @@ impl ResponseWriter for Response {
 
         // actually load the file to the response body
         if let Some(chan) = self.body_chan.0.as_ref() {
-            open_file_async(path, Arc::clone(chan));
+            open_file_async(path, chan.clone());
         }
     }
 
@@ -834,7 +829,7 @@ impl ResponseManager for Response {
                         // read the content
                         if !received.0.is_empty() {
                             self.body.reserve(received.0.len());
-                            self.body.extend_from_slice(&received.0.as_bytes());
+                            self.body.extend_from_slice(&received.0);
                         }
                     } else {
                         // faulty, clear the content
@@ -1047,7 +1042,7 @@ fn open_file(file_path: &PathBuf, buf: &mut Vec<u8>) -> u16 {
     }
 }
 
-fn open_file_async(file_path: PathBuf, tx: Arc<channel::Sender<(String, u16)>>) {
+fn open_file_async(file_path: PathBuf, tx: channel::Sender<(Vec<u8>, u16)>) {
     shared_pool::run(
         move || {
             assert!(file_path.is_file());
@@ -1055,42 +1050,22 @@ fn open_file_async(file_path: PathBuf, tx: Arc<channel::Sender<(String, u16)>>) 
             // try open the file
             if let Ok(file) = File::open(file_path) {
                 let mut buf_reader = BufReader::new(file);
-                let mut buf = [0u8; 1024];
+                let mut buf = Vec::with_capacity(1024);
 
-                loop {
-                    match buf_reader.read(&mut buf) {
-                        Ok(len) => {
-                            if let Ok(content) = str::from_utf8(&buf[..len]) {
-                                if tx.send((String::from(content), 200)).is_err() {
-                                    debug::print(
-                                        "Unable to write the file to the stream",
-                                        InfoLevel::Warning,
-                                    );
-
-                                    break;
-                                }
-                            } else {
-                                if tx.send((String::new(), 500)).is_err() {
-                                    debug::print(
-                                        "Unable to write the file to the stream",
-                                        InfoLevel::Warning,
-                                    );
-                                }
-
-                                break;
-                            }
-
-                            if len < 512 {
-                                break;
-                            }
-                        }
-                        Err(e) => {
+                match buf_reader.read_to_end(&mut buf) {
+                    Ok(len) => {
+                        if tx.send((buf, 200)).is_err() {
                             debug::print(
-                                &format!("Unable to read file: {}", e),
+                                "Unable to write the file to the stream",
                                 InfoLevel::Warning,
                             );
-                            break;
                         }
+                    }
+                    Err(e) => {
+                        debug::print(
+                            &format!("Unable to read file: {}", e),
+                            InfoLevel::Warning,
+                        );
                     }
                 }
             } else {
@@ -1151,7 +1126,7 @@ fn get_status(status: u16) -> Vec<u8> {
         _ => "403 Forbidden",
     };
 
-    let mut result = Vec::with_capacity(9 + status.len() + 2);
+    let mut result = Vec::with_capacity(11 + status.len());
     result.extend_from_slice(b"HTTP/1.1 ");
     result.extend_from_slice(status.as_bytes());
     result.append_line_break();

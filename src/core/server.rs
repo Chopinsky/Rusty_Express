@@ -180,9 +180,7 @@ impl HttpServer {
 
         self.state.toggle_running_state(true);
 
-        //TODO: impl TLS setup ... then sanitize the info ... impl SSL config?
-
-        let acceptor: Option<Arc<TlsAcceptor>> = None;
+        let acceptor: Option<Arc<TlsAcceptor>> = self.config.build_tls_acceptor();
         let (mut read_timeout, mut write_timeout, mut req_limit) = self.config.load_server_params();
 
         let mut workers_pool = self.setup_worker_pools();
