@@ -1,6 +1,27 @@
-# 2019-04
+# 2019-07
 ## 0.4.3
-- This version starts to support use of TLS connections.
+- This version starts to support use of TLS connections:
+```rust
+extern crate rusty_express;
+
+use rusty_express::prelude::*;
+use std::path::PathBuf;
+
+fn main() {
+    // define http server now
+    let mut config = ServerConfig::new();
+    
+    // set the path to the tls identity key
+    config.set_tls_path("./private/identity.pfx");
+
+    // supply the config to the server
+    let mut server = HttpServer::new_with_config(config);
+   
+    // ... code to add routes and so on ... 
+    
+    server.listen(8080);
+}
+```
 - Fixing bugs in the router when using the static path.
 - Now router also allow callers to define case sensitive routes. The default behavior
 remains the same, that we will treat all routing path as lower cased.  

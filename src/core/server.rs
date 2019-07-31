@@ -49,9 +49,13 @@ impl HttpServer {
     ///
     /// ```rust
     /// extern crate rusty_express as express;
-    /// use express::prelude::{HttpServer, ServerDef, Router};
+    /// use express::prelude::{HttpServer, ServerDef, Router, Route};
     ///
     /// let mut server = HttpServer::new();
+    /// let mut router = Route::new();
+    ///
+    /// // ... code to add router handlers to ...
+    ///
     /// server.def_router(router);
     /// server.listen(8080);
     /// ```
@@ -70,11 +74,15 @@ impl HttpServer {
     ///
     /// ```rust
     /// extern crate rusty_express as express;
-    /// use express::prelude::{HttpServer, ServerDef, Router, ControlMessage};
+    /// use express::prelude::{HttpServer, ServerDef, Router, Route, ControlMessage};
     /// use std::thread;
     /// use std::time::Duration;
     ///
     /// let mut server = HttpServer::new();
+    /// let mut router = Route::new();
+    ///
+    /// // ... code to add router handlers to ...
+    ///
     /// server.def_router(router);
     /// server.listen_and_serve(8080, |controller| {
     ///     // sleep for 1 minute
