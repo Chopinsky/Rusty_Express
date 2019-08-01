@@ -3,7 +3,6 @@
 
 use std::collections::BTreeMap;
 use std::io::{prelude::*, BufWriter, ErrorKind};
-use std::mem;
 use std::net::{Shutdown, SocketAddr};
 use std::str;
 use std::time::Duration;
@@ -15,7 +14,10 @@ use crate::core::http::{
 use crate::core::router::{Route, RouteHandler, RouteSeeker, REST};
 use crate::core::stream::Stream;
 use crate::support::{
-    common::{MapUpdates, VecExt}, debug, debug::InfoLevel, shared_pool, TaskType,
+    common::{MapUpdates, VecExt},
+    debug,
+    debug::InfoLevel,
+    shared_pool, TaskType,
 };
 
 use crate::channel::{self, Receiver, Sender};
@@ -107,8 +109,7 @@ impl PipelineWorker for Stream {
                     // if no more request data left to read
                     if !raw_req.is_empty() {
                         // if we have no more incoming stream, sending it to parser and wrap up
-                        chan.send(Ok(raw_req))
-                            .unwrap_or_default();
+                        chan.send(Ok(raw_req)).unwrap_or_default();
                     } else {
                         // send a heart-beat
                         chan.send(Err(StreamException::HeartBeat))
@@ -252,6 +253,8 @@ impl PipelineWorker for Stream {
             return 1;
         }
 
+        //TODO: return response to the pool
+
         0
     }
 }
@@ -311,8 +314,7 @@ fn serve_connection(
     }
 
     // now parse the request and find the proper request handler
-    let mut request = Box::new(Request::new());
-    let mut callback = RouteHandler::default();
+    let mut last: Option<(Box<Request>, RouteHandler)> = None;
     let mut to_close = false;
     let mut body_size: usize = 0;
 
@@ -320,13 +322,16 @@ fn serve_connection(
     for raw_req in source.split("\r\n\r\n") {
         // if parsing the body from the next trunk, append the body then start processing the request
         // otherwise, just continue with parsing the new request.
-        let next: &str = (if body_size > 0 && callback.is_some() {
+        let next: &str = (if body_size > 0 && last.is_some() {
             // append the body and finishing off handing over the last request.
             let (body, remainder): (&str, &str) = raw_req.split_at(body_size);
-            request.set_body(body.to_owned());
 
-            // generate the request
-            process_request(next_id, &mut request, &mut callback, &outbox, is_tls);
+            if let Some((mut request, callback)) = last.take() {
+                request.set_body(body.to_owned());
+
+                // generate the request
+                process_request(next_id, request, callback, outbox.clone(), is_tls);
+            }
 
             // to we shall close the connection, we're done
             if to_close {
@@ -349,7 +354,7 @@ fn serve_connection(
         }
 
         // Get callback from the next request
-        callback = parse_request_sync(next, &mut request);
+        let (mut request, callback) = parse_request_sync(next);
         to_close = !request.keep_alive();
 
         // not matching any given router, return null
@@ -376,12 +381,15 @@ fn serve_connection(
         // if no body's attached with this request, we're done parsing and send the request for
         // processing now.
         if body_size == 0 {
-            process_request(next_id, &mut request, &mut callback, &outbox, is_tls);
+            process_request(next_id, request, callback, outbox.clone(), is_tls);
             if to_close {
                 return Err(ErrorKind::ConnectionAborted);
             }
 
             next_id += 1;
+        } else {
+            // otherwise, we need to save the request/callback to the placeholder
+            last.replace((request, callback));
         }
 
         //TODO: handle the trunked body stream, aka split the part before the final `boundary` in
@@ -411,19 +419,18 @@ fn send_err(
 
 fn process_request(
     next_id: usize,
-    request: &mut Box<Request>,
-    callback: &mut RouteHandler,
-    outbox: &Sender<RespSeqBundle>,
+    request: Box<Request>,
+    callback: RouteHandler,
+    outbox: Sender<RespSeqBundle>,
     is_tls: bool,
 ) {
-    let r = mem::replace(request, Box::new(Request::new()));
-    let c = mem::replace(callback, RouteHandler::default());
-    let clone_box = outbox.clone();
-
     shared_pool::run(
         move || {
-            clone_box
-                .send(RespSeqBundle(next_id, build_response(r, c, is_tls)))
+            outbox
+                .send(RespSeqBundle(
+                    next_id,
+                    build_response(request, callback, is_tls),
+                ))
                 .unwrap_or_default();
         },
         TaskType::Request,
@@ -449,6 +456,8 @@ fn build_response(
     // callback function will decide what to be written into the response
     callback.execute(&request, &mut response);
 
+    //todo: now *request*'s lifetime is finished, return it back to the pool
+
     // update the response based on critical conditions
     response.redirect_handling();
     response.validate_and_update();
@@ -457,28 +466,27 @@ fn build_response(
     response
 }
 
-fn parse_request_sync(source: &str, request: &mut Box<Request>) -> RouteHandler {
-    if source.is_empty() {
-        return RouteHandler::default();
-    }
-
+fn parse_request_sync(source: &str) -> (Box<Request>, RouteHandler) {
     let mut handler = RouteHandler::default();
+    let mut request = Box::new(Request::new());
+
     for (index, info) in source.trim().splitn(2, "\r\n").enumerate() {
         match index {
             0 => {
-                let res = parse_start_line_sync(&info, request);
+                let res = parse_start_line_sync(&info, &mut request);
+
                 if res.0.is_some() {
                     request.create_param(res.1);
                 }
 
                 handler = res.0;
             }
-            1 => parse_remainder_sync(info, request),
+            1 => parse_remainder_sync(info, &mut request),
             _ => break,
         }
     }
 
-    handler
+    (request, handler)
 }
 
 fn parse_start_line_sync(
@@ -763,9 +771,7 @@ mod async_handler {
         stream::Stream,
     };
 
-    use crate::support::{
-        debug, debug::InfoLevel, shared_pool, TaskType,
-    };
+    use crate::support::{debug, debug::InfoLevel, shared_pool, TaskType};
 
     use crate::channel;
     use crate::hashbrown::HashMap;

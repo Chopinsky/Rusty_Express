@@ -261,9 +261,7 @@ impl ViewEngineParser for ServerConfig {
 
                 (404, Vec::new())
             }
-            Err(err) => {
-                (404, Vec::new())
-            }
+            Err(err) => (404, Vec::new()),
         }
     }
 }

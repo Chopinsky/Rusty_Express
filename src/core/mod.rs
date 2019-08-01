@@ -7,3 +7,4 @@ pub mod router;
 pub mod server;
 pub mod states;
 pub(crate) mod stream;
+pub(crate) mod syncpool;

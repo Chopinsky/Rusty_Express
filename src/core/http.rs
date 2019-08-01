@@ -338,8 +338,7 @@ impl Response {
             None
         } else {
             let (tx, rx) = channel::unbounded();
-            let cookie =
-                mem::replace(&mut self.cookie, HashMap::new());
+            let cookie = mem::replace(&mut self.cookie, HashMap::new());
 
             shared_pool::run(
                 move || {
@@ -654,7 +653,9 @@ impl ResponseWriter for Response {
 
         if status != 200 && status != 0 {
             // if not opening the file correctly, reset the body for error page
-            unsafe { self.body.set_len(0); }
+            unsafe {
+                self.body.set_len(0);
+            }
         } else if status == 200 && self.content_type.is_empty() {
             // if read the file good and not set the mime yet, set the mime
             self.set_ext_mime_header(&path);
@@ -722,8 +723,7 @@ impl ResponseWriter for Response {
             open_file(&path, &mut content);
 
             // Now render the conent with the engine
-            let (status, final_content) =
-                ServerConfig::template_parser(&ext[..], content, context);
+            let (status, final_content) = ServerConfig::template_parser(&ext[..], content, context);
 
             if status == 0 || status == 200 {
                 self.body = final_content;
@@ -866,7 +866,7 @@ impl ResponseManager for Response {
                 if let Some(page_generator) = ConnMetadata::get_status_pages(500) {
                     self.body = page_generator().into_bytes();
                 } else {
-                    self.body =  Vec::from(FIVE_HUNDRED.as_bytes());
+                    self.body = Vec::from(FIVE_HUNDRED.as_bytes());
                 }
             }
         }
@@ -923,7 +923,7 @@ impl ResponseManager for Response {
         if let Some(ref notifier) = self.notifier {
             // listen to any replies from the server routes
             while let Ok(mut message) = notifier.1.recv_timeout(LONG_CONN_TIMEOUT) {
-                stream_trunk(unsafe {message.as_mut_vec()}, buffer);
+                stream_trunk(unsafe { message.as_mut_vec() }, buffer);
                 if message.is_empty() {
                     // if a 0-length reply, then we're done after the reply and shall break out
                     return;
@@ -1062,10 +1062,7 @@ fn open_file_async(file_path: PathBuf, tx: channel::Sender<(Vec<u8>, u16)>) {
                         }
                     }
                     Err(e) => {
-                        debug::print(
-                            &format!("Unable to read file: {}", e),
-                            InfoLevel::Warning,
-                        );
+                        debug::print(&format!("Unable to read file: {}", e), InfoLevel::Warning);
                     }
                 }
             } else {

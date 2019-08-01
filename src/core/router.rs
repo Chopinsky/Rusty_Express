@@ -50,7 +50,9 @@ impl fmt::Display for REST {
 }
 
 impl Default for REST {
-    fn default() -> REST { REST::GET }
+    fn default() -> REST {
+        REST::GET
+    }
 }
 
 #[derive(PartialEq, Eq, Hash, Clone, Copy)]
@@ -806,7 +808,6 @@ impl RouteHandler {
         }
 
         if let Some(path) = self.1.take() {
-
             resp.send_file_from_path_async(path);
         }
     }
