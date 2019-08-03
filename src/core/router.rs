@@ -9,6 +9,7 @@ use std::thread;
 
 use crate::channel;
 use crate::core::http::{Request, Response, ResponseWriter};
+use crate::core::syncstore::StaticStore;
 use crate::hashbrown::{HashMap, HashSet};
 use crate::regex::Regex;
 use crate::support::common::cpu_relax;
@@ -21,8 +22,8 @@ use crate::support::{
 //TODO: impl route caching: 1) only explicit and wildcard will get cached ... especially the wildcard
 //      one. 2) store uri in the "method:path" format.
 
-static mut ROUTER: Option<(Route, AtomicUsize)> = None;
-static mut ROUTE_CACHE: Option<HashMap<(REST, String), RouteHandler>> = None;
+static mut ROUTER: StaticStore<(Route, AtomicUsize)> = StaticStore::init();
+static mut ROUTE_CACHE: StaticStore<HashMap<(REST, String), RouteHandler>> = StaticStore::init();
 
 #[derive(PartialEq, Eq, Hash, Clone)]
 pub enum REST {
@@ -427,8 +428,8 @@ pub struct Route {
 impl Route {
     pub(crate) fn init() {
         unsafe {
-            ROUTER.replace((Route::new(), AtomicUsize::new(1)));
-            ROUTE_CACHE.replace(HashMap::new());
+            ROUTER.set((Route::new(), AtomicUsize::new(1)));
+            ROUTE_CACHE.set(HashMap::new());
         }
     }
 

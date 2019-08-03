@@ -13,6 +13,7 @@ use crate::core::http::{
 };
 use crate::core::router::{Route, RouteHandler, RouteSeeker, REST};
 use crate::core::stream::Stream;
+use crate::core::syncstore::Reusable;
 use crate::support::{
     common::{MapUpdates, VecExt},
     debug,
@@ -253,7 +254,7 @@ impl PipelineWorker for Stream {
             return 1;
         }
 
-        //TODO: return response to the pool
+        response.release();
 
         0
     }
@@ -455,8 +456,7 @@ fn build_response(
 
     // callback function will decide what to be written into the response
     callback.execute(&request, &mut response);
-
-    //todo: now *request*'s lifetime is finished, return it back to the pool
+    request.release();
 
     // update the response based on critical conditions
     response.redirect_handling();
@@ -468,7 +468,7 @@ fn build_response(
 
 fn parse_request_sync(source: &str) -> (Box<Request>, RouteHandler) {
     let mut handler = RouteHandler::default();
-    let mut request = Box::new(Request::new());
+    let mut request = Request::obtain(); //Box::new(Request::new());
 
     for (index, info) in source.trim().splitn(2, "\r\n").enumerate() {
         match index {
@@ -576,11 +576,11 @@ fn parse_remainder_sync(info: &str, req: &mut Box<Request>) {
 }
 
 fn initialize_response(is_tls: bool) -> Box<Response> {
-    let header = ConnMetadata::get_default_header();
-    let mut resp = match header {
-        None => Box::new(Response::new()),
-        Some(h) => Box::new(Response::new_with_default_header(h)),
-    };
+    let mut resp = Response::obtain();
+
+    if let Some(header) = ConnMetadata::get_default_header() {
+        resp.default_header(header);
+    }
 
     if is_tls {
         resp.can_keep_alive(false);
@@ -725,7 +725,7 @@ fn parse_scheme(scheme: String) -> HashMap<String, Vec<String>> {
 }
 
 fn build_err_response(err_status: u16) -> Box<Response> {
-    let mut resp = Box::new(Response::new());
+    let mut resp = Response::obtain(); //Box::new(Response::new());
 
     resp.status(err_status);
     if err_status == 0 {

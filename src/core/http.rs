@@ -10,8 +10,9 @@ use std::str;
 use std::thread;
 use std::time::Duration;
 
-use crate::channel;
+use crate::channel::{self, Receiver, Sender};
 use crate::chrono::prelude::*;
+use crate::core::syncstore::{Reusable, StaticStore, SyncPool};
 use crate::core::{
     config::{ConnMetadata, EngineContext, ServerConfig, ViewEngineParser},
     cookie::*,
@@ -31,10 +32,13 @@ const LONG_CONN_TIMEOUT: Duration = Duration::from_secs(8);
 const HEADER_END: [u8; 2] = [13, 10];
 
 type BodyChan = (
-    Option<channel::Sender<(Vec<u8>, u16)>>,
-    Option<channel::Receiver<(Vec<u8>, u16)>>,
+    Option<Sender<(Vec<u8>, u16)>>,
+    Option<Receiver<(Vec<u8>, u16)>>,
 );
-type NotifyChan = Option<(channel::Sender<String>, channel::Receiver<String>)>;
+type NotifyChan = Option<(Sender<String>, Receiver<String>)>;
+
+static mut REQ_POOL: StaticStore<SyncPool<Box<Request>>> = StaticStore::init();
+static mut RESP_POOL: StaticStore<SyncPool<Box<Response>>> = StaticStore::init();
 
 //TODO: pub http version?
 
@@ -68,7 +72,7 @@ pub struct Request {
 
 impl Request {
     #[inline]
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Default::default()
     }
 
@@ -225,6 +229,56 @@ impl Request {
     pub(crate) fn set_body(&mut self, body: String) {
         self.body = body;
     }
+
+    pub(crate) fn init_pool() {
+        unsafe {
+            REQ_POOL.set(SyncPool::new());
+        }
+    }
+}
+
+impl Reusable for Request {
+    fn obtain() -> Box<Self> {
+        match unsafe { REQ_POOL.as_mut() } {
+            Ok(pool) => pool.get(),
+            Err(_) => Default::default(),
+        }
+    }
+
+    fn release(mut self: Box<Self>) {
+        self.reset(false);
+
+        if let Ok(pool) = unsafe { REQ_POOL.as_mut() } {
+            pool.put(self);
+        }
+    }
+
+    fn reset(&mut self, hard: bool) {
+        self.method = REST::GET;
+
+        if !hard {
+            unsafe {
+                self.uri.as_mut_vec().set_len(0);
+                self.fragment.as_mut_vec().set_len(0);
+                self.host.as_mut_vec().set_len(0);
+                self.body.as_mut_vec().set_len(0);
+            }
+        } else {
+            self.uri.clear();
+            self.fragment.clear();
+            self.host.clear();
+            self.body.clear();
+        }
+
+        self.params.clear();
+        self.scheme.clear();
+        self.header.clear();
+        self.cookie.clear();
+
+        if self.client_info.is_some() {
+            self.client_info.take();
+        }
+    }
 }
 
 pub trait RequestWriter {
@@ -308,14 +362,12 @@ pub struct Response {
 }
 
 impl Response {
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Default::default()
     }
 
-    pub fn new_with_default_header(default_header: HashMap<String, String>) -> Self {
-        let mut response = Response::new();
-        response.header = default_header;
-        response
+    pub(crate) fn default_header(&mut self, header: HashMap<String, String>) {
+        self.header = header;
     }
 
     pub(crate) fn redirect_handling(&mut self) {
@@ -332,12 +384,18 @@ impl Response {
         }
     }
 
+    pub(crate) fn init_pool() {
+        unsafe {
+            RESP_POOL.set(SyncPool::new());
+        }
+    }
+
     fn write_resp_header(&mut self, buffer: &mut BufWriter<&mut Stream>) {
         // Get cookie parser to its own thread
-        let receiver: Option<channel::Receiver<Vec<u8>>> = if self.cookie.is_empty() {
+        let receiver: Option<Receiver<Vec<u8>>> = if self.cookie.is_empty() {
             None
         } else {
-            let (tx, rx) = channel::unbounded();
+            let (tx, rx) = channel::bounded(1);
             let cookie = mem::replace(&mut self.cookie, HashMap::new());
 
             shared_pool::run(
@@ -425,6 +483,48 @@ impl Response {
     }
 }
 
+impl Reusable for Response {
+    fn obtain() -> Box<Self> {
+        match unsafe { RESP_POOL.as_mut() } {
+            Ok(pool) => pool.get(),
+            Err(_) => Default::default(),
+        }
+    }
+
+    fn release(mut self: Box<Self>) {
+        self.reset(false);
+
+        if let Ok(pool) = unsafe { RESP_POOL.as_mut() } {
+            pool.put(self);
+        }
+    }
+
+    fn reset(&mut self, hard: bool) {
+        self.status = 0;
+        self.keep_alive = KeepAliveStatus::NotSet;
+
+        if !hard {
+            unsafe {
+                self.content_type.as_mut_vec().set_len(0);
+                self.redirect.as_mut_vec().set_len(0);
+                self.body.set_len(0);
+            }
+        } else {
+            self.content_type.clear();
+            self.redirect.clear();
+            self.body.clear();
+        }
+
+        if self.content_length.is_some() {
+            self.content_length.take();
+        }
+
+        self.header_only = false;
+        self.header.clear();
+        self.cookie.clear();
+    }
+}
+
 pub trait ResponseStates {
     fn to_keep_alive(&self) -> bool;
     fn get_redirect_path(&self) -> String;
@@ -434,9 +534,7 @@ pub trait ResponseStates {
     fn status_is_set(&self) -> bool;
     fn has_contents(&self) -> bool;
     fn is_header_only(&self) -> bool;
-    fn get_channels(
-        &mut self,
-    ) -> Result<(channel::Sender<String>, channel::Receiver<String>), &'static str>;
+    fn get_channels(&mut self) -> Result<(Sender<String>, Receiver<String>), &'static str>;
 }
 
 impl ResponseStates for Response {
@@ -485,15 +583,13 @@ impl ResponseStates for Response {
     /// get_channels will create the channels for communicating between the chunk generator threads and
     /// the main stream. Listen to the receiver for any client communications, and use the sender to
     /// send any ensuing responses.
-    fn get_channels(
-        &mut self,
-    ) -> Result<(channel::Sender<String>, channel::Receiver<String>), &'static str> {
+    fn get_channels(&mut self) -> Result<(Sender<String>, Receiver<String>), &'static str> {
         if self.notifier.is_none() {
-            self.notifier = Some(channel::unbounded());
+            self.notifier = Some(channel::bounded(64));
         }
 
         if self.subscriber.is_none() {
-            self.subscriber = Some(channel::unbounded());
+            self.subscriber = Some(channel::bounded(64));
         }
 
         if let Some(notifier) = self.notifier.as_ref() {
@@ -678,7 +774,7 @@ impl ResponseWriter for Response {
 
         // lazy init the tx-rx pair.
         if self.body_chan.0.is_none() {
-            let (tx, rx) = channel::bounded(16);
+            let (tx, rx) = channel::bounded(4);
             self.body_chan = (Some(tx), Some(rx));
         }
 
@@ -933,7 +1029,7 @@ impl ResponseManager for Response {
     }
 }
 
-fn broadcast_new_communications(sender: channel::Sender<String>, mut stream_clone: Stream) {
+fn broadcast_new_communications(sender: Sender<String>, mut stream_clone: Stream) {
     thread::spawn(move || {
         let mut buffer = [0u8; 512];
 
@@ -1042,7 +1138,7 @@ fn open_file(file_path: &PathBuf, buf: &mut Vec<u8>) -> u16 {
     }
 }
 
-fn open_file_async(file_path: PathBuf, tx: channel::Sender<(Vec<u8>, u16)>) {
+fn open_file_async(file_path: PathBuf, tx: Sender<(Vec<u8>, u16)>) {
     shared_pool::run(
         move || {
             assert!(file_path.is_file());
@@ -1231,7 +1327,7 @@ fn write_headers(source: &HashMap<String, String>, header: &mut Vec<u8>, keep_al
     }
 }
 
-fn write_header_cookie(cookie: HashMap<String, Cookie>, tx: channel::Sender<Vec<u8>>) {
+fn write_header_cookie(cookie: HashMap<String, Cookie>, tx: Sender<Vec<u8>>) {
     let mut output = Vec::new();
 
     for (_, cookie) in cookie.iter() {

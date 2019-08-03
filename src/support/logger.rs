@@ -5,29 +5,35 @@ use std::fmt;
 use std::fs;
 use std::fs::File;
 use std::io::Write;
+use std::mem;
 use std::net::SocketAddr;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc,
+};
 use std::thread;
 use std::time::Duration;
 
 use crate::channel::{self, SendError};
 use crate::chrono::{DateTime, Utc};
-use crate::parking_lot::{Mutex, Once, RwLock, ONCE_INIT};
-use crate::support::debug;
+use crate::core::syncstore::StaticStore;
+use crate::parking_lot::{Once, ONCE_INIT};
+use crate::support::{common::cpu_relax, debug};
 
-lazy_static! {
-    static ref TEMP_STORE: Mutex<Vec<LogInfo>> = Mutex::new(Vec::new());
-    static ref CONFIG: RwLock<LoggerConfig> = RwLock::new(LoggerConfig::initialize(""));
-}
+//lazy_static! {
+//    static ref TEMP_STORE: Mutex<Vec<LogInfo>> = Mutex::new(Vec::new());
+//    static ref CONFIG: RwLock<LoggerConfig> = RwLock::new(LoggerConfig::initialize(""));
+//}
 
 const DEFAULT_LOCATION: &str = "./logs";
 
 static ONCE: Once = ONCE_INIT;
-static mut SENDER: Option<channel::Sender<LogInfo>> = None;
+static DUMP_IN_PROGRESS: AtomicBool = AtomicBool::new(false);
+
+static mut CHAN: Option<(channel::Sender<LogMessage>, channel::Receiver<LogMessage>)> = None;
+static mut CONFIG: StaticStore<LoggerConfig> = StaticStore::init();
 static mut REFRESH_HANDLER: Option<thread::JoinHandle<()>> = None;
-static mut DUMPING_RUNNING: AtomicBool = AtomicBool::new(false);
-static mut LOG_WRITER: Option<Box<dyn LogWriter>> = None;
 
 #[derive(Debug)]
 pub enum InfoLevel {
@@ -37,6 +43,12 @@ pub enum InfoLevel {
     Warn,
     Error,
     Critical,
+}
+
+enum LogMessage {
+    Info(LogInfo),
+    Shutdown,
+    Dump,
 }
 
 impl fmt::Display for InfoLevel {
@@ -78,56 +90,9 @@ struct LoggerConfig {
     id: String,
     refresh_period: Duration,
     log_folder_path: Option<PathBuf>,
-    meta_info_provider: Option<fn(bool) -> String>,
+    meta_info_provider: Option<Box<dyn Fn(bool) -> String>>,
     rx_handler: Option<thread::JoinHandle<()>>,
-}
-
-pub trait LogWriter {
-    fn dump(&self, log_store: Vec<LogInfo>) -> Result<(), Vec<LogInfo>>;
-}
-
-struct DefaultLogWriter {}
-
-impl DefaultLogWriter {
-    fn get_log_file(config: &LoggerConfig) -> Result<File, String> {
-        match config.log_folder_path {
-            Some(ref location) if location.is_dir() => create_dump_file(config.get_id(), location),
-            _ => create_dump_file(config.get_id(), &PathBuf::from(DEFAULT_LOCATION)),
-        }
-    }
-}
-
-impl LogWriter for DefaultLogWriter {
-    fn dump(&self, log_store: Vec<LogInfo>) -> Result<(), Vec<LogInfo>> {
-        let config = CONFIG.read();
-
-        if let Ok(mut file) = DefaultLogWriter::get_log_file(&config) {
-            // Now start a new dump
-            if let Some(meta_func) = config.meta_info_provider {
-                write_to_file(&mut file, &meta_func(true));
-            }
-
-            let mut content: String = String::new();
-
-            for (count, info) in log_store.iter().enumerate() {
-                content.push_str(&format_content(&info.level, &info.message, info.time));
-
-                if count % 10 == 0 {
-                    write_to_file(&mut file, &content);
-                    content.clear();
-                }
-            }
-
-            // write the remainder of the content
-            if !content.is_empty() {
-                write_to_file(&mut file, &content);
-            }
-
-            return Ok(());
-        }
-
-        Err(log_store)
-    }
+    write_lock: AtomicBool,
 }
 
 impl LoggerConfig {
@@ -138,11 +103,13 @@ impl LoggerConfig {
             log_folder_path: None,
             meta_info_provider: None,
             rx_handler: None,
+            write_lock: AtomicBool::new(false),
         }
     }
 
     #[inline]
     fn set_id(&mut self, id: &str) {
+        //TODO: internal lock to check write privilege
         self.id = id.to_owned();
     }
 
@@ -158,10 +125,13 @@ impl LoggerConfig {
 
     #[inline]
     fn set_refresh_period(&mut self, period: Duration) {
+        //TODO: internal lock to check write privilege
         self.refresh_period = period;
     }
 
     pub fn set_log_folder_path(&mut self, path: &str) {
+        //TODO: internal lock to check write privilege
+
         let mut path_buff = PathBuf::new();
 
         let location: Option<PathBuf> = if path.is_empty() {
@@ -190,6 +160,59 @@ impl LoggerConfig {
     }
 }
 
+pub trait LogWriter {
+    fn dump(&self, log_store: &[LogInfo]) -> Result<(), usize>;
+}
+
+struct DefaultLogWriter;
+
+impl DefaultLogWriter {
+    fn get_log_file(config: &LoggerConfig) -> Result<File, String> {
+        match config.log_folder_path {
+            Some(ref location) if location.is_dir() => create_dump_file(config.get_id(), location),
+            _ => create_dump_file(config.get_id(), &PathBuf::from(DEFAULT_LOCATION)),
+        }
+    }
+}
+
+impl LogWriter for DefaultLogWriter {
+    fn dump(&self, log_store: &[LogInfo]) -> Result<(), usize> {
+        let config = unsafe {
+            match CONFIG.as_ref() {
+                Ok(c) => c,
+                Err(e) => return Err(0),
+            }
+        };
+
+        if let Ok(mut file) = DefaultLogWriter::get_log_file(&config) {
+            // Now start a new dump
+            if let Some(meta_func) = config.meta_info_provider.as_ref() {
+                write_to_file(&mut file, &meta_func(true));
+            }
+
+            let mut content: String = String::new();
+
+            for (count, info) in log_store.iter().enumerate() {
+                content.push_str(&format_content(&info.level, &info.message, info.time));
+
+                if count % 10 == 0 {
+                    write_to_file(&mut file, &content);
+                    content.clear();
+                }
+            }
+
+            // write the remainder of the content
+            if !content.is_empty() {
+                write_to_file(&mut file, &content);
+            }
+
+            return Ok(());
+        }
+
+        Err(0)
+    }
+}
+
 pub fn log(message: &str, level: InfoLevel, client: Option<SocketAddr>) -> Result<(), String> {
     let info = LogInfo {
         message: message.to_owned(),
@@ -198,55 +221,69 @@ pub fn log(message: &str, level: InfoLevel, client: Option<SocketAddr>) -> Resul
         time: Utc::now(),
     };
 
-    unsafe {
-        if let Some(ref tx) = SENDER {
-            if let Err(SendError(msg)) = tx.send(info) {
-                return Err(format!("Failed to log the message: {}", msg.message));
-            }
-
-            return Ok(());
-        }
+    if let Some(chan) = unsafe { CHAN.as_ref() } {
+        return chan.0.send(LogMessage::Info(info)).map_err(|err| {
+            format!("Failed to log the message: {:?}", err)
+        });
     }
 
     Err(String::from("The logging service is not running..."))
 }
 
-pub fn set_log_writer<T: LogWriter + 'static>(writer: T) {
-    unsafe {
-        LOG_WRITER = Some(Box::new(writer));
-    }
-}
-
-pub(crate) fn start(
+pub(crate) fn start<T>(
+    writer: T,
     period: Option<u64>,
-    log_folder_path: Option<&str>,
-    meta_info_provider: Option<fn(bool) -> String>,
-) {
-    {
-        let mut config = CONFIG.write();
+    folder_path: Option<&str>,
+    provider: Option<Box<dyn Fn(bool) -> String>>,
+) where
+    T: LogWriter + Send + Sync + 'static,
+{
+    let mut config = LoggerConfig::initialize("");
 
-        if let Some(time) = period {
-            if time != 1800 {
-                (*config).refresh_period = Duration::from_secs(time);
-            }
+    if let Some(time) = period {
+        if time != 1800 {
+            config.refresh_period = Duration::from_secs(time);
         }
-
-        if let Some(path) = log_folder_path {
-            (*config).set_log_folder_path(path);
-        }
-
-        (*config).meta_info_provider = meta_info_provider;
     }
 
-    initialize();
-    set_log_writer(DefaultLogWriter {});
+    if let Some(path) = folder_path {
+        config.set_log_folder_path(path);
+    }
+
+    config.meta_info_provider = provider;
+
+    ONCE.call_once(|| {
+        let (tx, rx) = channel::bounded(64);
+        unsafe { CHAN.replace((tx, rx)); }
+    });
+
+    if let Some(ref path) = config.log_folder_path {
+        let refresh = config.refresh_period.as_secs();
+
+        println!(
+            "The logger has started, it will refresh log to folder {:?} every {} seconds",
+            path.to_str().unwrap(),
+            refresh
+        );
+
+        start_refresh(config.refresh_period);
+    }
+
+    config.rx_handler.replace(thread::spawn(move ||
+        run(Box::new(DefaultLogWriter))
+    ));
 }
 
 pub(crate) fn shutdown() {
     stop_refresh();
 
-    let mut config = CONFIG.write();
-    if let Some(rx) = (*config).rx_handler.take() {
+    let config =
+        match unsafe { CONFIG.as_mut() } {
+            Ok(c) => c,
+            Err(_) => return,
+        };
+
+    if let Some(rx) = config.rx_handler.take() {
         rx.join().unwrap_or_else(|err| {
             eprintln!("Encountered error while closing the logger: {:?}", err);
         });
@@ -259,47 +296,40 @@ pub(crate) fn shutdown() {
         time: Utc::now(),
     };
 
-    unsafe {
-        if let Some(ref tx) = SENDER.take() {
-            if let Err(SendError(msg)) = tx.send(final_msg) {
-                debug::print("Failed to log the final message", debug::InfoLevel::Warning);
-            }
+
+    if let Some(chan) = unsafe { CHAN.take() } {
+        if let Err(SendError(msg)) = chan.0.send(LogMessage::Info(final_msg)) {
+            debug::print("Failed to log the final message", debug::InfoLevel::Warning);
         }
     }
 
     // Need to block because otherwise the lazy_static contents may go expired too soon
-    dump_log();
+    //    dump_log();
 }
 
-fn initialize() {
-    ONCE.call_once(|| {
-        let (tx, rx): (channel::Sender<LogInfo>, channel::Receiver<LogInfo>) = channel::bounded(16);
+fn run<T>(writer: Box<T>)
+where
+    T: LogWriter + Send + Sync + 'static,
+{
+    let mut store: Vec<LogInfo> = Vec::with_capacity(1024);
+    let writer = Arc::new(writer);
+    let rx = unsafe { &CHAN.as_ref().unwrap().1 };
 
-        unsafe {
-            SENDER = Some(tx);
-        }
+    for info in rx {
+        match info {
+            LogMessage::Info(i) => store.push(i),
+            LogMessage::Dump => {
+                let arc_writer = Arc::clone(&writer);
+                let mut dump_store = Vec::with_capacity(1024);
+                mem::swap(&mut store, &mut dump_store);
 
-        let mut config = CONFIG.write();
-
-        if let Some(ref path) = (*config).log_folder_path {
-            let refresh = (*config).refresh_period.as_secs();
-
-            println!(
-                "The logger has started, it will refresh log to folder {:?} every {} seconds",
-                path.to_str().unwrap(),
-                refresh
-            );
-
-            start_refresh((*config).refresh_period);
-        }
-
-        (*config).rx_handler = Some(thread::spawn(move || {
-            for info in rx {
-                let mut store = TEMP_STORE.lock();
-                (*store).push(info);
+                thread::spawn(move || {
+                    dump_log(dump_store, arc_writer);
+                });
             }
-        }));
-    });
+            LogMessage::Shutdown => break,
+        }
+    }
 }
 
 fn start_refresh(period: Duration) {
@@ -311,7 +341,7 @@ fn start_refresh(period: Duration) {
         REFRESH_HANDLER = Some(thread::spawn(move || loop {
             thread::sleep(period);
             thread::spawn(|| {
-                dump_log();
+                //                dump_log();
             });
         }));
     }
@@ -334,65 +364,50 @@ fn reset_refresh(period: Option<Duration>) {
     thread::spawn(move || {
         stop_refresh();
 
-        let new_period = {
-            let mut config = CONFIG.write();
-            if let Some(p) = period {
-                (*config).set_refresh_period(p);
-            }
+        let config =
+            match unsafe { CONFIG.as_mut() } {
+                Ok(c) => c,
+                Err(_) => return,
+            };
 
-            (*config).get_refresh_period()
-        };
+        if let Some(p) = period {
+            config.set_refresh_period(p);
+        }
 
-        start_refresh(new_period);
+        start_refresh(config.get_refresh_period());
     });
 }
 
-fn dump_log() {
-    if unsafe { DUMPING_RUNNING.load(Ordering::SeqCst) } {
-        let config = CONFIG.read();
-
-        if let Ok(mut file) = DefaultLogWriter::get_log_file(&config) {
-            if let Some(meta_func) = config.meta_info_provider {
-                write_to_file(&mut file, &meta_func(false));
-            }
-
-            write_to_file(
-                &mut file,
-                &format_content(
-                    &InfoLevel::Info,
-                    "A dumping process is already in progress, skipping this scheduled dump.",
-                    Utc::now(),
-                ),
-            );
-        }
-
+fn dump_log<T>(data: Vec<LogInfo>, writer: Arc<Box<T>>)
+where
+    T: LogWriter + Send + Sync,
+{
+    if data.is_empty() {
         return;
     }
 
-    let store: Vec<LogInfo> = {
-        let mut res = TEMP_STORE.lock();
-        (*res).drain(..).collect()
-    };
-
-    if !store.is_empty() {
-        unsafe {
-            if let Some(ref writer) = LOG_WRITER {
-                *DUMPING_RUNNING.get_mut() = true;
-
-                match writer.dump(store) {
-                    Ok(_) => {}
-                    Err(vec) => {
-                        let mut res = TEMP_STORE.lock();
-
-                        // can't write the result, put them back.
-                        (*res).extend(vec);
-                    }
-                }
-
-                *DUMPING_RUNNING.get_mut() = false;
-            }
-        }
+    while DUMP_IN_PROGRESS
+        .compare_exchange_weak(false, true, Ordering::SeqCst, Ordering::Relaxed)
+        .is_err()
+    {
+        cpu_relax(8);
     }
+
+    let mut remainder = data;
+
+    while let Err(pos) = writer.dump(&remainder) {
+        let mut index = 0;
+        remainder.retain(|_| {
+            if index < pos {
+                return false;
+            }
+
+            index += 1;
+            true
+        });
+    }
+
+    DUMP_IN_PROGRESS.store(false, Ordering::SeqCst);
 }
 
 fn write_to_file(file: &mut File, content: &str) {
