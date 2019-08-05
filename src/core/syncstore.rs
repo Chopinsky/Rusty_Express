@@ -346,16 +346,20 @@ impl<T> StaticStore<T> {
         StaticStore(None)
     }
 
-    pub(crate) fn set(&mut self, val: T) {
-        self.0.replace(val);
-    }
-
     pub(crate) fn as_mut(&mut self) -> Result<&mut T, ErrorKind> {
         self.0.as_mut().ok_or(ErrorKind::NotFound)
     }
 
     pub(crate) fn as_ref(&self) -> Result<&T, ErrorKind> {
         self.0.as_ref().ok_or(ErrorKind::NotFound)
+    }
+
+    pub(crate) fn set(&mut self, val: T) {
+        self.0.replace(val);
+    }
+
+    pub(crate) fn take(&mut self) -> Option<T> {
+        self.0.take()
     }
 }
 

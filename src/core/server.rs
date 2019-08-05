@@ -7,10 +7,11 @@ use std::time::Duration;
 use crate::channel;
 use crate::core::{
     config::{ServerConfig, ViewEngine, ViewEngineDefinition},
-    conn::*,
-    router::*,
-    states::*,
-    stream::*,
+    conn::{self, StreamHandler},
+    router::{self, Callback, Router, Route, RouteHandler, RequestPath, REST},
+    states::{AsyncController, ControlMessage, ServerStates},
+    stream::Stream,
+    http,
 };
 use crate::hashbrown::HashMap;
 use crate::native_tls::TlsAcceptor;
@@ -213,7 +214,7 @@ impl HttpServer {
                 match message {
                     ControlMessage::Terminate => {
                         if let Ok(s) = stream {
-                            send_err_resp(Stream::Tcp(s), 503);
+                            conn::send_err_resp(Stream::Tcp(s), 503);
                         }
 
                         break;
@@ -278,11 +279,8 @@ impl HttpServer {
             }
         }
 
-        // must close the shared pool, since it's a static and won't drop with the end of the server,
-        // which could cause response executions still on-the-fly to crash.
-        shared_pool::close();
-
         self.state.toggle_running_state(false);
+        self.cleanup();
     }
 
     fn handle_stream(
@@ -328,6 +326,18 @@ impl HttpServer {
         let size = self.config.get_pool_size();
         shared_pool::initialize_with(vec![size]);
         ThreadPool::new(size)
+    }
+
+    fn cleanup(&self) {
+        // Must close the shared pool, since it's a static and won't drop with the end of the server,
+        // which could cause response executions still on-the-fly to crash.
+        shared_pool::close();
+
+        // Clean up with static stores. Invoking the statics after this cleanup step will lead to
+        // undefined behaviors (not always panic), since we drop contents in-place and before the
+        // actual destructors are called on the statics
+        http::drop_statics();
+        router::drop_statics();
     }
 }
 

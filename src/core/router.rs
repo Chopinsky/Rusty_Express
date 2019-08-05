@@ -4,6 +4,7 @@
 use std::fmt;
 use std::fs;
 use std::path::PathBuf;
+use std::ptr;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::thread;
 
@@ -704,87 +705,6 @@ impl RouteSeeker for Route {
     }
 }
 
-fn search_wildcard_router(routes: &HashMap<String, RegexRoute>, uri: &str) -> RouteHandler {
-    let mut result = RouteHandler(None, None);
-    for (_, route) in routes.iter() {
-        if route.regex.is_match(&uri) {
-            result = route.handler.clone();
-            break;
-        }
-    }
-
-    result
-}
-
-fn search_params_router(
-    head: &RouteTrie,
-    uri: &str,
-    params: &mut HashMap<String, String>,
-) -> RouteHandler {
-    let raw_segments: Vec<String> = uri.trim_matches('/').split('/').map(String::from).collect();
-
-    params.reserve(raw_segments.len());
-    let result = RouteTrie::find(head, raw_segments.as_slice(), params);
-
-    params.shrink_to_fit();
-    result
-}
-
-fn search_static_router(path: &StaticLocRoute, raw_uri: &str) -> Result<RouteHandler, ()> {
-    // check if static path can be met
-    let mut normalized_uri = path.location.clone();
-    normalized_uri.push(raw_uri.trim_start_matches(|x| x == '.' || x == '/'));
-
-    let meta = match fs::metadata(&normalized_uri) {
-        Ok(m) => m,
-        _ => return Ok(RouteHandler::default()),
-    };
-
-    // only if the file exists
-    if meta.is_file() {
-        // the requested file exists, now check white-list and black-list, in this order
-        let ext = match normalized_uri.extension() {
-            Some(e) => {
-                if let Some(e_str) = e.to_str() {
-                    ["*.", e_str].join("")
-                } else {
-                    String::new()
-                }
-            }
-            _ => String::new(),
-        };
-
-        let file = match normalized_uri.file_name() {
-            Some(f) => {
-                if let Some(f_str) = f.to_str() {
-                    String::from(f_str)
-                } else {
-                    String::new()
-                }
-            }
-            _ => String::new(),
-        };
-
-        if !path.white_list.is_empty()
-            && (!ext.is_empty() && !path.white_list.contains(&ext))
-            && (!file.is_empty() && !path.white_list.contains(&file))
-        {
-            return Err(());
-        }
-
-        if !path.black_list.is_empty()
-            && ((!ext.is_empty() && path.black_list.contains(&ext))
-                || (!file.is_empty() && path.black_list.contains(&file)))
-        {
-            return Err(());
-        }
-
-        return Ok(RouteHandler(None, Some(normalized_uri)));
-    }
-
-    Ok(RouteHandler::default())
-}
-
 pub(crate) struct RouteHandler(Option<Callback>, Option<PathBuf>);
 
 impl RouteHandler {
@@ -905,6 +825,94 @@ impl<'a> Drop for RouteGuard<'a> {
             self.1.store(1, Ordering::SeqCst);
         }
     }
+}
+
+pub(crate) fn drop_statics() {
+    unsafe {
+        ptr::drop_in_place(&mut ROUTER as *mut StaticStore<(Route, AtomicUsize)>);
+        ptr::drop_in_place(&mut ROUTE_CACHE as *mut StaticStore<HashMap<(REST, String), RouteHandler>>);
+    }
+}
+
+fn search_wildcard_router(routes: &HashMap<String, RegexRoute>, uri: &str) -> RouteHandler {
+    let mut result = RouteHandler(None, None);
+    for (_, route) in routes.iter() {
+        if route.regex.is_match(&uri) {
+            result = route.handler.clone();
+            break;
+        }
+    }
+
+    result
+}
+
+fn search_params_router(
+    head: &RouteTrie,
+    uri: &str,
+    params: &mut HashMap<String, String>,
+) -> RouteHandler {
+    let raw_segments: Vec<String> = uri.trim_matches('/').split('/').map(String::from).collect();
+
+    params.reserve(raw_segments.len());
+    let result = RouteTrie::find(head, raw_segments.as_slice(), params);
+
+    params.shrink_to_fit();
+    result
+}
+
+fn search_static_router(path: &StaticLocRoute, raw_uri: &str) -> Result<RouteHandler, ()> {
+    // check if static path can be met
+    let mut normalized_uri = path.location.clone();
+    normalized_uri.push(raw_uri.trim_start_matches(|x| x == '.' || x == '/'));
+
+    let meta = match fs::metadata(&normalized_uri) {
+        Ok(m) => m,
+        _ => return Ok(RouteHandler::default()),
+    };
+
+    // only if the file exists
+    if meta.is_file() {
+        // the requested file exists, now check white-list and black-list, in this order
+        let ext = match normalized_uri.extension() {
+            Some(e) => {
+                if let Some(e_str) = e.to_str() {
+                    ["*.", e_str].join("")
+                } else {
+                    String::new()
+                }
+            }
+            _ => String::new(),
+        };
+
+        let file = match normalized_uri.file_name() {
+            Some(f) => {
+                if let Some(f_str) = f.to_str() {
+                    String::from(f_str)
+                } else {
+                    String::new()
+                }
+            }
+            _ => String::new(),
+        };
+
+        if !path.white_list.is_empty()
+            && (!ext.is_empty() && !path.white_list.contains(&ext))
+            && (!file.is_empty() && !path.white_list.contains(&file))
+        {
+            return Err(());
+        }
+
+        if !path.black_list.is_empty()
+            && ((!ext.is_empty() && path.black_list.contains(&ext))
+            || (!file.is_empty() && path.black_list.contains(&file)))
+        {
+            return Err(());
+        }
+
+        return Ok(RouteHandler(None, Some(normalized_uri)));
+    }
+
+    Ok(RouteHandler::default())
 }
 
 #[cfg(test)]

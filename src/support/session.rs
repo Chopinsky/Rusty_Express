@@ -9,18 +9,18 @@
 //! You will find more details in the `SessionData` trait, but here's a simple example of it:
 //! # Examples
 //! ```
-//! use express::prelude::session::*;
+//! use rusty_express::prelude::*;
 //!
 //! pub struct Data {
 //!     pub token: String
 //! }
 //!
 //! impl SessionData for Data {
-//!     pub fn serialize(&self) -> String {
+//!     fn serialize(&self) -> String {
 //!         self.token.to_owned()
 //!     }
 //!
-//!     pub fn deserialize(raw: &str) -> Option<Self> where Self: Sized {
+//!     fn deserialize(raw: &str) -> Option<Self> where Self: Sized {
 //!         let data = Data {
 //!             token: String::from(raw)
 //!         };
@@ -33,23 +33,25 @@
 //! And then you can use the session data in your response handler:
 //! # Examples
 //! ```
+//! use rusty_express::prelude::*;
+//!
 //! pub fn handler(req: &Box<Request>, resp: &mut Box<Response>) {
-//!     ...
+//!     // code ...
 //!
 //!     // Create a new session
-//!     let session = SessionExchange::create_new().unwrap();
+//!     let mut session = SessionExchange::create_new().unwrap();
 //!     let session_id = session.get_id();
 //!
-//!     let data = Data { token: 'abcde12345' };
+//!     let data = Data { token: "abcde12345" };
 //!     session.set_data(data);
 //!
-//!     ...
+//!     // more code...
 //!
 //!     // retrieve the session from the store
 //!     let session = SessionExchange::from_id(session_id).unwrap();
-//!     let data = session.get_data()::<Data>.unwrap();
+//!     let data = session.get_data().unwrap();
 //!
-//!     assert!(data.token, 'abcde12345');
+//!     assert!(data.token, "abcde12345");
 //! }
 //! ```
 

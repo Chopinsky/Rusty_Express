@@ -1,4 +1,4 @@
-#![allow(dead_code)]
+#![allow(unused)]
 
 use std::env;
 use std::fmt;
@@ -21,17 +21,12 @@ use crate::core::syncstore::StaticStore;
 use crate::parking_lot::{Once, ONCE_INIT};
 use crate::support::{common::cpu_relax, debug};
 
-//lazy_static! {
-//    static ref TEMP_STORE: Mutex<Vec<LogInfo>> = Mutex::new(Vec::new());
-//    static ref CONFIG: RwLock<LoggerConfig> = RwLock::new(LoggerConfig::initialize(""));
-//}
-
 const DEFAULT_LOCATION: &str = "./logs";
 
 static ONCE: Once = ONCE_INIT;
 static DUMP_IN_PROGRESS: AtomicBool = AtomicBool::new(false);
 
-static mut CHAN: Option<(channel::Sender<LogMessage>, channel::Receiver<LogMessage>)> = None;
+static mut CHAN: StaticStore<(channel::Sender<LogMessage>, channel::Receiver<LogMessage>)> = StaticStore::init();
 static mut CONFIG: StaticStore<LoggerConfig> = StaticStore::init();
 static mut REFRESH_HANDLER: Option<thread::JoinHandle<()>> = None;
 
@@ -221,7 +216,7 @@ pub fn log(message: &str, level: InfoLevel, client: Option<SocketAddr>) -> Resul
         time: Utc::now(),
     };
 
-    if let Some(chan) = unsafe { CHAN.as_ref() } {
+    if let Ok(chan) = unsafe { CHAN.as_ref() } {
         return chan.0.send(LogMessage::Info(info)).map_err(|err| {
             format!("Failed to log the message: {:?}", err)
         });
@@ -254,7 +249,7 @@ pub(crate) fn start<T>(
 
     ONCE.call_once(|| {
         let (tx, rx) = channel::bounded(64);
-        unsafe { CHAN.replace((tx, rx)); }
+        unsafe { CHAN.set((tx, rx)); }
     });
 
     if let Some(ref path) = config.log_folder_path {

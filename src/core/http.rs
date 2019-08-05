@@ -6,6 +6,7 @@ use std::io::{prelude::*, BufReader, BufWriter};
 use std::mem;
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
+use std::ptr;
 use std::str;
 use std::thread;
 use std::time::Duration;
@@ -1026,6 +1027,13 @@ impl ResponseManager for Response {
                 }
             }
         }
+    }
+}
+
+pub(crate) fn drop_statics() {
+    unsafe {
+        ptr::drop_in_place(&mut REQ_POOL as *mut StaticStore<SyncPool<Box<Request>>>);
+        ptr::drop_in_place(&mut RESP_POOL as *mut StaticStore<SyncPool<Box<Response>>>);
     }
 }
 
