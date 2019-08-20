@@ -7,7 +7,7 @@ use crate::parking_lot::RwLock;
 const ERR_STR: &str = "The context has not been initialized...";
 static mut CONTEXT: Option<RwLock<Box<ServerContextProvider>>> = None;
 
-pub type ServerContextProvider = ContextProvider + Sync + Send;
+pub type ServerContextProvider = dyn ContextProvider + Sync + Send;
 
 pub trait ContextProvider {
     fn update(&mut self, req: &Box<Request>, resp: &mut Box<Response>) -> Result<(), &'static str>;

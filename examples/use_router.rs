@@ -48,8 +48,8 @@ pub fn simple_response(req: &Box<Request>, resp: &mut Box<Response>) {
 
 pub fn simple_index(req: &Box<Request>, resp: &mut Box<Response>) {
     work_with_context(req, resp);
-    resp.send("Hello world from the index page!\n");
-    // the status 200 is inferred
+    resp.send_async(|| (None, String::from("Hello world from the index page!\n")));
+    // the status 200 is default
 }
 
 fn work_with_context(req: &Box<Request>, resp: &mut Box<Response>) {

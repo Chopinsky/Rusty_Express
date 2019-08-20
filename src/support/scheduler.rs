@@ -334,15 +334,17 @@ pub(crate) fn initialize_with(sizes: Vec<usize>) {
             _ => panic!("Requiring vec sizes of 2 for each, or 1 for all"),
         };
 
+        let mut pool = Pool {
+            req_workers: ThreadPool::new(worker_size),
+            resp_workers: ThreadPool::new(worker_size),
+            parser_workers: ThreadPool::new(parser_size),
+            stream_workers: ThreadPool::new(parser_size),
+        };
+
+        pool.resp_workers.toggle_auto_expansion(true, Some(4 * worker_size));
+
         // Put it in the heap so it can outlive this call
-        unsafe {
-            POOL.replace(Pool {
-                req_workers: ThreadPool::new(worker_size),
-                resp_workers: ThreadPool::new(worker_size),
-                parser_workers: ThreadPool::new(parser_size),
-                stream_workers: ThreadPool::new(parser_size),
-            });
-        }
+        unsafe { POOL.replace(pool); }
     });
 }
 

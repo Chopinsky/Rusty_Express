@@ -608,7 +608,9 @@ pub trait ResponseWriter {
     fn status(&mut self, status: u16);
     fn header(&mut self, field: &str, value: &str, allow_replace: bool);
     fn set_header(&mut self, field: &str, value: &str);
+    fn with_headers(&mut self, header: HashMap<String, String>);
     fn send(&mut self, content: &str);
+    fn send_async(&mut self, f: fn() -> (Option<u16>, String));
     fn send_file(&mut self, file_path: &str) -> u16;
     fn send_file_from_path(&mut self, path: PathBuf) -> u16;
     fn send_file_async(&mut self, file_loc: &str);
@@ -628,18 +630,39 @@ pub trait ResponseWriter {
 }
 
 impl ResponseWriter for Response {
+    /// Set the status code of the response. This will always override any existing values set to the
+    /// response already (by self, by someone else, or by middlewear). Note that we will enforce the
+    /// code to be written to the header, if it's a number not recognized by the server, we will default
+    /// to use status code 200 OK for the response.
     fn status(&mut self, status: u16) {
         self.status = match status {
-            100...101 => status,
-            200...206 => status,
-            300...308 if status != 307 && status != 308 => status,
-            400...417 if status != 402 => status,
+            100..=101 => status,
+            200..=206 => status,
+            300..=308 if status != 307 && status != 308 => status,
+            400..=417 if status != 402 => status,
             426 | 428 | 429 | 431 | 451 => status,
-            500...505 | 511 => status,
+            500..=505 | 511 => status,
             _ => 0,
         };
     }
 
+    /// `header` is the base API to set 1 field in the header, note that the value shall represent
+    /// the entire content to be put in the response's http header.
+    ///
+    /// By default, the field-value pair will be set to the response header, and the caller can
+    /// control if this operation can override any existing pairs if they've been set prior to the
+    /// function call.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use rusty_express::prelude::*;
+    ///
+    /// pub fn simple_handler(req: &Box<Request>, resp: &mut Box<Response>) {
+    ///     resp.header("Content-Type", "application/javascript", true);
+    ///     assert!(resp.get_header("Content-Type").unwrap(), &String::from("application/javascript"));
+    /// }
+    /// ```
     fn header(&mut self, field: &str, value: &str, allow_replace: bool) {
         if field.is_empty() || value.is_empty() {
             return;
@@ -690,20 +713,91 @@ impl ResponseWriter for Response {
         };
     }
 
-    /// set_header is a sugar to the `header` API, and it's created to simplify the majority of the
+    /// `set_header` is a sugar to the `header` API, and it's created to simplify the majority of the
     /// use cases for setting the response header.
     ///
     /// By default, the field-value pair will be set to the response header, and override any existing
     /// pairs if they've been set prior to the API call.
     ///
     /// # Examples
-    /// resp.set_header("Content-Type", "application/javascript");
-    /// assert!(resp.get_header("Content-Type").unwrap(), &String::from("application/javascript"));
+    ///
+    /// ```rust
+    /// use rusty_express::prelude::*;
+    ///
+    /// pub fn simple_handler(req: &Box<Request>, resp: &mut Box<Response>) {
+    ///     resp.set_header("Content-Type", "application/javascript");
+    ///     assert!(resp.get_header("Content-Type").unwrap(), &String::from("application/javascript"));
+    /// }
+    /// ```
     #[inline]
     fn set_header(&mut self, field: &str, value: &str) {
         self.header(field, value, true);
     }
 
+    /// Define the response headers with pre-defined headers, such that the headers can be reused if
+    /// controlled in the server level or defined in the contentext.
+    ///
+    /// # Examples
+    ///
+    /// Define a header with another method:
+    ///
+    /// ```rust
+    /// use rusty_express::prelude::*;
+    /// use std::collections::HashMap;
+    /// use std::hash::BuildHasherDefault;
+    ///
+    /// pub fn simple_handler(req: &Box<Request>, resp: &mut Box<Response>) {
+    ///    // process request to extract info for generating the response body.
+    ///    let header: (MetaData, HashMap<String, String, BuildHasherDefault<FxHash>>) = preprocess(req);
+    ///    resp.with_headers(header);
+    ///
+    ///    // Send the content back
+    ///    resp.send("{ id: 1, name: 'John Doe', age: NaN }");
+    /// }
+    /// ```
+    fn with_headers(&mut self, mut header: HashMap<String, String>) {
+        if let Some(val) = header.remove("content-type") {
+            self.content_type = val;
+        }
+
+        if let Some(val) = header.remove("content-length") {
+            self.content_length = val.parse::<u64>().ok().map(|length| length.to_string());
+        }
+
+        if let Some(val) = header.remove("connection") {
+            match &val.to_lowercase()[..] {
+                "keep-alive" if self.keep_alive == KeepAliveStatus::NotSet => {
+                    self.keep_alive = KeepAliveStatus::KeepAlive
+                }
+                "tls" => self.keep_alive = KeepAliveStatus::TlsConn,
+                "forbidden" => self.keep_alive = KeepAliveStatus::Forbidden,
+                _ => { /* Otherwise, don't update the keep_alive field */ }
+            }
+        }
+
+        self.header = header;
+    }
+
+    /// The main API for setting the body content of the response.
+    ///
+    /// # Examples
+    ///
+    /// Sending responses
+    ///
+    /// ```rust
+    /// use rusty_express::prelude::*;
+    /// use std::collections::HashMap;
+    /// use std::hash::BuildHasherDefault;
+    ///
+    /// pub fn simple_handler(req: &Box<Request>, resp: &mut Box<Response>) {
+    ///    // process request to extract info for generating the response body.
+    ///    let (meta_data, header): (MetaData, HashMap<String, String, BuildHasherDefault<FxHash>>) = preprocess(req);
+    ///    resp.with_headers(header);
+    ///
+    ///    // the `generate_response_body` will create all contents to be returned
+    ///    resp.send(&generate_response_body(meta_data));
+    /// }
+    /// ```
     fn send(&mut self, content: &str) {
         if self.is_header_only() {
             return;
@@ -715,19 +809,89 @@ impl ResponseWriter for Response {
         }
     }
 
+    /// Send the response body in async mode. This means the closure or function supplied as the 1st
+    /// parameter will be executed in parallel.
+    ///
+    /// # Examples
+    ///
+    /// Computing response body in async mode:
+    ///
+    /// ```rust
+    /// use rusty_express::prelude::*;
+    /// use std::collections::HashMap;
+    /// use std::hash::BuildHasherDefault;
+    ///
+    /// pub fn simple_handler(req: &Box<Request>, resp: &mut Box<Response>) {
+    ///    // process request to extract info for generating the response body.
+    ///    let (meta_data, header): (MetaData, HashMap<String, String, BuildHasherDefault<FxHash>>) = preprocess(req);
+    ///    resp.with_headers(header);
+    ///
+    ///    // the heavy method will *NOT* block in this case. The closure's return value
+    ///    // shall be a tuple: 1) the 1st param shall be a `Option<u16>` for any special
+    ///    // status code for the response, and if it's `None`, we will use status code 200
+    ///    // as the default value; 2) the 2nd param shall be a `String` that will comprise
+    ///    // the response body. Note that the response generated by this method will be appended
+    ///    // to any existing value set to the response body previously.
+    ///    resp.send_async(|| (None, heavy_method(meta_data)));
+    ///
+    ///    // The above method call is equivalent to the line below:
+    ///    // resp.send_async(|| (Some(200), heavy_method(meta_data)));
+    /// }
+    /// ```
+    fn send_async(&mut self, f: fn() -> (Option<u16>, String)) {
+        // if header only, quit
+        if self.is_header_only() {
+            return;
+        }
+
+        // lazy init the tx-rx pair.
+        if self.body_chan.0.is_none() {
+            let (tx, rx) = channel::bounded(4);
+            self.body_chan = (Some(tx), Some(rx));
+        }
+
+        if let Some(tx) = self.body_chan.0.as_ref() {
+            let tx_clone = tx.clone();
+
+            shared_pool::run(
+                move || {
+                    let (status, content) = f();
+                    tx_clone.send((Vec::from(content), status.unwrap_or(200))).unwrap_or_default();
+                },
+                TaskType::Response,
+            );
+        }
+    }
+
     /// Send a static file as part of the response to the client. Return the http
     /// header status that can be set directly to the response object using:
     ///
-    ///     resp.status(<returned_status_value_from_this_api>);
+    /// # Examples
+    ///
+    /// Computing response body from a file location:
+    ///
+    /// ```rust
+    /// use rusty_express::prelude::*;
+    /// use std::collections::HashMap;
+    /// use std::hash::BuildHasherDefault;
+    ///
+    /// pub fn simple_handler(req: &Box<Request>, resp: &mut Box<Response>) {
+    ///     // process request to extract info for generating the response body.
+    ///     let (file_loc, header): (String, HashMap<String, String, BuildHasherDefault<FxHash>>) = preprocess(req);
+    ///     resp.with_headers(header);
+    ///
+    ///     let status = resp.send_file(&file_loc);
+    ///     resp.status(status);
+    /// }
+    /// ```
     ///
     /// For example, if the file is read and parsed successfully, we will return 200;
     /// if we can't find the file, we will return 404; if there are errors when reading
     /// the file from its location, we will return 500.
     ///
-    /// side effect: if the file is read and parsed successfully, we will set the
+    /// Note the side effect: if the file is read and parsed successfully, we will set the
     /// content type based on file extension. You can always reset the value for
     /// this auto-generated content type response attribute.
-    /// ...
     fn send_file(&mut self, file_loc: &str) -> u16 {
         if self.is_header_only() {
             return 200;
@@ -916,7 +1080,10 @@ impl ResponseManager for Response {
         }
 
         if !self.is_header_only() && self.body_chan.1.is_some() {
-            // manual drop the transmission channel so we won't hang forever
+            // manual drop the transmission channel so we won't hang forever. this only drops the origin
+            // channel, all clones (which must have been created before reaching this point) can still
+            // be valid at this point, and the rx loop will either enter or break after the last one
+            // is dropped from the async tasks.
             drop(self.body_chan.0.take());
 
             // try to receive the async bodies
@@ -1130,7 +1297,7 @@ fn open_file(file_path: &PathBuf, buf: &mut Vec<u8>) -> u16 {
     // try open the file
     if let Ok(file) = File::open(file_path) {
         let mut buf_reader = BufReader::new(file);
-        return match buf_reader.read_to_end(buf) {
+        match buf_reader.read_to_end(buf) {
             Err(e) => {
                 debug::print(&format!("Unable to read file: {}", e), InfoLevel::Warning);
                 500
@@ -1139,7 +1306,7 @@ fn open_file(file_path: &PathBuf, buf: &mut Vec<u8>) -> u16 {
                 //things are truly ok now
                 200
             }
-        };
+        }
     } else {
         debug::print("Unable to open requested file for path", InfoLevel::Warning);
         404
@@ -1147,10 +1314,10 @@ fn open_file(file_path: &PathBuf, buf: &mut Vec<u8>) -> u16 {
 }
 
 fn open_file_async(file_path: PathBuf, tx: Sender<(Vec<u8>, u16)>) {
+    assert!(file_path.is_file());
+
     shared_pool::run(
         move || {
-            assert!(file_path.is_file());
-
             // try open the file
             if let Ok(file) = File::open(file_path) {
                 let mut buf_reader = BufReader::new(file);
