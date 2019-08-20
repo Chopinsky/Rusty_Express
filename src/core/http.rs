@@ -38,8 +38,8 @@ type BodyChan = (
 );
 type NotifyChan = Option<(Sender<String>, Receiver<String>)>;
 
-static mut REQ_POOL: StaticStore<SyncPool<Box<Request>>> = StaticStore::init();
-static mut RESP_POOL: StaticStore<SyncPool<Box<Response>>> = StaticStore::init();
+static mut REQ_POOL: StaticStore<SyncPool<Request>> = StaticStore::init();
+static mut RESP_POOL: StaticStore<SyncPool<Response>> = StaticStore::init();
 
 //TODO: pub http version?
 
@@ -1032,8 +1032,8 @@ impl ResponseManager for Response {
 
 pub(crate) fn drop_statics() {
     unsafe {
-        ptr::drop_in_place(&mut REQ_POOL as *mut StaticStore<SyncPool<Box<Request>>>);
-        ptr::drop_in_place(&mut RESP_POOL as *mut StaticStore<SyncPool<Box<Response>>>);
+        ptr::drop_in_place(&mut REQ_POOL as *mut StaticStore<SyncPool<Request>>);
+        ptr::drop_in_place(&mut RESP_POOL as *mut StaticStore<SyncPool<Response>>);
     }
 }
 

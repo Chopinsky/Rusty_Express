@@ -1,7 +1,7 @@
 #![allow(unused)]
 
 use std::io::ErrorKind;
-use std::mem::MaybeUninit;
+use std::mem::{self, MaybeUninit};
 use std::ops::{Deref, DerefMut};
 use std::ptr;
 use std::sync::atomic::{AtomicBool, AtomicU16, AtomicUsize, Ordering};
@@ -117,24 +117,25 @@ impl<T: Default> Slot<T> {
 
 pub(crate) struct Bucket<T> {
     /// the actual data store
-    slot: [Option<T>; SLOT_CAP],
+    slot: [*mut T; SLOT_CAP],
 
     /// the current ready-to-use slot index, always offset by 1 to the actual index
     len: AtomicUsize,
 
+    /// The bitmap containing metadata information of the underlying slots
     bitmap: AtomicU16,
 }
 
 impl<T: Default> Bucket<T> {
     pub(crate) fn new(fill: bool) -> Self {
         // create the placeholder
-        let mut slice: [Option<T>; SLOT_CAP] = unsafe { MaybeUninit::zeroed().assume_init() };
+        let mut slice: [*mut T; SLOT_CAP] = [ptr::null_mut(); SLOT_CAP];
         let mut bitmap: u16 = 0;
 
         // fill the slots and update the bitmap
         if fill {
             for (i, item) in slice.iter_mut().enumerate() {
-                item.replace(Default::default());
+                *item = Box::into_raw(Box::new(Default::default()));
                 bitmap |= 1 << (2 * i as u16);
             }
         }
@@ -145,6 +146,11 @@ impl<T: Default> Bucket<T> {
             len: AtomicUsize::new(SLOT_CAP),
             bitmap: AtomicU16::new(bitmap),
         }
+    }
+
+    pub(crate) fn size_hint(&self) -> usize {
+        //        println!("{:#018b}", self.bitmap.load(Ordering::Acquire));
+        self.len.load(Ordering::Acquire) % (SLOT_CAP + 1)
     }
 
     pub(crate) fn access(&self, get: bool) -> Result<usize, ()> {
@@ -164,12 +170,12 @@ impl<T: Default> Bucket<T> {
 
         let mut trials: usize = 2;
         while trials > 0 {
+            trials -= 1;
+
             // init try
             let (pos, mask) = match self.enter(get) {
                 Ok(pos) => (pos, 0b10 << (2 * pos)),
-                Err(()) => {
-                    return self.access_failure(get);
-                },
+                Err(()) => continue,
             };
 
             // main loop to try to update the bitmap
@@ -177,21 +183,23 @@ impl<T: Default> Bucket<T> {
 
             // if the lock bit we replaced was not yet marked at the atomic op, we're good
             if old & mask == 0 {
-                return Ok(pos as usize)
+                return Ok(pos as usize);
             }
 
-            // otherwise, try again after some wait
-            cpu_relax(4 * trials);
-            trials -= 1;
+            // otherwise, try again after some wait. The earliest registered gets some favor by
+            // checking and trying to lodge a position more frequently than the later ones.
+            cpu_relax(trials + 1);
         }
 
         self.access_failure(get)
     }
 
     pub(crate) fn leave(&self, pos: u16) {
+        // the lock bit we want to toggle
         let lock_bit = 0b10 << (2 * pos);
 
         loop {
+            // update both lock bit and the slot bit
             let old = self.bitmap.fetch_xor(0b11 << (2 * pos), Ordering::SeqCst);
             if old & lock_bit == lock_bit {
                 return;
@@ -199,34 +207,46 @@ impl<T: Default> Bucket<T> {
         }
     }
 
-    /// The function is safe because it's used internally, and each time it's guaranteed a access has
-    /// been acquired previously
-    pub(crate) fn checkout(&mut self, pos: usize) -> Result<T, ()> {
-        // check if it's a valid position to swap out the value
-        if self.slot[pos].is_none() {
+    /// Locate the value from the desired position. The API will return an error if such operation
+    /// can't be accomplished, such as the destination doesn't contain a value, or the desired position
+    /// is OOB.
+    ///
+    /// The function is safe because it's used internally, and each time it's guaranteed an exclusive
+    /// access has been acquired previously.
+    pub(crate) fn checkout(&mut self, pos: usize) -> Result<Box<T>, ()> {
+        // return the value
+        if pos >= SLOT_CAP {
             return Err(());
         }
 
-        // return the value
-        Ok(self.swap_out(pos))
+        let val = mem::replace(&mut self.slot[pos], ptr::null_mut());
+        if val.is_null() {
+            return Err(());
+        }
+
+        Ok(unsafe { Box::from_raw(val) })
     }
 
-    /// The function is safe because it's used internally, and each time it's guaranteed a access has
-    /// been acquired previously
-    pub(crate) fn release(&mut self, pos: usize, val: T) {
+    /// Release the value back into the pool. If a reset function has been previously provided, we
+    /// will call the function to reset the value before putting it back. The API will be no-op if
+    /// the desired operation can't be conducted, such as if the position is OOB, or the position
+    /// already contains a value.
+    ///
+    /// The function is safe because it's used internally, and each time it's guaranteed an exclusive
+    /// access has been acquired previously
+    pub(crate) fn release(&mut self, pos: usize, val: Box<T>) {
         // need to loop over the slots to make sure we're getting the valid value
         if pos >= SLOT_CAP {
             return;
         }
 
-        if self.slot[pos].is_some() {
-            // if all slots are full, no need to fallback, the `val` will be dropped here
-            drop(val);
+        // check if the slot has already been occupied (unlikely but still)
+        if !self.slot[pos].is_null() {
             return;
         }
 
         // move the value in
-        self.swap_in(pos, val);
+        self.slot[pos] = Box::into_raw(val);
     }
 
     #[inline]
@@ -240,30 +260,9 @@ impl<T: Default> Bucket<T> {
         Err(())
     }
 
-    fn swap_in(&mut self, index: usize, content: T) {
-        let src = &mut self.slot[index] as *mut Option<T>;
-        unsafe {
-            src.write(Some(content));
-        }
-    }
-
-    fn swap_out(&mut self, index: usize) -> T {
-        let src = &mut self.slot[index] as *mut Option<T>;
-
-        unsafe {
-            // save off the old values
-            let val = ptr::read(src).unwrap_or_default();
-
-            // swap values
-            src.write(None);
-
-            val
-        }
-    }
-
     /// Assuming we have 8 elements per slot, otherwise must update the assumption.
     fn enter(&self, get: bool) -> Result<u16, ()> {
-        let src = self.bitmap.load(Ordering::Acquire);
+        let src: u16 = self.bitmap.load(Ordering::Acquire);
 
         let mut pos = 0;
         let mut base = if get { src ^ GET_MASK } else { src ^ PUT_MASK };
@@ -279,6 +278,15 @@ impl<T: Default> Bucket<T> {
         }
 
         Err(())
+    }
+}
+
+impl<T> Drop for Bucket<T> {
+    fn drop(&mut self) {
+        for item in self.slot.iter_mut() {
+            unsafe { ptr::drop_in_place(*item); }
+            *item = ptr::null_mut();
+        }
     }
 }
 
@@ -339,13 +347,13 @@ impl<T: Default> SyncPool<T> {
         Self::make_pool(pool_size)
     }
 
-    pub fn get(&mut self) -> T {
+    pub fn get(&mut self) -> Box<T> {
         // update user count
         let _guard = VisitorGuard::register(&self.visitor_counter);
 
         // start from where we're left
         let cap = self.slots.len();
-        let origin: usize = self.curr.fetch_add(1, Ordering::AcqRel) % cap;
+        let origin: usize = self.curr.load(1, Ordering::AcqRel) % cap;
 
         let mut pos = origin;
         let mut trials = cap;
@@ -395,16 +403,14 @@ impl<T: Default> SyncPool<T> {
         Default::default()
     }
 
-    pub fn put(&mut self, val: T) {
+    pub fn put(&mut self, val: Box<T>) {
         // update user count
         let _guard = VisitorGuard::register(&self.visitor_counter);
 
         // start from where we're left
         let cap = self.slots.len();
-        let origin: usize = self.curr.load(Ordering::Acquire) % cap;
-
-        let mut pos = origin;
-        let mut trials = cap / 2;
+        let mut pos: usize = self.curr.load(Ordering::Acquire) % cap;
+        let mut trials = 2 * cap;
 
         loop {
             // check this slot
@@ -440,7 +446,7 @@ impl<T: Default> SyncPool<T> {
             trials -= 1;
 
             // we've finished 1 loop but not finding a value to extract, quit
-            if trials == 0 || pos == origin {
+            if trials == 0 {
                 break;
             }
         }
