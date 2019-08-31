@@ -164,9 +164,13 @@ impl Request {
     pub fn form_data(&self) -> collections::HashMap<String, String> {
         let mut data = collections::HashMap::new();
 
-        if !self.body.is_empty() {
-            //TODO: parse the form data
-        }
+        self.body
+            .split('&')
+            .for_each(|seg: &str| {
+                if let Some(pos) = seg.find('=') {
+                    data.insert(String::from(&seg[..pos]), String::from(&seg[pos+1..]));
+                }
+            });
 
         data
     }
