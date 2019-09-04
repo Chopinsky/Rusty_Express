@@ -347,7 +347,7 @@ impl Default for HttpServer {
         Route::init();
 
         HttpServer {
-            config: ServerConfig::default(),
+            config: Default::default(),
             state: ServerStates::new(),
         }
     }

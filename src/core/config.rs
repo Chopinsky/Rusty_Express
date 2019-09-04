@@ -12,13 +12,19 @@ use crate::num_cpus;
 use crate::parking_lot::RwLock;
 use crate::support::common::*;
 use native_tls::{Identity, TlsAcceptor};
+use std::mem::MaybeUninit;
 
 //TODO: load config from file, e.g. config.toml?
 
+/*
 lazy_static! {
     static ref VIEW_ENGINES: RwLock<HashMap<String, Box<ViewEngine>>> = RwLock::new(HashMap::new());
     static ref METADATA_STORE: RwLock<ConnMetadata> = RwLock::new(ConnMetadata::new());
 }
+*/
+
+static mut VIEW_ENGINES: MaybeUninit<RwLock<HashMap<String, Box<ViewEngine>>>> = MaybeUninit::uninit();
+static mut METADATA_STORE: MaybeUninit<RwLock<ConnMetadata>> = MaybeUninit::uninit();
 
 pub struct ServerConfig {
     pool_size: usize,
@@ -135,18 +141,18 @@ impl ServerConfig {
     }
 
     pub fn use_default_header(header: HashMap<String, String>) {
-        let mut store = METADATA_STORE.write();
+        let mut store = Self::metadata().write();
         (*store).header = header;
     }
 
     pub fn set_default_header(field: String, value: String, replace: bool) {
-        let mut store = METADATA_STORE.write();
+        let mut store = Self::metadata().write();
         (*store).header.add(&field[..], value, replace, false);
     }
 
     pub fn set_status_page_generator(status: u16, generator: PageGenerator) {
         if status > 0 {
-            let mut store = METADATA_STORE.write();
+            let mut store = Self::metadata().write();
             (*store).status_page_generators.insert(status, generator);
         }
     }
@@ -158,10 +164,24 @@ impl ServerConfig {
             self.get_read_limit().div(512),
         )
     }
+
+    #[inline]
+    fn metadata<'a>() -> &'a mut RwLock<ConnMetadata> {
+        unsafe { &mut *METADATA_STORE.as_mut_ptr() }
+    }
+
+    fn view_engines<'a>() -> &'a mut RwLock<HashMap<String, Box<ViewEngine>>> {
+        unsafe { &mut *VIEW_ENGINES.as_mut_ptr() }
+    }
 }
 
 impl Default for ServerConfig {
     fn default() -> Self {
+        unsafe {
+            VIEW_ENGINES.as_mut_ptr().write(RwLock::new(HashMap::new()));
+            METADATA_STORE.as_mut_ptr().write(RwLock::new(ConnMetadata::new()));
+        }
+
         let path = option_env!("TLS_PATH").unwrap_or("");
 
         ServerConfig {
@@ -228,7 +248,7 @@ impl ViewEngineDefinition for ServerConfig {
             return;
         }
 
-        let mut engines = VIEW_ENGINES.write();
+        let mut engines = ServerConfig::view_engines().write();;
         (*engines).insert(extension.to_owned(), Box::new(engine));
     }
 }
@@ -253,8 +273,7 @@ impl ViewEngineParser for ServerConfig {
 
         match String::from_utf8(source) {
             Ok(mut s) => {
-                let template_engines = VIEW_ENGINES.read();
-                if let Some(engine) = template_engines.get(extension) {
+                if let Some(engine) = ServerConfig::view_engines().read().get(extension) {
                     let code = engine(&mut s, context);
                     return (code, Vec::from(s.as_bytes()));
                 }
@@ -283,7 +302,7 @@ impl ConnMetadata {
 
     #[inline]
     pub fn get_default_header() -> Option<HashMap<String, String>> {
-        let store = METADATA_STORE.read();
+        let store = ServerConfig::metadata().read();
         if !store.header.is_empty() {
             return Some(store.header.clone());
         }
@@ -293,7 +312,7 @@ impl ConnMetadata {
 
     #[inline]
     pub(crate) fn get_status_pages(status: u16) -> Option<PageGenerator> {
-        let store = METADATA_STORE.read();
+        let store = ServerConfig::metadata().read();
         if store.status_page_generators.is_empty() {
             return None;
         }
