@@ -341,10 +341,13 @@ pub(crate) fn initialize_with(sizes: Vec<usize>) {
             stream_workers: ThreadPool::new(parser_size),
         };
 
-        pool.resp_workers.toggle_auto_expansion(true, Some(4 * worker_size));
+        pool.resp_workers
+            .toggle_auto_expansion(true, Some(4 * worker_size));
 
         // Put it in the heap so it can outlive this call
-        unsafe { POOL.replace(pool); }
+        unsafe {
+            POOL.replace(pool);
+        }
     });
 }
 

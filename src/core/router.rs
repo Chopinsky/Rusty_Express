@@ -830,7 +830,9 @@ impl<'a> Drop for RouteGuard<'a> {
 pub(crate) fn drop_statics() {
     unsafe {
         ptr::drop_in_place(&mut ROUTER as *mut StaticStore<(Route, AtomicUsize)>);
-        ptr::drop_in_place(&mut ROUTE_CACHE as *mut StaticStore<HashMap<(REST, String), RouteHandler>>);
+        ptr::drop_in_place(
+            &mut ROUTE_CACHE as *mut StaticStore<HashMap<(REST, String), RouteHandler>>,
+        );
     }
 }
 
@@ -904,7 +906,7 @@ fn search_static_router(path: &StaticLocRoute, raw_uri: &str) -> Result<RouteHan
 
         if !path.black_list.is_empty()
             && ((!ext.is_empty() && path.black_list.contains(&ext))
-            || (!file.is_empty() && path.black_list.contains(&file)))
+                || (!file.is_empty() && path.black_list.contains(&file)))
         {
             return Err(());
         }

@@ -284,7 +284,9 @@ impl<T: Default> Bucket<T> {
 impl<T> Drop for Bucket<T> {
     fn drop(&mut self) {
         for item in self.slot.iter_mut() {
-            unsafe { ptr::drop_in_place(*item); }
+            unsafe {
+                ptr::drop_in_place(*item);
+            }
             *item = ptr::null_mut();
         }
     }
@@ -293,11 +295,15 @@ impl<T> Drop for Bucket<T> {
 struct VisitorGuard<'a>(&'a AtomicUsize);
 
 impl<'a> VisitorGuard<'a> {
-    fn register(base: &'a (AtomicUsize, AtomicBool)) -> Self {
+    fn register(base: &'a (AtomicUsize, AtomicBool), get: bool) -> Option<Self> {
         let mut count = 0;
 
         // wait if the underlying storage is in protection mode
         while base.1.load(Ordering::Acquire) {
+            if get {
+                return None;
+            }
+
             cpu_relax(count + 8);
 
             if count < 8 {
@@ -306,7 +312,7 @@ impl<'a> VisitorGuard<'a> {
         }
 
         base.0.fetch_add(1, Ordering::SeqCst);
-        VisitorGuard(&base.0)
+        Some(VisitorGuard(&base.0))
     }
 }
 
@@ -321,7 +327,7 @@ pub(crate) struct SyncPool<T> {
     slots: Vec<Bucket<T>>,
 
     /// the next channel to try
-    curr: AtomicUsize,
+    curr: (AtomicUsize, AtomicUsize),
 
     /// First node -- how many threads are concurrently accessing the struct:
     ///   0   -> updating the `slots` field;
@@ -349,11 +355,16 @@ impl<T: Default> SyncPool<T> {
 
     pub fn get(&mut self) -> Box<T> {
         // update user count
-        let _guard = VisitorGuard::register(&self.visitor_counter);
+        let guard = VisitorGuard::register(&self.visitor_counter, true);
+
+        // if the pool itself is being operated on, no need to wait, just create the object on the fly.
+        if guard.is_none() {
+            return Default::default();
+        }
 
         // start from where we're left
         let cap = self.slots.len();
-        let origin: usize = self.curr.load(Ordering::AcqRel) % cap;
+        let origin: usize = self.curr.0.load(Ordering::Acquire) % cap;
 
         let mut pos = origin;
         let mut trials = cap;
@@ -368,16 +379,16 @@ impl<T: Default> SyncPool<T> {
                 let checkout = slot.checkout(i);
                 slot.leave(i as u16);
 
-            /*
-            if slot.access(true) {
-                // try to checkout one slot
-                let checkout = slot.checkout();
-                slot.leave();
-            */
+                /*
+                if slot.access(true) {
+                    // try to checkout one slot
+                    let checkout = slot.checkout();
+                    slot.leave();
+                */
 
                 if let Ok(val) = checkout {
                     // now we're locked, get the val and update internal states
-                    self.curr.store(pos, Ordering::Release);
+                    self.curr.0.store(pos, Ordering::Release);
 
                     // done
                     return val;
@@ -388,7 +399,7 @@ impl<T: Default> SyncPool<T> {
             }
 
             // update to the next position now.
-            pos = self.curr.fetch_add(1, Ordering::AcqRel) % cap;
+            pos = self.curr.0.fetch_add(1, Ordering::AcqRel) % cap;
             trials -= 1;
 
             // we've finished 1 loop but not finding a value to extract, quit
@@ -398,18 +409,18 @@ impl<T: Default> SyncPool<T> {
         }
 
         // make sure our guard has been returned if we want the correct visitor count
-        drop(_guard);
+        drop(guard);
 
         Default::default()
     }
 
     pub fn put(&mut self, val: Box<T>) {
         // update user count
-        let _guard = VisitorGuard::register(&self.visitor_counter);
+        let _guard = VisitorGuard::register(&self.visitor_counter, false);
 
         // start from where we're left
         let cap = self.slots.len();
-        let mut pos: usize = self.curr.load(Ordering::Acquire) % cap;
+        let mut pos: usize = self.curr.1.load(Ordering::Acquire) % cap;
         let mut trials = 2 * cap;
 
         loop {
@@ -419,7 +430,7 @@ impl<T: Default> SyncPool<T> {
             // try the access or move on
             if let Ok(i) = bucket.access(false) {
                 // now we're locked, get the val and update internal states
-                self.curr.store(pos, Ordering::Release);
+                self.curr.1.store(pos, Ordering::Release);
 
                 // put the value back and reset
                 bucket.release(i, val);
@@ -431,7 +442,7 @@ impl<T: Default> SyncPool<T> {
             /*
             if slot.access(false) {
                 // now we're locked, get the val and update internal states
-                self.curr.store(pos, Ordering::Release);
+                self.curr.1.store(pos, Ordering::Release);
 
                 // put the value back into the slot
                 slot.release(val, self.reset_handle.load(Ordering::Acquire));
@@ -442,7 +453,7 @@ impl<T: Default> SyncPool<T> {
             */
 
             // update states
-            pos = self.curr.fetch_sub(1, Ordering::AcqRel) % cap;
+            pos = self.curr.1.fetch_add(1, Ordering::AcqRel) % cap;
             trials -= 1;
 
             // we've finished 1 loop but not finding a value to extract, quit
@@ -508,7 +519,7 @@ impl<T: Default> SyncPool<T> {
 
         SyncPool {
             slots: s,
-            curr: AtomicUsize::new(0),
+            curr: (AtomicUsize::new(0), AtomicUsize::new(0)),
             visitor_counter: (AtomicUsize::new(1), AtomicBool::new(false)),
         }
     }
@@ -557,13 +568,17 @@ impl<T> Deref for StaticStore<T> {
     type Target = T;
 
     fn deref(&self) -> &Self::Target {
-        self.0.as_ref().expect("Calling methods on uninitialized struct is forbidden...")
+        self.0
+            .as_ref()
+            .expect("Calling methods on uninitialized struct is forbidden...")
     }
 }
 
 impl<T> DerefMut for StaticStore<T> {
     fn deref_mut(&mut self) -> &mut Self::Target {
-        self.0.as_mut().expect("Calling methods on uninitialized struct is forbidden...")
+        self.0
+            .as_mut()
+            .expect("Calling methods on uninitialized struct is forbidden...")
     }
 }
 

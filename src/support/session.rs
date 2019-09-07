@@ -80,8 +80,9 @@ const DELEM_LV_2: char = '\u{0006}';
 lazy_static! {
     static ref STORE: RwLock<HashMap<String, Session>> = RwLock::new(HashMap::new());
     static ref DEFAULT_LIFETIME: RwLock<Duration> = RwLock::new(Duration::from_secs(172_800));
-    static ref AUTO_CLEARN: AtomicBool = AtomicBool::new(false);
 }
+
+static AUTO_CLEAN: AtomicBool = AtomicBool::new(false);
 
 /// SessionData is the trait that must be implemented for storing the session related information into
 /// the session store service provided by this module. The 'serialize' function is used to destruct the
@@ -270,7 +271,7 @@ impl SessionExchangeConfig for ExchangeConfig {
         };
 
         Some(thread::spawn(move || {
-            AUTO_CLEARN.store(true, atomic::Ordering::Release);
+            AUTO_CLEAN.store(true, atomic::Ordering::Release);
 
             loop {
                 thread::sleep(sleep_period);
@@ -281,12 +282,12 @@ impl SessionExchangeConfig for ExchangeConfig {
 
     fn auto_clean_stop() {
         thread::spawn(move || {
-            AUTO_CLEARN.store(false, atomic::Ordering::Release);
+            AUTO_CLEAN.store(false, atomic::Ordering::Release);
         });
     }
 
     fn auto_clean_is_running() -> bool {
-        AUTO_CLEARN.load(atomic::Ordering::Release)
+        AUTO_CLEAN.load(atomic::Ordering::Release)
     }
 }
 

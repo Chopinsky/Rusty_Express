@@ -8,10 +8,10 @@ use crate::channel;
 use crate::core::{
     config::{ServerConfig, ViewEngine, ViewEngineDefinition},
     conn::{self, StreamHandler},
-    router::{self, Callback, Router, Route, RouteHandler, RequestPath, REST},
+    http,
+    router::{self, Callback, RequestPath, Route, RouteHandler, Router, REST},
     states::{AsyncController, ControlMessage, ServerStates},
     stream::Stream,
-    http,
 };
 use crate::hashbrown::HashMap;
 use crate::native_tls::TlsAcceptor;
@@ -187,7 +187,11 @@ impl HttpServer {
             self.session_cleanup_config();
         }
 
+        // toggle states
         self.state.toggle_running_state(true);
+
+        // initialize the shared object pools
+        http::init_pools();
 
         let acceptor: Option<Arc<TlsAcceptor>> = self.config.build_tls_acceptor();
         let (mut read_timeout, mut write_timeout, mut req_limit) = self.config.load_server_params();

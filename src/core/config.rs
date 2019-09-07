@@ -23,7 +23,8 @@ lazy_static! {
 }
 */
 
-static mut VIEW_ENGINES: MaybeUninit<RwLock<HashMap<String, Box<ViewEngine>>>> = MaybeUninit::uninit();
+static mut VIEW_ENGINES: MaybeUninit<RwLock<HashMap<String, Box<ViewEngine>>>> =
+    MaybeUninit::uninit();
 static mut METADATA_STORE: MaybeUninit<RwLock<ConnMetadata>> = MaybeUninit::uninit();
 
 pub struct ServerConfig {
@@ -179,7 +180,9 @@ impl Default for ServerConfig {
     fn default() -> Self {
         unsafe {
             VIEW_ENGINES.as_mut_ptr().write(RwLock::new(HashMap::new()));
-            METADATA_STORE.as_mut_ptr().write(RwLock::new(ConnMetadata::new()));
+            METADATA_STORE
+                .as_mut_ptr()
+                .write(RwLock::new(ConnMetadata::new()));
         }
 
         let path = option_env!("TLS_PATH").unwrap_or("");

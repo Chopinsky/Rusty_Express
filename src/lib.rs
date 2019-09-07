@@ -28,8 +28,10 @@ extern crate hashbrown;
 extern crate native_tls;
 extern crate num_cpus;
 extern crate parking_lot;
-extern crate rand;
 extern crate regex;
+
+#[cfg(feature = "session")]
+extern crate rand;
 
 pub(crate) mod core;
 pub(crate) mod support;

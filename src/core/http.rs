@@ -164,13 +164,11 @@ impl Request {
     pub fn form_data(&self) -> collections::HashMap<String, String> {
         let mut data = collections::HashMap::new();
 
-        self.body
-            .split('&')
-            .for_each(|seg: &str| {
-                if let Some(pos) = seg.find('=') {
-                    data.insert(String::from(&seg[..pos]), String::from(&seg[pos+1..]));
-                }
-            });
+        self.body.split('&').for_each(|seg: &str| {
+            if let Some(pos) = seg.find('=') {
+                data.insert(String::from(&seg[..pos]), String::from(&seg[pos + 1..]));
+            }
+        });
 
         data
     }
@@ -233,12 +231,6 @@ impl Request {
 
     pub(crate) fn set_body(&mut self, body: String) {
         self.body = body;
-    }
-
-    pub(crate) fn init_pool() {
-        unsafe {
-            REQ_POOL.set(SyncPool::new());
-        }
     }
 }
 
@@ -386,12 +378,6 @@ impl Response {
 
             self.header("Location", &redirect, true);
             self.status(301);
-        }
-    }
-
-    pub(crate) fn init_pool() {
-        unsafe {
-            RESP_POOL.set(SyncPool::new());
         }
     }
 
@@ -860,7 +846,9 @@ impl ResponseWriter for Response {
             shared_pool::run(
                 move || {
                     let (status, content) = f();
-                    tx_clone.send((Vec::from(content), status.unwrap_or(200))).unwrap_or_default();
+                    tx_clone
+                        .send((Vec::from(content), status.unwrap_or(200)))
+                        .unwrap_or_default();
                 },
                 TaskType::Response,
             );
@@ -1201,10 +1189,22 @@ impl ResponseManager for Response {
     }
 }
 
+pub(crate) fn init_pools() {
+    unsafe {
+        REQ_POOL.set(SyncPool::new());
+        RESP_POOL.set(SyncPool::new());
+    }
+}
+
 pub(crate) fn drop_statics() {
     unsafe {
-        ptr::drop_in_place(&mut REQ_POOL as *mut StaticStore<SyncPool<Request>>);
-        ptr::drop_in_place(&mut RESP_POOL as *mut StaticStore<SyncPool<Response>>);
+        // take the pools out
+        let mut req_pool = REQ_POOL.take();
+        let mut resp_pool = RESP_POOL.take();
+
+        // drop them in place
+        ptr::drop_in_place(&mut req_pool as *mut Option<SyncPool<Request>>);
+        ptr::drop_in_place(&mut resp_pool as *mut Option<SyncPool<Response>>);
     }
 }
 

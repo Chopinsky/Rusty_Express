@@ -26,7 +26,8 @@ const DEFAULT_LOCATION: &str = "./logs";
 static ONCE: Once = ONCE_INIT;
 static DUMP_IN_PROGRESS: AtomicBool = AtomicBool::new(false);
 
-static mut CHAN: StaticStore<(channel::Sender<LogMessage>, channel::Receiver<LogMessage>)> = StaticStore::init();
+static mut CHAN: StaticStore<(channel::Sender<LogMessage>, channel::Receiver<LogMessage>)> =
+    StaticStore::init();
 static mut CONFIG: StaticStore<LoggerConfig> = StaticStore::init();
 static mut REFRESH_HANDLER: Option<thread::JoinHandle<()>> = None;
 
@@ -217,9 +218,10 @@ pub fn log(message: &str, level: InfoLevel, client: Option<SocketAddr>) -> Resul
     };
 
     if let Ok(chan) = unsafe { CHAN.as_ref() } {
-        return chan.0.send(LogMessage::Info(info)).map_err(|err| {
-            format!("Failed to log the message: {:?}", err)
-        });
+        return chan
+            .0
+            .send(LogMessage::Info(info))
+            .map_err(|err| format!("Failed to log the message: {:?}", err));
     }
 
     Err(String::from("The logging service is not running..."))
@@ -249,7 +251,9 @@ pub(crate) fn start<T>(
 
     ONCE.call_once(|| {
         let (tx, rx) = channel::bounded(64);
-        unsafe { CHAN.set((tx, rx)); }
+        unsafe {
+            CHAN.set((tx, rx));
+        }
     });
 
     if let Some(ref path) = config.log_folder_path {
@@ -264,19 +268,18 @@ pub(crate) fn start<T>(
         start_refresh(config.refresh_period);
     }
 
-    config.rx_handler.replace(thread::spawn(move ||
-        run(Box::new(DefaultLogWriter))
-    ));
+    config
+        .rx_handler
+        .replace(thread::spawn(move || run(Box::new(DefaultLogWriter))));
 }
 
 pub(crate) fn shutdown() {
     stop_refresh();
 
-    let config =
-        match unsafe { CONFIG.as_mut() } {
-            Ok(c) => c,
-            Err(_) => return,
-        };
+    let config = match unsafe { CONFIG.as_mut() } {
+        Ok(c) => c,
+        Err(_) => return,
+    };
 
     if let Some(rx) = config.rx_handler.take() {
         rx.join().unwrap_or_else(|err| {
@@ -290,7 +293,6 @@ pub(crate) fn shutdown() {
         level: InfoLevel::Info,
         time: Utc::now(),
     };
-
 
     if let Some(chan) = unsafe { CHAN.take() } {
         if let Err(SendError(msg)) = chan.0.send(LogMessage::Info(final_msg)) {
@@ -359,11 +361,10 @@ fn reset_refresh(period: Option<Duration>) {
     thread::spawn(move || {
         stop_refresh();
 
-        let config =
-            match unsafe { CONFIG.as_mut() } {
-                Ok(c) => c,
-                Err(_) => return,
-            };
+        let config = match unsafe { CONFIG.as_mut() } {
+            Ok(c) => c,
+            Err(_) => return,
+        };
 
         if let Some(p) = period {
             config.set_refresh_period(p);
