@@ -11,9 +11,9 @@ use std::str;
 use std::thread;
 use std::time::Duration;
 
-use crate::channel::{self, Receiver, Sender};
+use crate::channel::{self, Receiver, Sender, TryRecvError};
 use crate::chrono::prelude::*;
-use crate::core::syncstore::{Reusable, StaticStore, SyncPool};
+use crate::core::syncstore::{Reusable, StaticStore, SyncPool, TOTAL_ELEM_COUNT};
 use crate::core::{
     config::{ConnMetadata, EngineContext, ServerConfig, ViewEngineParser},
     cookie::*,
@@ -40,6 +40,7 @@ type NotifyChan = Option<(Sender<String>, Receiver<String>)>;
 
 static mut REQ_POOL: StaticStore<SyncPool<Request>> = StaticStore::init();
 static mut RESP_POOL: StaticStore<SyncPool<Response>> = StaticStore::init();
+static mut POOL_CHAN: StaticStore<(channel::Sender<()>, channel::Receiver<()>)> = StaticStore::init();
 
 //TODO: pub http version?
 
@@ -1193,12 +1194,55 @@ pub(crate) fn init_pools() {
     unsafe {
         REQ_POOL.set(SyncPool::new());
         RESP_POOL.set(SyncPool::new());
+        POOL_CHAN.set(channel::bounded(0))
     }
+
+    thread::spawn(|| {
+        let cap = TOTAL_ELEM_COUNT / 5;
+        let mut count = 0;
+
+        loop {
+            thread::sleep(Duration::from_secs(1));
+            count += 1;
+
+            if let Ok(chan) = unsafe { POOL_CHAN.as_ref() } {
+                match chan.1.try_recv() {
+                    Ok(_) | Err(TryRecvError::Disconnected) => return,
+                    _ => {},
+                }
+            } else {
+                // shouldn't happen, but we shall quit now
+                return;
+            }
+
+            if count % 30 == 0 {
+                if let Ok(pool) = unsafe { REQ_POOL.as_mut() } {
+                    if pool.len() < cap {
+                        pool.refill(cap);
+                    }
+                }
+
+                if let Ok(pool) = unsafe { RESP_POOL.as_mut() } {
+                    if pool.len() < cap {
+                        pool.refill(cap);
+                    }
+                }
+
+                count = 0;
+            }
+        }
+    });
 }
 
 pub(crate) fn drop_statics() {
     unsafe {
+        if let Ok(chan) = POOL_CHAN.as_ref() {
+            // zero-sized channel will block until the message is read, which shall happen evey second.
+            chan.0.send(()).unwrap_or_default();
+        }
+
         // take the pools out
+        let _ = POOL_CHAN.take();
         let mut req_pool = REQ_POOL.take();
         let mut resp_pool = RESP_POOL.take();
 

@@ -5,6 +5,7 @@ use std::mem::{self, MaybeUninit};
 use std::ops::{Deref, DerefMut};
 use std::ptr;
 use std::sync::atomic::{AtomicBool, AtomicU16, AtomicUsize, Ordering};
+use std::thread;
 
 use crate::support::common::cpu_relax;
 
@@ -12,6 +13,8 @@ const POOL_SIZE: usize = 16;
 const SLOT_CAP: usize = 8;
 const GET_MASK: u16 = 0b1010_1010_1010_1010;
 const PUT_MASK: u16 = 0b1111_1111_1111_1111;
+
+pub(crate) const TOTAL_ELEM_COUNT: usize = POOL_SIZE * SLOT_CAP;
 
 struct Slot<T> {
     /// the actual data store
@@ -340,11 +343,11 @@ pub(crate) struct SyncPool<T> {
 }
 
 impl<T: Default> SyncPool<T> {
-    pub(crate) fn new() -> Self {
+    pub fn new() -> Self {
         Self::make_pool(POOL_SIZE)
     }
 
-    pub(crate) fn with_size(size: usize) -> Self {
+    pub fn with_size(size: usize) -> Self {
         let mut pool_size = size / SLOT_CAP;
         if pool_size < 1 {
             pool_size = 1
@@ -364,10 +367,8 @@ impl<T: Default> SyncPool<T> {
 
         // start from where we're left
         let cap = self.slots.len();
-        let origin: usize = self.curr.0.load(Ordering::Acquire) % cap;
-
-        let mut pos = origin;
         let mut trials = cap;
+        let mut pos: usize = self.curr.0.load(Ordering::Acquire) % cap;
 
         loop {
             // check this slot
@@ -403,7 +404,7 @@ impl<T: Default> SyncPool<T> {
             trials -= 1;
 
             // we've finished 1 loop but not finding a value to extract, quit
-            if trials == 0 || pos == origin {
+            if trials == 0 {
                 break;
             }
         }
@@ -463,7 +464,15 @@ impl<T: Default> SyncPool<T> {
         }
     }
 
-    pub(crate) fn expand(&mut self, additional: usize, block: bool) -> bool {
+    pub fn len(&self) -> usize {
+        self.slots
+            .iter()
+            .fold(0, |sum, item|
+                sum + item.size_hint()
+            )
+    }
+
+    pub fn expand(&mut self, additional: usize, block: bool) -> bool {
         // raise the write barrier now, if someone has already raised the flag to indicate the
         // intention to write, let me go away.
         if self
@@ -507,6 +516,13 @@ impl<T: Default> SyncPool<T> {
         self.visitor_counter.1.store(false, Ordering::Release);
 
         safe
+    }
+
+    pub fn refill(&mut self, amount: usize) {
+        for _ in 0..amount {
+            self.put(Default::default());
+            thread::yield_now();
+        }
     }
 
     fn make_pool(size: usize) -> Self {

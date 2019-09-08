@@ -210,7 +210,7 @@ impl RouteMap {
 
         let mut result: Vec<Field> = source_uri
             .split(|c|
-                // split status Automator
+                // split status automator
                 match c {
                     ':' if split_status == 1 => {
                         split_status <<= 1;  // 2 -- in params
@@ -258,27 +258,38 @@ impl RouteMap {
 
                 if s.starts_with(':') {
                     name = &s[1..];
+                    let size = name.len();
 
-                    if name.is_empty() {
+                    if size == 0 {
                         panic!("Route parameter name can't be null");
                     }
 
                     is_param = true;
-                    if name.len() > 1 && name.ends_with(')') {
-                        let name_split: Vec<&str> =
-                            (&name[..name.len()-1]).splitn(2, '(').collect();
 
-                        if name_split.len() == 2 {
-                            if name_split[0].is_empty() {
-                                panic!("Route parameters with regex validation must have a non-null param name: {}", s);
-                            } else if name_split[1].is_empty() {
-                                panic!("Route parameters with regex validation must have a non-null regex: {}", s);
-                            }
+                    // if the param contains a regex validator, parse it out.
+                    if size > 1 && name.ends_with(')') {
+                        let mut pos: u8 = 0;
+                        let mut actual_name = "";
 
-                            if let Ok(regex) = Regex::new(name_split[1]) {
-                                validation = Some(regex);
-                                name = name_split[0];
-                            }
+                        // split the parameter source string without the ending char of `)`
+                        name[..size-1]
+                            .splitn(2, '(')
+                            .for_each(|seg: &str| {
+                                if seg.is_empty() {
+                                    panic!("Route parameters with regex validation must have a non-null parameter: {}", s);
+                                }
+
+                                match pos {
+                                    0 => actual_name = seg,
+                                    1 => validation = Regex::new(seg).ok(),
+                                    _ => return,
+                                };
+
+                                pos += 1;
+                            });
+
+                        if !actual_name.is_empty() {
+                            name = actual_name;
                         }
                     }
 
