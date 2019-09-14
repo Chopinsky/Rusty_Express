@@ -1,5 +1,3 @@
-#![allow(dead_code)]
-
 use std::path::PathBuf;
 
 use crate::core::router::{Callback, RouteHandler};
@@ -19,16 +17,6 @@ impl Field {
             name,
             is_param,
             validation,
-        }
-    }
-}
-
-impl Clone for Field {
-    fn clone(&self) -> Self {
-        Field {
-            name: self.name.clone(),
-            is_param: self.is_param,
-            validation: self.validation.clone(),
         }
     }
 }
@@ -144,18 +132,6 @@ impl Node {
     }
 }
 
-impl Clone for Node {
-    fn clone(&self) -> Self {
-        Node {
-            field: self.field.clone(),
-            callback: self.callback,
-            location: self.location.clone(),
-            named_children: self.named_children.clone(),
-            params_children: self.params_children.clone(),
-        }
-    }
-}
-
 pub(crate) struct RouteTrie {
     root: Node,
 }
@@ -235,13 +211,5 @@ impl RouteTrie {
         }
 
         RouteHandler::default()
-    }
-}
-
-impl Clone for RouteTrie {
-    fn clone(&self) -> Self {
-        RouteTrie {
-            root: self.root.clone(),
-        }
     }
 }

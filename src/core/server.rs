@@ -517,6 +517,9 @@ impl Router for HttpServer {
         self
     }
 
+    /// Define a static folder location, where the request will be forwarded to and read the desired
+    /// file as the response body.
+    ///
     /// # Example
     ///
     /// ```
@@ -535,11 +538,38 @@ impl Router for HttpServer {
         self
     }
 
+    /// Define a customized static folder location, where the requested file will be served only if
+    /// it matches the URI rules defined by the API.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// extern crate rusty_express;
+    /// use rusty_express::prelude::*;
+    /// use std::path::PathBuf;
+    /// fn main() {
+    ///     // define http server now
+    ///     let mut server = HttpServer::new();
+    ///
+    ///     // only the `index.html` file in the static folder of the project location will be served.
+    ///     server.use_custom_static(RequestPath::Explicit("/index.html"), PathBuf::from(r".\static"));
+    /// }
+    /// ```
     fn use_custom_static(&mut self, uri: RequestPath, path: PathBuf) -> &mut dyn Router {
         Route::add_static(REST::GET, Some(uri), path);
         self
     }
 
+    fn static_white_list(&mut self, file_or_ext: String, for_path: Option<PathBuf>) {
+        Route::static_lists(file_or_ext, true, for_path);
+    }
+
+    fn static_black_list(&mut self, file_or_ext: String, for_path: Option<PathBuf>) {
+        Route::static_lists(file_or_ext, true, for_path);
+    }
+
+    /// Note: this API only affect routes moving forward, and it will not be applied to routes
+    /// already in the `Router`.
     fn case_sensitive(&mut self, allow_case: bool, method: Option<REST>) {
         if method.is_none() {
             Route::all_case_sensitive(allow_case);

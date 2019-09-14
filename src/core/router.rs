@@ -1,4 +1,4 @@
-#![allow(dead_code)]
+#![allow(unused)]
 #![allow(clippy::borrowed_box)]
 
 use std::fmt;
@@ -57,11 +57,11 @@ impl Default for REST {
     }
 }
 
-#[derive(PartialEq, Eq, Hash, Clone, Copy)]
-pub enum RequestPath {
-    Explicit(&'static str),
-    ExplicitWithParams(&'static str),
-    WildCard(&'static str),
+#[derive(PartialEq, Eq, Hash)]
+pub enum RequestPath<'a> {
+    Explicit(&'a str),
+    ExplicitWithParams(&'a str),
+    WildCard(&'a str),
 }
 
 /// `Callback` is a type alias to the REST request handler functions, which will be invoked when a
@@ -95,15 +95,6 @@ struct RegexRoute {
 impl RegexRoute {
     pub(crate) fn new(re: Regex, handler: RouteHandler) -> Self {
         RegexRoute { regex: re, handler }
-    }
-}
-
-impl Clone for RegexRoute {
-    fn clone(&self) -> Self {
-        RegexRoute {
-            regex: self.regex.clone(),
-            handler: self.handler.clone(),
-        }
     }
 }
 
@@ -142,7 +133,7 @@ impl RouteMap {
         }
     }
 
-    pub fn insert(&mut self, uri: RequestPath, callback: RouteHandler) {
+    pub fn insert(&mut self, uri: RequestPath<'_>, callback: RouteHandler) {
         match uri {
             RequestPath::Explicit(req_uri) => {
                 if req_uri.is_empty() || !req_uri.starts_with('/') {
@@ -194,7 +185,7 @@ impl RouteMap {
         self.case_sensitive
     }
 
-    fn params_parser(source_uri: &'static str, allow_case: bool) -> Vec<Field> {
+    fn params_parser(source_uri: &str, allow_case: bool) -> Vec<Field> {
         let mut param_names = HashSet::new();
 
         let mut validation: Option<Regex> = None;
@@ -248,7 +239,7 @@ impl RouteMap {
                     },
                 }
             )
-            .filter_map(|s| {
+            .filter_map(|s: &str| {
                 if s.is_empty() {
                     return None;
                 }
@@ -293,11 +284,10 @@ impl RouteMap {
                         }
                     }
 
-                    if param_names.contains(name) {
+                    // if a parameter identifier already exists, panic for we won't allow it.
+                    if !param_names.insert(name) {
                         panic!("Route parameters must have unique name: {}", s);
                     }
-
-                    param_names.insert(name.to_owned());
                 } else {
                     name = &s;
                 }
@@ -419,18 +409,6 @@ impl RouteMap {
     }
 }
 
-impl Clone for RouteMap {
-    fn clone(&self) -> Self {
-        RouteMap {
-            explicit: self.explicit.clone(),
-            explicit_with_params: self.explicit_with_params.clone(),
-            wildcard: self.wildcard.clone(),
-            static_path: self.static_path.clone(),
-            case_sensitive: self.case_sensitive,
-        }
-    }
-}
-
 #[derive(Default)]
 pub struct Route {
     store: HashMap<REST, RouteMap>,
@@ -510,6 +488,16 @@ impl Route {
         });
     }
 
+    pub(crate) fn static_lists(file_or_ext: String, is_white_list: bool, for_path: Option<PathBuf>) {
+        Route::write().with(|r| {
+            if is_white_list {
+                r.static_white_list(file_or_ext, for_path);
+            } else {
+                r.static_black_list(file_or_ext, for_path);
+            }
+        })
+    }
+
     fn add(&mut self, method: REST, uri: RequestPath, callback: RouteHandler) {
         if let Some(r) = self.store.get_mut(&method) {
             //find, insert, done.
@@ -521,8 +509,6 @@ impl Route {
         map.insert(uri, callback);
         self.store.insert(method, map);
     }
-
-    //TODO: expose black list and white list setter/getter
 
     fn set_static(&mut self, method: REST, path: PathBuf) {
         if !path.exists() || !path.is_dir() {
@@ -571,6 +557,8 @@ pub trait Router {
     fn all(&mut self, uri: RequestPath, callback: Callback) -> &mut dyn Router;
     fn use_static(&mut self, path: PathBuf) -> &mut dyn Router;
     fn use_custom_static(&mut self, uri: RequestPath, path: PathBuf) -> &mut dyn Router;
+    fn static_white_list(&mut self, file_or_ext: String, for_path: Option<PathBuf>);
+    fn static_black_list(&mut self, file_or_ext: String, for_path: Option<PathBuf>);
     fn case_sensitive(&mut self, allow_case: bool, method: Option<REST>);
 }
 
@@ -624,6 +612,9 @@ impl Router for Route {
         self.other("*", uri, callback)
     }
 
+    /// Define a static folder location, where the request will be forwarded to and read the desired
+    /// file as the response body.
+    ///
     /// # Example
     ///
     /// ```
@@ -642,9 +633,68 @@ impl Router for Route {
         self
     }
 
+    /// Define a customized static folder location, where the requested file will be served only if
+    /// it matches the URI rules defined by the API.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// extern crate rusty_express;
+    /// use rusty_express::prelude::*;
+    /// use std::path::PathBuf;
+    /// fn main() {
+    ///     // define http server now
+    ///     let mut server = HttpServer::new();
+    ///
+    ///     // only the `index.html` file in the static folder of the project location will be served.
+    ///     server.use_custom_static(RequestPath::Explicit("/index.html"), PathBuf::from(r".\static"));
+    /// }
+    /// ```
     fn use_custom_static(&mut self, uri: RequestPath, path: PathBuf) -> &mut dyn Router {
         self.add(REST::GET, uri, RouteHandler(None, Some(path)));
         self
+    }
+
+    /// Define the white list for the files or extension of the files that are allowed to be served
+    /// for static routes.
+    ///
+    /// The file name must be valid, and we assume that the designated fold contains this file
+    /// (i.e. we won't check if the request file exists if a route match has been found).
+    fn static_white_list(&mut self, file_or_ext: String, for_path: Option<PathBuf>) {
+        self.store
+            .values_mut()
+            .for_each(|mut m| {
+                if let Some(s_route) = m.static_path.as_mut() {
+                    if let Some(p) = for_path.as_ref() {
+                        if &s_route.location != p {
+                            return;
+                        }
+                    }
+
+                    s_route.white_list.insert(file_or_ext.to_lowercase());
+                }
+            });
+    }
+
+    /// Define the black list for the files or extension of the files that are allowed to be served
+    /// for static routes.
+    ///
+    /// The file name must be valid, and we assume that the designated fold contains this file
+    /// (i.e. we won't check if the request file exists if a route match has been found).
+    fn static_black_list(&mut self, file_or_ext: String, for_path: Option<PathBuf>) {
+        self.store
+            .values_mut()
+            .for_each(|mut m| {
+                if let Some(s_route) = m.static_path.as_mut() {
+                    if let Some(p) = for_path.as_ref() {
+                        if &s_route.location != p {
+                            return;
+                        }
+                    }
+
+                    s_route.black_list.insert(file_or_ext.to_lowercase());
+                }
+            });
     }
 
     /// Note: this API only affect routes moving forward, and it will not be applied to routes
@@ -880,44 +930,48 @@ fn search_static_router(path: &StaticLocRoute, raw_uri: &str) -> Result<RouteHan
 
     let meta = match fs::metadata(&normalized_uri) {
         Ok(m) => m,
-        _ => return Ok(RouteHandler::default()),
+        _ => return Ok(RouteHandler::default()),  // call the fallback methods and keep searching
     };
 
     // only if the file exists
     if meta.is_file() {
+        // the extension prefix
+        let mut ext_raw = String::from("*.");
+
         // the requested file exists, now check white-list and black-list, in this order
-        let ext = match normalized_uri.extension() {
+        let ext: &str = match normalized_uri.extension() {
             Some(e) => {
                 if let Some(e_str) = e.to_str() {
-                    ["*.", e_str].join("")
+                    ext_raw.push_str(e_str);
+                    &ext_raw
                 } else {
-                    String::new()
+                    ""
                 }
             }
-            _ => String::new(),
+            _ => "",
         };
 
-        let file = match normalized_uri.file_name() {
+        let file: &str = match normalized_uri.file_name() {
             Some(f) => {
                 if let Some(f_str) = f.to_str() {
-                    String::from(f_str)
+                    f_str
                 } else {
-                    String::new()
+                    ""
                 }
             }
-            _ => String::new(),
+            _ => "",
         };
 
         if !path.white_list.is_empty()
-            && (!ext.is_empty() && !path.white_list.contains(&ext))
-            && (!file.is_empty() && !path.white_list.contains(&file))
+            && (!ext.is_empty() && !path.white_list.contains(ext))
+            && (!file.is_empty() && !path.white_list.contains(file))
         {
             return Err(());
         }
 
         if !path.black_list.is_empty()
-            && ((!ext.is_empty() && path.black_list.contains(&ext))
-                || (!file.is_empty() && path.black_list.contains(&file)))
+            && ((!ext.is_empty() && path.black_list.contains(ext))
+                || (!file.is_empty() && path.black_list.contains(file)))
         {
             return Err(());
         }
