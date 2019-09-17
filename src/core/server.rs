@@ -560,12 +560,26 @@ impl Router for HttpServer {
         self
     }
 
-    fn static_white_list(&mut self, file_or_ext: String, for_path: Option<PathBuf>) {
-        Route::static_lists(file_or_ext, true, for_path);
+    /// This API will add the location or the extension that are allowed to be served to all the static
+    /// routes. If a location is white-listed, you must provide the full and absolute path to the folder;
+    /// if a file extension is provided, it must be formatted as `*.<extension>`, for example,
+    /// `*.txt` is a valid extension, though `.txt` or `txt` is not.
+    ///
+    /// Note that if the `for_path` params are provided, the white list will only be applied to the
+    /// given path (i.e. defined prior with the path to the static folder location).
+    fn static_white_list(&mut self, loc_or_ext: String, for_path: Option<PathBuf>) {
+        Route::static_lists(loc_or_ext, true, for_path);
     }
 
-    fn static_black_list(&mut self, file_or_ext: String, for_path: Option<PathBuf>) {
-        Route::static_lists(file_or_ext, true, for_path);
+    /// This API will add the location or the extension that are *NOT* allowed to be served to any
+    /// of the static routes. If a location is black-listed, you must provide the full and absolute
+    /// path to this folder; if a file extension is provided, it must be formatted as `*.<extension>`,
+    /// for example, `*.txt` is a valid extension, though `.txt` or `txt` is not.
+    ///
+    /// Note that if the `for_path` params are provided, the white list will only be applied to the
+    /// given path (i.e. defined prior with the path to the static folder location).
+    fn static_black_list(&mut self, loc_or_ext: String, for_path: Option<PathBuf>) {
+        Route::static_lists(loc_or_ext, true, for_path);
     }
 
     /// Note: this API only affect routes moving forward, and it will not be applied to routes

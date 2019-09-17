@@ -19,6 +19,7 @@ use crate::support::{
     debug::{self, InfoLevel},
     Field, RouteTrie,
 };
+use std::sync::Arc;
 
 //TODO: impl route caching: 1) only explicit and wildcard will get cached ... especially the wildcard
 //      one. 2) store uri in the "method:path" format.
@@ -98,10 +99,76 @@ impl RegexRoute {
     }
 }
 
+#[derive(Clone)]
+enum StaticListData {
+    Ext(Arc<String>),
+    Loc(Arc<String>),
+}
+
 struct StaticLocRoute {
     location: PathBuf,
-    black_list: HashSet<String>,
-    white_list: HashSet<String>,
+    black_list: Vec<StaticListData>,
+    white_list: Vec<StaticListData>,
+}
+
+impl StaticLocRoute {
+    fn check_access(&self, loc: &PathBuf) -> bool {
+        // the extension prefix
+        let mut ext = String::from("*.");
+
+        // the requested file exists, now check white-list and black-list, in this order
+        match loc.extension() {
+            Some(e) => {
+                if let Some(e_str) = e.to_str() {
+                    ext.push_str(e_str);
+                } else {
+                    return false;
+                }
+            }
+            _ => return false,
+        };
+
+        if !self.white_list.is_empty() {
+            for wl in self.white_list.iter() {
+                match wl {
+                    StaticListData::Ext(e) => {
+                        if e.as_str() == ext {
+                            return true;
+                        }
+                    },
+                    StaticListData::Loc(l) => {
+                        if loc.starts_with(l.as_ref()) {
+                            return true;
+                        }
+                    },
+                }
+            }
+
+            // we can't match to a white-listed position, quit
+            return false;
+        }
+
+        if !self.black_list.is_empty() {
+            for wl in self.black_list.iter() {
+                match wl {
+                    StaticListData::Ext(e) => {
+                        if e.as_str() == ext {
+                            return false;
+                        }
+                    },
+                    StaticListData::Loc(l) => {
+                        if loc.starts_with(l.as_ref()) {
+                            return false;
+                        }
+                    },
+                }
+            }
+
+            // we can't match to a black-listed position, we're good
+        }
+
+        true
+    }
 }
 
 impl Clone for StaticLocRoute {
@@ -488,12 +555,12 @@ impl Route {
         });
     }
 
-    pub(crate) fn static_lists(file_or_ext: String, is_white_list: bool, for_path: Option<PathBuf>) {
+    pub(crate) fn static_lists(loc_or_ext: String, is_white_list: bool, for_path: Option<PathBuf>) {
         Route::write().with(|r| {
             if is_white_list {
-                r.static_white_list(file_or_ext, for_path);
+                r.static_white_list(loc_or_ext, for_path);
             } else {
-                r.static_black_list(file_or_ext, for_path);
+                r.static_black_list(loc_or_ext, for_path);
             }
         })
     }
@@ -517,8 +584,8 @@ impl Route {
 
         let static_route = StaticLocRoute {
             location: path,
-            black_list: HashSet::new(),
-            white_list: HashSet::new(),
+            black_list: Vec::new(),
+            white_list: Vec::new(),
         };
 
         if let Some(r) = self.store.get_mut(&method) {
@@ -557,8 +624,8 @@ pub trait Router {
     fn all(&mut self, uri: RequestPath, callback: Callback) -> &mut dyn Router;
     fn use_static(&mut self, path: PathBuf) -> &mut dyn Router;
     fn use_custom_static(&mut self, uri: RequestPath, path: PathBuf) -> &mut dyn Router;
-    fn static_white_list(&mut self, file_or_ext: String, for_path: Option<PathBuf>);
-    fn static_black_list(&mut self, file_or_ext: String, for_path: Option<PathBuf>);
+    fn static_white_list(&mut self, loc_or_ext: String, for_path: Option<PathBuf>);
+    fn static_black_list(&mut self, loc_or_ext: String, for_path: Option<PathBuf>);
     fn case_sensitive(&mut self, allow_case: bool, method: Option<REST>);
 }
 
@@ -655,12 +722,24 @@ impl Router for Route {
         self
     }
 
-    /// Define the white list for the files or extension of the files that are allowed to be served
-    /// for static routes.
+    /// This API will add the location or the extension that are allowed to be served to all the static
+    /// routes. If a location is white-listed, you must provide the full and absolute path to the folder;
+    /// if a file extension is provided, it must be formatted as `*.<extension>`, for example,
+    /// `*.txt` is a valid extension, though `.txt` or `txt` is not.
     ///
-    /// The file name must be valid, and we assume that the designated fold contains this file
-    /// (i.e. we won't check if the request file exists if a route match has been found).
-    fn static_white_list(&mut self, file_or_ext: String, for_path: Option<PathBuf>) {
+    /// Note that if the `for_path` params are provided, the white list will only be applied to the
+    /// given path (i.e. defined prior with the path to the static folder location).
+    fn static_white_list(&mut self, loc_or_ext: String, for_path: Option<PathBuf>) {
+        let data = unsafe {
+            let raw = Arc::new(loc_or_ext.to_lowercase());
+
+            if loc_or_ext.starts_with("*.") {
+                StaticListData::Ext(raw)
+            } else {
+                StaticListData::Loc(raw)
+            }
+        };
+
         self.store
             .values_mut()
             .for_each(|mut m| {
@@ -671,17 +750,29 @@ impl Router for Route {
                         }
                     }
 
-                    s_route.white_list.insert(file_or_ext.to_lowercase());
+                    s_route.white_list.push(data.clone());
                 }
             });
     }
 
-    /// Define the black list for the files or extension of the files that are allowed to be served
-    /// for static routes.
+    /// This API will add the location or the extension that are *NOT* allowed to be served to any
+    /// of the static routes. If a location is black-listed, you must provide the full and absolute
+    /// path to this folder; if a file extension is provided, it must be formatted as `*.<extension>`,
+    /// for example, `*.txt` is a valid extension, though `.txt` or `txt` is not.
     ///
-    /// The file name must be valid, and we assume that the designated fold contains this file
-    /// (i.e. we won't check if the request file exists if a route match has been found).
-    fn static_black_list(&mut self, file_or_ext: String, for_path: Option<PathBuf>) {
+    /// Note that if the `for_path` params are provided, the white list will only be applied to the
+    /// given path (i.e. defined prior with the path to the static folder location).
+    fn static_black_list(&mut self, loc_or_ext: String, for_path: Option<PathBuf>) {
+        let data = unsafe {
+            let raw = Arc::new(loc_or_ext.to_lowercase());
+
+            if loc_or_ext.starts_with("*.") {
+                StaticListData::Ext(raw)
+            } else {
+                StaticListData::Loc(raw)
+            }
+        };
+
         self.store
             .values_mut()
             .for_each(|mut m| {
@@ -692,7 +783,7 @@ impl Router for Route {
                         }
                     }
 
-                    s_route.black_list.insert(file_or_ext.to_lowercase());
+                    s_route.black_list.push(data.clone());
                 }
             });
     }
@@ -935,46 +1026,23 @@ fn search_static_router(path: &StaticLocRoute, raw_uri: &str) -> Result<RouteHan
 
     // only if the file exists
     if meta.is_file() {
-        // the extension prefix
-        let mut ext_raw = String::from("*.");
-
-        // the requested file exists, now check white-list and black-list, in this order
-        let ext: &str = match normalized_uri.extension() {
-            Some(e) => {
-                if let Some(e_str) = e.to_str() {
-                    ext_raw.push_str(e_str);
-                    &ext_raw
-                } else {
-                    ""
-                }
-            }
-            _ => "",
-        };
-
-        let file: &str = match normalized_uri.file_name() {
-            Some(f) => {
-                if let Some(f_str) = f.to_str() {
-                    f_str
-                } else {
-                    ""
-                }
-            }
-            _ => "",
-        };
-
-        if !path.white_list.is_empty()
-            && (!ext.is_empty() && !path.white_list.contains(ext))
-            && (!file.is_empty() && !path.white_list.contains(file))
-        {
+        if !path.check_access(&normalized_uri) {
             return Err(());
         }
 
-        if !path.black_list.is_empty()
-            && ((!ext.is_empty() && path.black_list.contains(ext))
-                || (!file.is_empty() && path.black_list.contains(file)))
-        {
-            return Err(());
-        }
+//        if !path.white_list.is_empty()
+//            && (!ext.is_empty() && !path.white_list.contains(ext))
+//            && (!file.is_empty() && !path.white_list.contains(file))
+//        {
+//            return Err(());
+//        }
+//
+//        if !path.black_list.is_empty()
+//            && ((!ext.is_empty() && path.black_list.contains(ext))
+//                || (!file.is_empty() && path.black_list.contains(file)))
+//        {
+//            return Err(());
+//        }
 
         return Ok(RouteHandler(None, Some(normalized_uri)));
     }
