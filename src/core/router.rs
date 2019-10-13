@@ -723,8 +723,9 @@ impl Router for Route {
     }
 
     /// This API will add the location or the extension that are allowed to be served to all the static
-    /// routes. If a location is white-listed, you must provide the full and absolute path to the folder;
-    /// if a file extension is provided, it must be formatted as `*.<extension>`, for example,
+    /// routes. If a location is white-listed, you must provide a normalized and absolute path to the
+    /// folder, and all files or sub-folders under the given path will be deemed as white-listed;
+    /// if an extension is provided, it must be formatted as `*.<extension>`, for example,
     /// `*.txt` is a valid extension, though `.txt` or `txt` is not.
     ///
     /// Note that if the `for_path` params are provided, the white list will only be applied to the
@@ -756,9 +757,10 @@ impl Router for Route {
     }
 
     /// This API will add the location or the extension that are *NOT* allowed to be served to any
-    /// of the static routes. If a location is black-listed, you must provide the full and absolute
-    /// path to this folder; if a file extension is provided, it must be formatted as `*.<extension>`,
-    /// for example, `*.txt` is a valid extension, though `.txt` or `txt` is not.
+    /// of the static routes. If a folder location is black-listed, you must provide a normalized and
+    /// absolute path to this folder, and all files or sub-folders under the given path will be
+    /// deemed as black-listed; if an extension is provided, it must be formatted as
+    /// `*.<extension>`, for example, `*.txt` is a valid extension, though `.txt` or `txt` is not.
     ///
     /// Note that if the `for_path` params are provided, the white list will only be applied to the
     /// given path (i.e. defined prior with the path to the static folder location).
@@ -775,8 +777,8 @@ impl Router for Route {
 
         self.store
             .values_mut()
-            .for_each(|mut m| {
-                if let Some(s_route) = m.static_path.as_mut() {
+            .for_each(|mut route| {
+                if let Some(s_route) = route.static_path.as_mut() {
                     if let Some(p) = for_path.as_ref() {
                         if &s_route.location != p {
                             return;
