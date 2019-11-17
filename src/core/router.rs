@@ -135,12 +135,12 @@ impl StaticLocRoute {
                         if e.as_str() == ext {
                             return true;
                         }
-                    },
+                    }
                     StaticListData::Loc(l) => {
                         if loc.starts_with(l.as_ref()) {
                             return true;
                         }
-                    },
+                    }
                 }
             }
 
@@ -155,12 +155,12 @@ impl StaticLocRoute {
                         if e.as_str() == ext {
                             return false;
                         }
-                    },
+                    }
                     StaticListData::Loc(l) => {
                         if loc.starts_with(l.as_ref()) {
                             return false;
                         }
-                    },
+                    }
                 }
             }
 
@@ -200,7 +200,7 @@ impl RouteMap {
         }
     }
 
-    pub fn insert(&mut self, uri: RequestPath<'_>, callback: RouteHandler) {
+    pub fn insert(&mut self, uri: RequestPath<'_>, handler: RouteHandler) {
         match uri {
             RequestPath::Explicit(req_uri) => {
                 if req_uri.is_empty() || !req_uri.starts_with('/') {
@@ -208,7 +208,7 @@ impl RouteMap {
                 }
 
                 self.explicit
-                    .add(req_uri, callback, false, self.case_sensitive);
+                    .add(req_uri, handler, false, self.case_sensitive);
             }
             RequestPath::WildCard(req_uri) => {
                 if req_uri.is_empty() {
@@ -222,7 +222,7 @@ impl RouteMap {
                 if let Ok(re) = Regex::new(req_uri) {
                     self.wildcard.add(
                         req_uri,
-                        RegexRoute::new(re, callback),
+                        RegexRoute::new(re, handler),
                         false,
                         self.case_sensitive,
                     );
@@ -231,14 +231,13 @@ impl RouteMap {
             RequestPath::ExplicitWithParams(req_uri) => {
                 if !req_uri.contains("/:") && !req_uri.contains(":\\") {
                     self.explicit
-                        .add(req_uri, callback, false, self.case_sensitive);
+                        .add(req_uri, handler, false, self.case_sensitive);
                     return;
                 }
 
                 self.explicit_with_params.add(
                     RouteMap::params_parser(req_uri, self.case_sensitive),
-                    callback.0,
-                    callback.1,
+                    handler,
                 );
             }
         }
@@ -741,19 +740,17 @@ impl Router for Route {
             }
         };
 
-        self.store
-            .values_mut()
-            .for_each(|mut m| {
-                if let Some(s_route) = m.static_path.as_mut() {
-                    if let Some(p) = for_path.as_ref() {
-                        if &s_route.location != p {
-                            return;
-                        }
+        self.store.values_mut().for_each(|mut m| {
+            if let Some(s_route) = m.static_path.as_mut() {
+                if let Some(p) = for_path.as_ref() {
+                    if &s_route.location != p {
+                        return;
                     }
-
-                    s_route.white_list.push(data.clone());
                 }
-            });
+
+                s_route.white_list.push(data.clone());
+            }
+        });
     }
 
     /// This API will add the location or the extension that are *NOT* allowed to be served to any
@@ -775,19 +772,17 @@ impl Router for Route {
             }
         };
 
-        self.store
-            .values_mut()
-            .for_each(|mut route| {
-                if let Some(s_route) = route.static_path.as_mut() {
-                    if let Some(p) = for_path.as_ref() {
-                        if &s_route.location != p {
-                            return;
-                        }
+        self.store.values_mut().for_each(|mut route| {
+            if let Some(s_route) = route.static_path.as_mut() {
+                if let Some(p) = for_path.as_ref() {
+                    if &s_route.location != p {
+                        return;
                     }
-
-                    s_route.black_list.push(data.clone());
                 }
-            });
+
+                s_route.black_list.push(data.clone());
+            }
+        });
     }
 
     /// Note: this API only affect routes moving forward, and it will not be applied to routes
@@ -859,6 +854,7 @@ impl RouteSeeker for Route {
     }
 }
 
+//TODO: add the 3rd field -- Option<Route>
 pub(crate) struct RouteHandler(Option<Callback>, Option<PathBuf>);
 
 impl RouteHandler {
@@ -1023,7 +1019,7 @@ fn search_static_router(path: &StaticLocRoute, raw_uri: &str) -> Result<RouteHan
 
     let meta = match fs::metadata(&normalized_uri) {
         Ok(m) => m,
-        _ => return Ok(RouteHandler::default()),  // call the fallback methods and keep searching
+        _ => return Ok(RouteHandler::default()), // call the fallback methods and keep searching
     };
 
     // only if the file exists
@@ -1032,19 +1028,19 @@ fn search_static_router(path: &StaticLocRoute, raw_uri: &str) -> Result<RouteHan
             return Err(());
         }
 
-//        if !path.white_list.is_empty()
-//            && (!ext.is_empty() && !path.white_list.contains(ext))
-//            && (!file.is_empty() && !path.white_list.contains(file))
-//        {
-//            return Err(());
-//        }
-//
-//        if !path.black_list.is_empty()
-//            && ((!ext.is_empty() && path.black_list.contains(ext))
-//                || (!file.is_empty() && path.black_list.contains(file)))
-//        {
-//            return Err(());
-//        }
+        //        if !path.white_list.is_empty()
+        //            && (!ext.is_empty() && !path.white_list.contains(ext))
+        //            && (!file.is_empty() && !path.white_list.contains(file))
+        //        {
+        //            return Err(());
+        //        }
+        //
+        //        if !path.black_list.is_empty()
+        //            && ((!ext.is_empty() && path.black_list.contains(ext))
+        //                || (!file.is_empty() && path.black_list.contains(file)))
+        //        {
+        //            return Err(());
+        //        }
 
         return Ok(RouteHandler(None, Some(normalized_uri)));
     }

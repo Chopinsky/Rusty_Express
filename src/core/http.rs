@@ -40,7 +40,8 @@ type NotifyChan = Option<(Sender<String>, Receiver<String>)>;
 
 static mut REQ_POOL: StaticStore<SyncPool<Request>> = StaticStore::init();
 static mut RESP_POOL: StaticStore<SyncPool<Response>> = StaticStore::init();
-static mut POOL_CHAN: StaticStore<(channel::Sender<()>, channel::Receiver<()>)> = StaticStore::init();
+static mut POOL_CHAN: StaticStore<(channel::Sender<()>, channel::Receiver<()>)> =
+    StaticStore::init();
 
 //TODO: pub http version?
 
@@ -1208,7 +1209,7 @@ pub(crate) fn init_pools() {
             if let Ok(chan) = unsafe { POOL_CHAN.as_ref() } {
                 match chan.1.try_recv() {
                     Ok(_) | Err(TryRecvError::Disconnected) => return,
-                    _ => {},
+                    _ => {}
                 }
             } else {
                 // shouldn't happen, but we shall quit now

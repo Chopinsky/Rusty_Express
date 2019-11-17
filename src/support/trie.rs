@@ -1,6 +1,4 @@
-use std::path::PathBuf;
-
-use crate::core::router::{Callback, RouteHandler};
+use crate::core::router::RouteHandler;
 use crate::hashbrown::HashMap;
 use crate::regex::Regex;
 
@@ -42,30 +40,27 @@ impl PartialEq for Field {
 
 struct Node {
     field: Field,
-    callback: Option<Callback>,
-    location: Option<PathBuf>,
+    handler: RouteHandler,
+    //    callback: Option<Callback>,
+    //    location: Option<PathBuf>,
     named_children: HashMap<String, Node>,
     params_children: Vec<Node>,
 }
 
 impl Node {
-    fn new(field: Field, callback: Option<Callback>, location: Option<PathBuf>) -> Self {
+    fn new(field: Field, handler: RouteHandler) -> Self {
         Node {
             field,
-            callback,
-            location,
+            handler,
+            //            callback,
+            //            location,
             named_children: HashMap::new(),
             params_children: Vec::new(),
         }
     }
 
-    fn insert(
-        &mut self,
-        mut segments: Vec<Field>,
-        callback: Option<Callback>,
-        location: Option<PathBuf>,
-    ) {
-        debug_assert!(callback.is_some() || location.is_some());
+    fn insert(&mut self, mut segments: Vec<Field>, handler: RouteHandler) {
+        debug_assert!(handler.is_some());
 
         let head = match segments.pop() {
             Some(seg) => seg,
@@ -78,22 +73,14 @@ impl Node {
             if let Some(child) = self.named_children.get_mut(&head.name) {
                 if segments.is_empty() {
                     // done, update the node
-                    if (callback.is_some() && child.callback.is_some())
-                        || (location.is_some() && child.location.is_some())
-                    {
+                    if child.handler.is_some() {
                         panic!("Key collision!");
                     }
 
-                    if callback.is_some() {
-                        child.callback = callback;
-                    }
-
-                    if location.is_some() {
-                        child.location = location;
-                    }
+                    child.handler = handler;
                 } else {
                     // recursive insert to the child
-                    child.insert(segments, callback, location);
+                    child.insert(segments, handler);
                 }
 
                 return;
@@ -101,31 +88,26 @@ impl Node {
 
             self.named_children.insert(
                 head.name.clone(),
-                Node::build_new_child(head, segments, callback, location),
+                Node::build_new_child(head, segments, handler),
             );
 
             return;
         }
 
         self.params_children
-            .push(Node::build_new_child(head, segments, callback, location));
+            .push(Node::build_new_child(head, segments, handler));
     }
 
-    fn build_new_child(
-        field: Field,
-        segments: Vec<Field>,
-        callback: Option<Callback>,
-        loc: Option<PathBuf>,
-    ) -> Node {
+    fn build_new_child(field: Field, segments: Vec<Field>, handler: RouteHandler) -> Node {
         match segments.len() {
             0 => {
                 // leaf node
-                Node::new(field, callback, loc)
+                Node::new(field, handler)
             }
             _ => {
                 // branch node
-                let mut node = Node::new(field, None, None);
-                node.insert(segments, callback, loc);
+                let mut node = Node::new(field, RouteHandler::default());
+                node.insert(segments, handler);
                 node
             }
         }
@@ -139,7 +121,10 @@ pub(crate) struct RouteTrie {
 impl RouteTrie {
     pub(crate) fn initialize() -> Self {
         RouteTrie {
-            root: Node::new(Field::new(String::from("/"), false, None), None, None),
+            root: Node::new(
+                Field::new(String::from("/"), false, None),
+                RouteHandler::default(),
+            ),
         }
     }
 
@@ -148,13 +133,9 @@ impl RouteTrie {
         self.root.named_children.is_empty() && self.root.params_children.is_empty()
     }
 
-    pub(crate) fn add(
-        &mut self,
-        segments: Vec<Field>,
-        callback: Option<Callback>,
-        location: Option<PathBuf>,
-    ) {
-        self.root.insert(segments, callback, location);
+    #[inline]
+    pub(crate) fn add(&mut self, segments: Vec<Field>, handler: RouteHandler) {
+        self.root.insert(segments, handler);
     }
 
     pub(crate) fn find(
@@ -179,7 +160,7 @@ impl RouteTrie {
 
         if let Some(child) = root.named_children.get(head) {
             if is_tail {
-                return RouteHandler::new(child.callback, child.location.clone());
+                return child.handler.clone();
             }
 
             return RouteTrie::recursive_find(&child, &segments[1..], params);
@@ -197,7 +178,8 @@ impl RouteTrie {
             }
 
             let result = if is_tail {
-                RouteHandler::new(param_node.callback, param_node.location.clone())
+                //                RouteHandler::new(param_node.callback, param_node.location.clone())
+                param_node.handler.clone()
             } else {
                 RouteTrie::recursive_find(param_node, &segments[1..], params)
             };

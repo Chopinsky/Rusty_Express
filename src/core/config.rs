@@ -251,7 +251,7 @@ impl ViewEngineDefinition for ServerConfig {
             return;
         }
 
-        let mut engines = ServerConfig::view_engines().write();;
+        let mut engines = ServerConfig::view_engines().write();
         (*engines).insert(extension.to_owned(), Box::new(engine));
     }
 }

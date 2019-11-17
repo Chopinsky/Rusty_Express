@@ -467,9 +467,7 @@ impl<T: Default> SyncPool<T> {
     pub fn len(&self) -> usize {
         self.slots
             .iter()
-            .fold(0, |sum, item|
-                sum + item.size_hint()
-            )
+            .fold(0, |sum, item| sum + item.size_hint())
     }
 
     pub fn expand(&mut self, additional: usize, block: bool) -> bool {
