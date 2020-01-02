@@ -545,6 +545,8 @@ impl<T> Drop for SyncPool<T> {
     }
 }
 
+//TODO: support growth and auto-retraction
+
 pub(crate) trait Reusable {
     fn obtain() -> Box<Self>;
     fn release(self: Box<Self>);

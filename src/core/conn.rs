@@ -445,6 +445,7 @@ fn build_response(
 ) -> Box<Response> {
     // generating the response and setup stuff
     let mut response = initialize_response(is_tls);
+
     match request.header("connection") {
         Some(ref val) if val.eq(&String::from("close")) => response.can_keep_alive(false),
         _ => response.can_keep_alive(true),
@@ -468,7 +469,7 @@ fn build_response(
 
 fn parse_request_sync(source: &str) -> (Box<Request>, RouteHandler) {
     let mut handler = RouteHandler::default();
-    let mut request = Request::obtain(); //Box::new(Request::new());
+    let mut request = Request::obtain();
 
     for (index, info) in source.trim().splitn(2, "\r\n").enumerate() {
         match index {
@@ -493,7 +494,7 @@ fn parse_start_line_sync(
     source: &str,
     req: &mut Box<Request>,
 ) -> (RouteHandler, HashMap<String, String>) {
-    let mut raw_scheme = String::new();
+    let mut raw_query = String::new();
     let mut raw_fragment = String::new();
 
     for (index, info) in source.split_whitespace().enumerate() {
@@ -519,7 +520,7 @@ fn parse_start_line_sync(
                 req.uri.reserve(info.len());
 
                 // parse the path and store the info back
-                parse_path(info, &mut req.uri, &mut raw_scheme, &mut raw_fragment)
+                parse_path(info, &mut req.uri, &mut raw_query, &mut raw_fragment)
             }
             2 => {
                 // write the http version back to the header
@@ -539,8 +540,8 @@ fn parse_start_line_sync(
             req.set_fragment(raw_fragment);
         }
 
-        if !raw_scheme.is_empty() {
-            req.create_scheme(parse_scheme(raw_scheme));
+        if !raw_query.is_empty() {
+            req.create_query(parse_query(raw_query));
         }
 
         return res;
@@ -621,7 +622,7 @@ fn parse_headers(
     }
 }
 
-fn parse_path(source: &str, path: &mut String, scheme: &mut String, frag: &mut String) {
+fn parse_path(source: &str, path: &mut String, query: &mut String, frag: &mut String) {
     let uri = source.trim().trim_end_matches('/');
     if uri.is_empty() {
         path.push('/');
@@ -641,10 +642,10 @@ fn parse_path(source: &str, path: &mut String, scheme: &mut String, frag: &mut S
         }
     }
 
-    // parse scheme out
+    // parse query out
     if let Some(pos) = uri_parts[0].find('?') {
-        // split the scheme parts
-        let (rest, raw_scheme) = uri_parts[0].split_at(pos);
+        // split the query parts
+        let (rest, raw_query) = uri_parts[0].split_at(pos);
         uri_parts[0] = rest;
 
         // push the leading parts if not empty
@@ -664,7 +665,7 @@ fn parse_path(source: &str, path: &mut String, scheme: &mut String, frag: &mut S
             path.push_str(uri_parts[0]);
         }
 
-        scheme.push_str(raw_scheme.trim());
+        query.push_str(raw_query.trim());
     } else {
         if !uri.starts_with('/') {
             path.push('/');
@@ -698,9 +699,9 @@ fn parse_cookie(raw: &str, cookie: &mut HashMap<String, String>) {
     }
 }
 
-fn parse_scheme(scheme: String) -> HashMap<String, Vec<String>> {
-    let mut scheme_result: HashMap<String, Vec<String>> = HashMap::new();
-    for (_, kv_pair) in scheme.trim().split('&').enumerate() {
+fn parse_query(query: String) -> HashMap<String, Vec<String>> {
+    let mut query_result: HashMap<String, Vec<String>> = HashMap::new();
+    for (_, kv_pair) in query.trim().split('&').enumerate() {
         let store: Vec<&str> = kv_pair.trim().splitn(2, '=').collect();
 
         if !store.is_empty() {
@@ -711,17 +712,17 @@ fn parse_scheme(scheme: String) -> HashMap<String, Vec<String>> {
                 String::new()
             };
 
-            if scheme_result.contains_key(key) {
-                if let Some(val_vec) = scheme_result.get_mut(key) {
+            if query_result.contains_key(key) {
+                if let Some(val_vec) = query_result.get_mut(key) {
                     val_vec.push(val);
                 }
             } else {
-                scheme_result.insert(key.to_owned(), vec![val]);
+                query_result.insert(key.to_owned(), vec![val]);
             }
         }
     }
 
-    scheme_result
+    query_result
 }
 
 fn build_err_response(err_status: u16) -> Box<Response> {
@@ -1003,7 +1004,7 @@ mod async_handler {
     }
 
     fn parse_start_line(source: &str, req: &mut Box<Request>) -> BaseLine {
-        let mut raw_scheme = String::new();
+        let mut raw_query = String::new();
         let mut raw_fragment = String::new();
 
         for (index, info) in source.split_whitespace().enumerate() {
@@ -1029,7 +1030,7 @@ mod async_handler {
                     req.uri.reserve(info.len());
 
                     // now parse the path info and store the main uri back to the request
-                    parse_path(info, &mut req.uri, &mut raw_scheme, &mut raw_fragment)
+                    parse_path(info, &mut req.uri, &mut raw_query, &mut raw_fragment)
                 }
                 2 => {
                     // write the http version to the header
@@ -1056,8 +1057,8 @@ mod async_handler {
                 req.set_fragment(raw_fragment);
             }
 
-            if !raw_scheme.is_empty() {
-                req.create_scheme(parse_scheme(raw_scheme));
+            if !raw_query.is_empty() {
+                req.create_query(parse_query(raw_query));
             }
 
             return Some(rx);

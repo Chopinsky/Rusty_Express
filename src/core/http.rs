@@ -22,6 +22,7 @@ use crate::core::{
 };
 use crate::hashbrown::{hash_map::Iter, HashMap};
 use crate::support::{common::*, debug, debug::InfoLevel, shared_pool, TaskType};
+use std::collections::hash_map::RandomState;
 
 const FOUR_OH_FOUR: &str = include_str!("../default/404.html");
 const FOUR_OH_ONE: &str = include_str!("../default/401.html");
@@ -64,7 +65,7 @@ pub struct Request {
     pub method: REST,
     pub uri: String,
     params: HashMap<String, String>,
-    scheme: HashMap<String, Vec<String>>,
+    query: HashMap<String, Vec<String>>,
     header: HashMap<String, String>,
     cookie: HashMap<String, String>,
     fragment: String,
@@ -121,16 +122,16 @@ impl Request {
         self.cookie.iter()
     }
 
-    pub fn scheme(&self, field: &str) -> Option<Vec<String>> {
+    pub fn query(&self, field: &str) -> Option<Vec<String>> {
         if field.is_empty() {
             return None;
         }
 
-        if self.scheme.is_empty() {
+        if self.query.is_empty() {
             return None;
         }
 
-        match self.scheme.get(&field[..]) {
+        match self.query.get(&field[..]) {
             Some(value) => Some(value.to_owned()),
             None => None,
         }
@@ -185,11 +186,8 @@ impl Request {
             source.insert(String::from("uri_params"), json_stringify(&self.params));
         }
 
-        if !self.scheme.is_empty() {
-            source.insert(
-                String::from("uri_schemes"),
-                json_flat_stringify(&self.scheme),
-            );
+        if !self.query.is_empty() {
+            source.insert(String::from("uri_querys"), json_flat_stringify(&self.query));
         }
 
         if !self.fragment.is_empty() {
@@ -270,7 +268,7 @@ impl Reusable for Request {
         }
 
         self.params.clear();
-        self.scheme.clear();
+        self.query.clear();
         self.header.clear();
         self.cookie.clear();
 
@@ -282,8 +280,8 @@ impl Reusable for Request {
 
 pub trait RequestWriter {
     fn write_header(&mut self, key: &str, val: &str, allow_override: bool);
-    fn write_scheme(&mut self, key: &str, val: Vec<String>, allow_override: bool);
-    fn create_scheme(&mut self, scheme: HashMap<String, Vec<String>>);
+    fn write_query(&mut self, key: &str, val: Vec<String>, allow_override: bool);
+    fn create_query(&mut self, query: HashMap<String, Vec<String>>);
     fn set_cookie(&mut self, key: &str, val: &str, allow_override: bool);
     fn create_cookie(&mut self, cookie: HashMap<String, String>);
     fn set_param(&mut self, key: &str, val: &str);
@@ -299,12 +297,12 @@ impl RequestWriter for Request {
         self.header.add(key, val.to_owned(), allow_override, false);
     }
 
-    fn write_scheme(&mut self, key: &str, val: Vec<String>, allow_override: bool) {
-        self.scheme.add(key, val.to_owned(), allow_override, false);
+    fn write_query(&mut self, key: &str, val: Vec<String>, allow_override: bool) {
+        self.query.add(key, val.to_owned(), allow_override, false);
     }
 
-    fn create_scheme(&mut self, scheme: HashMap<String, Vec<String>>) {
-        self.scheme = scheme;
+    fn create_query(&mut self, query: HashMap<String, Vec<String>>) {
+        self.query = query;
     }
 
     fn set_cookie(&mut self, key: &str, val: &str, allow_override: bool) {
@@ -736,11 +734,10 @@ impl ResponseWriter for Response {
     /// ```rust
     /// use rusty_express::prelude::*;
     /// use std::collections::HashMap;
-    /// use std::hash::BuildHasherDefault;
     ///
     /// pub fn simple_handler(req: &Box<Request>, resp: &mut Box<Response>) {
     ///    // process request to extract info for generating the response body.
-    ///    let header: (MetaData, HashMap<String, String, BuildHasherDefault<FxHash>>) = preprocess(req);
+    ///    let header = header_producer(req);
     ///    resp.with_headers(header);
     ///
     ///    // Send the content back
@@ -783,8 +780,7 @@ impl ResponseWriter for Response {
     ///
     /// pub fn simple_handler(req: &Box<Request>, resp: &mut Box<Response>) {
     ///    // process request to extract info for generating the response body.
-    ///    let (meta_data, header): (MetaData, HashMap<String, String, BuildHasherDefault<FxHash>>) = preprocess(req);
-    ///    resp.with_headers(header);
+    ///    let meta_data: SomeMetadata = some_producer(req);
     ///
     ///    // the `generate_response_body` will create all contents to be returned
     ///    resp.send(&generate_response_body(meta_data));
@@ -815,8 +811,7 @@ impl ResponseWriter for Response {
     ///
     /// pub fn simple_handler(req: &Box<Request>, resp: &mut Box<Response>) {
     ///    // process request to extract info for generating the response body.
-    ///    let (meta_data, header): (MetaData, HashMap<String, String, BuildHasherDefault<FxHash>>) = preprocess(req);
-    ///    resp.with_headers(header);
+    ///    let meta_data: SomeMetadata = some_producer(req);
     ///
     ///    // the heavy method will *NOT* block in this case. The closure's return value
     ///    // shall be a tuple: 1) the 1st param shall be a `Option<u16>` for any special
@@ -871,8 +866,7 @@ impl ResponseWriter for Response {
     ///
     /// pub fn simple_handler(req: &Box<Request>, resp: &mut Box<Response>) {
     ///     // process request to extract info for generating the response body.
-    ///     let (file_loc, header): (String, HashMap<String, String, BuildHasherDefault<FxHash>>) = preprocess(req);
-    ///     resp.with_headers(header);
+    ///     let file_loc: String = get_file_loc(req);
     ///
     ///     let status = resp.send_file(&file_loc);
     ///     resp.status(status);
