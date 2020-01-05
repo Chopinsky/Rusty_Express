@@ -17,10 +17,10 @@ logger = []
 [dependencies]
 chrono = "^0.4"
 crossbeam-channel = "^0.3.0"
-hashbrown = "0.1"
+hashbrown = "^0.1"
 lazy_static = "^1.0"
-native-tls = "0.2"
+native-tls = "^0.2"
 num_cpus = "^1.8"
-parking_lot = "^0.7.1"
+parking_lot = "^0.10.0"
 rand = "^0.4"
 regex = "^0.2"

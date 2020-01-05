@@ -1,9 +1,9 @@
 use std::env;
 
 use crate::chrono::prelude::{DateTime, Utc};
-use crate::parking_lot::{Once, ONCE_INIT};
+use crate::parking_lot::Once;
 
-static ONCE: Once = ONCE_INIT;
+static ONCE: Once = Once::new();
 static mut DEBUG_LEVEL: InfoLevel = InfoLevel::Silent;
 
 #[derive(PartialEq)]

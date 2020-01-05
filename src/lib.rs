@@ -4,14 +4,11 @@
 //!
 //! # Examples
 //! ```
-//! extern crate rusty_express as express;
-//! use express::prelude::*;
+//! use rusty_express::prelude::*;
 //!
-//! fn main() {
-//!    let mut server = HttpServer::new();
-//!    server.get(RequestPath::Explicit("/"), simple_response);
-//!    server.listen(8080);
-//! }
+//! let mut server = HttpServer::new();
+//! server.get(RequestPath::Explicit("/"), simple_response);
+//! server.listen(8080);
 //!
 //! pub fn simple_response(req: &Box<Request>, resp: &mut Box<Response>) {
 //!    resp.send(&format!("Hello world from rusty server from path: {}", req.uri));

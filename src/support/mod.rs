@@ -6,6 +6,8 @@ pub mod logger;
 #[cfg(feature = "session")]
 pub mod session;
 
+pub mod locks;
+
 pub(crate) mod common;
 pub(crate) mod debug;
 pub(crate) mod shared_pool {

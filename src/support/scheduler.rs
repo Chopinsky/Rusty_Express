@@ -6,7 +6,7 @@ use std::time::{Duration, SystemTime};
 
 use crate::channel::{self, Receiver, RecvTimeoutError, SendTimeoutError, Sender};
 use crate::hashbrown::HashSet;
-use crate::parking_lot::{Mutex, Once, OnceState, ONCE_INIT};
+use crate::parking_lot::{Mutex, Once, OnceState};
 use crate::support::debug::{self, InfoLevel};
 
 const CHAN_SIZE: usize = 512;
@@ -309,7 +309,7 @@ pub enum TaskType {
     StreamLoader,
 }
 
-static ONCE: Once = ONCE_INIT;
+static ONCE: Once = Once::new();
 static mut POOL: Option<Pool> = None;
 
 pub(crate) fn initialize_with(sizes: Vec<usize>) {

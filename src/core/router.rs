@@ -684,15 +684,12 @@ impl Router for Route {
     /// # Example
     ///
     /// ```
-    /// extern crate rusty_express;
     /// use rusty_express::prelude::*;
-    /// use std::path::PathBuf;
-    /// fn main() {
-    ///    // define http server now
-    ///    let mut server = HttpServer::new();
-    ///    server.set_pool_size(8);
-    ///    server.use_static(PathBuf::from(r".\static"));
-    /// }
+    ///
+    /// // define http server now
+    /// let mut server = HttpServer::new();
+    /// server.set_pool_size(8);
+    /// server.use_static(PathBuf::from(r".\static"));
     /// ```
     fn use_static(&mut self, path: PathBuf) -> &mut dyn Router {
         self.set_static(REST::GET, path);
@@ -705,16 +702,13 @@ impl Router for Route {
     /// # Example
     ///
     /// ```
-    /// extern crate rusty_express;
     /// use rusty_express::prelude::*;
-    /// use std::path::PathBuf;
-    /// fn main() {
-    ///     // define http server now
-    ///     let mut server = HttpServer::new();
     ///
-    ///     // only the `index.html` file in the static folder of the project location will be served.
-    ///     server.use_custom_static(RequestPath::Explicit("/index.html"), PathBuf::from(r".\static"));
-    /// }
+    /// // define http server now
+    /// let mut server = HttpServer::new();
+    ///
+    /// // only the `index.html` file in the static folder of the project location will be served.
+    /// server.use_custom_static(RequestPath::Explicit("/index.html"), PathBuf::from(r".\static"));
     /// ```
     fn use_custom_static(&mut self, uri: RequestPath, path: PathBuf) -> &mut dyn Router {
         self.add(REST::GET, uri, RouteHandler(None, Some(path)));

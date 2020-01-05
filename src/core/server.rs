@@ -74,8 +74,7 @@ impl HttpServer {
     /// # Examples
     ///
     /// ```rust
-    /// extern crate rusty_express as express;
-    /// use express::prelude::{HttpServer, ServerDef, Router, Route, ControlMessage};
+    /// use rusty_express::prelude::{HttpServer, ServerDef, Router, Route, ControlMessage};
     /// use std::thread;
     /// use std::time::Duration;
     ///
@@ -85,13 +84,13 @@ impl HttpServer {
     /// // ... code to add router handlers to ...
     ///
     /// server.def_router(router);
-    /// server.listen_and_serve(8080, |controller| {
+    /// server.listen_and_serve(8080, Some(|controller| {
     ///     // sleep for 1 minute
     ///     thread::sleep(Duration::from_secs(60));
     ///
     ///     // after waking up from the 1 minute sleep, shut down the server.
     ///     controller.send(ControlMessage::Terminate);
-    /// });
+    /// }));
     /// ```
     pub fn listen_and_serve(&mut self, port: u16, callback: Option<fn(AsyncController)>) {
         // initialize the debug service, which setup the debug level based on the environment variable
@@ -523,15 +522,12 @@ impl Router for HttpServer {
     /// # Example
     ///
     /// ```
-    /// extern crate rusty_express;
     /// use rusty_express::prelude::*;
-    /// use std::path::PathBuf;
-    /// fn main() {
-    ///    // define http server now
-    ///    let mut server = HttpServer::new();
-    ///    server.set_pool_size(8);
-    ///    server.use_static(PathBuf::from(r".\static"));
-    /// }
+    ///
+    /// // define http server now
+    /// let mut server = HttpServer::new();
+    /// server.set_pool_size(8);
+    /// server.use_static(PathBuf::from(r".\static"));
     /// ```
     fn use_static(&mut self, path: PathBuf) -> &mut dyn Router {
         Route::add_static(REST::GET, None, path);
@@ -544,16 +540,13 @@ impl Router for HttpServer {
     /// # Example
     ///
     /// ```
-    /// extern crate rusty_express;
     /// use rusty_express::prelude::*;
-    /// use std::path::PathBuf;
-    /// fn main() {
-    ///     // define http server now
-    ///     let mut server = HttpServer::new();
     ///
-    ///     // only the `index.html` file in the static folder of the project location will be served.
-    ///     server.use_custom_static(RequestPath::Explicit("/index.html"), PathBuf::from(r".\static"));
-    /// }
+    /// // define http server now
+    /// let mut server = HttpServer::new();
+    ///
+    /// // only the `index.html` file in the static folder of the project location will be served.
+    /// server.use_custom_static(RequestPath::Explicit("/index.html"), PathBuf::from(r".\static"));
     /// ```
     fn use_custom_static(&mut self, uri: RequestPath, path: PathBuf) -> &mut dyn Router {
         Route::add_static(REST::GET, Some(uri), path);

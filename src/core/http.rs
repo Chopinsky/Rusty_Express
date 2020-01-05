@@ -22,7 +22,6 @@ use crate::core::{
 };
 use crate::hashbrown::{hash_map::Iter, HashMap};
 use crate::support::{common::*, debug, debug::InfoLevel, shared_pool, TaskType};
-use std::collections::hash_map::RandomState;
 
 const FOUR_OH_FOUR: &str = include_str!("../default/404.html");
 const FOUR_OH_ONE: &str = include_str!("../default/401.html");
@@ -298,7 +297,7 @@ impl RequestWriter for Request {
     }
 
     fn write_query(&mut self, key: &str, val: Vec<String>, allow_override: bool) {
-        self.query.add(key, val.to_owned(), allow_override, false);
+        self.query.add(key, val, allow_override, false);
     }
 
     fn create_query(&mut self, query: HashMap<String, Vec<String>>) {

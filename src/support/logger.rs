@@ -18,12 +18,12 @@ use std::time::Duration;
 use crate::channel::{self, SendError};
 use crate::chrono::{DateTime, Utc};
 use crate::core::syncstore::StaticStore;
-use crate::parking_lot::{Once, ONCE_INIT};
+use crate::parking_lot::Once;
 use crate::support::{common::cpu_relax, debug};
 
 const DEFAULT_LOCATION: &str = "./logs";
 
-static ONCE: Once = ONCE_INIT;
+static ONCE: Once = Once::new();
 static DUMP_IN_PROGRESS: AtomicBool = AtomicBool::new(false);
 
 static mut CHAN: StaticStore<(channel::Sender<LogMessage>, channel::Receiver<LogMessage>)> =
